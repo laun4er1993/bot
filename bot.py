@@ -38,9 +38,9 @@ class DataBase:
         self.multi_keys_file = os.path.join(data_dir, "multi_keys.txt")
         self.details_file = os.path.join(data_dir, "details.txt")
         
-        self.key_to_group: Dict[str, str] = {}
-        self.group_to_keys: Dict[str, List[str]] = {}
-        self.group_to_associations: Dict[str, List[str]] = {}
+        # Теперь ключ может вести к нескольким группам
+        self.key_to_groups: Dict[str, List[str]] = {}  # ключ -> список group_id
+        self.groups: Dict[str, Dict] = {}  # group_id -> {keys, associations, display_name}
         self.details: Dict[str, str] = {}
         
         self.user_last_group: Dict[int, str] = {}
@@ -52,6 +52,7 @@ class DataBase:
         os.makedirs(self.data_dir, exist_ok=True)
         self.load_multi_keys()
         self.load_details()
+        self.log_stats()
     
     def load_multi_keys(self) -> None:
         try:
@@ -68,20 +69,58 @@ class DataBase:
                             associations = [a.strip() for a in assoc_part.split('|') if a.strip()]
                             
                             if keys and associations:
-                                group_id = f"{keys[0]}_{line_num}"
+                                group_id = f"group_{line_num}"
+                                display_name = keys[0]  # Первый ключ как название группы
                                 
-                                self.group_to_keys[group_id] = keys
-                                self.group_to_associations[group_id] = associations
+                                # Сохраняем группу
+                                self.groups[group_id] = {
+                                    'keys': keys,
+                                    'associations': associations,
+                                    'display_name': display_name
+                                }
                                 
+                                # Для каждого ключа добавляем ссылку на эту группу
                                 for key in keys:
-                                    self.key_to_group[key] = group_id
+                                    if key not in self.key_to_groups:
+                                        self.key_to_groups[key] = []
+                                    self.key_to_groups[key].append(group_id)
                 
-                logger.info(f"✅ Загружено {len(self.group_to_associations)} групп")
+                logger.info(f"✅ Загружено {len(self.groups)} групп")
             else:
                 logger.warning(f"⚠️ Файл {self.multi_keys_file} не найден")
+                self._create_example_file()
                 
         except Exception as e:
             logger.error(f"❌ Ошибка загрузки: {e}")
+    
+    def _create_example_file(self) -> None:
+        """Создает пример файла с дублирующимися ключами"""
+        example = '''# Пример с дублирующимися ключами
+# Формат: ключ1,ключ2,ключ3|ассоциация1|ассоциация2
+
+# Яблоко как фрукт
+яблоко,фрукт,apple|🍎 Красное|🍏 Зеленое|🍎 Голден
+
+# Яблоко как бренд (Apple)
+apple,айфон,iphone,mac|📱 iPhone|💻 MacBook|⌚ Watch
+
+# Яблоко в кулинарии
+яблоко,пирог,десерт|🥧 Шарлотка|🍎 Яблочный пирог|🧃 Сок
+
+# Машина как автомобиль
+машина,авто,car|🚗 Седан|🚙 Кроссовер|🏎️ Спорткар
+
+# Машина как устройство
+машина,стиралка,technics|🧺 Стиральная|☕ Кофемашина|🪡 Швейная
+
+# Python как змея
+python,змея,snake|🐍 Королевский|🐍 Сетчатый|🐍 Анаконда
+
+# Python как язык
+python,питон,programming|🐍 Основы|🌐 Веб|🤖 ML
+'''
+        with open(self.multi_keys_file, 'w', encoding='utf-8') as f:
+            f.write(example)
     
     def load_details(self) -> None:
         try:
@@ -102,26 +141,36 @@ class DataBase:
         except Exception as e:
             logger.error(f"❌ Ошибка загрузки деталей: {e}")
     
-    def find_group(self, text: str) -> Optional[Tuple[str, List[str], List[str]]]:
-        if not text or not self.key_to_group:
-            return None
+    def find_groups(self, text: str) -> List[Tuple[str, str, List[str]]]:
+        """
+        Ищет все группы по ключу
+        Возвращает список: (group_id, display_name, список ассоциаций)
+        """
+        if not text or not self.key_to_groups:
+            return []
         
         text_lower = text.lower().strip()
+        found_groups = []
         
-        if text_lower in self.key_to_group:
-            group_id = self.key_to_group[text_lower]
-            return group_id, self.group_to_keys[group_id], self.group_to_associations[group_id]
+        # Прямое совпадение
+        if text_lower in self.key_to_groups:
+            for group_id in self.key_to_groups[text_lower]:
+                group = self.groups[group_id]
+                found_groups.append((group_id, group['display_name'], group['associations']))
         
-        for key, group_id in self.key_to_group.items():
-            if key in text_lower:
-                return group_id, self.group_to_keys[group_id], self.group_to_associations[group_id]
+        # Поиск по вхождению
+        for key, group_ids in self.key_to_groups.items():
+            if key in text_lower and key != text_lower:  # Чтобы не дублировать прямые совпадения
+                for group_id in group_ids:
+                    group = self.groups[group_id]
+                    # Проверяем, не добавили ли уже эту группу
+                    if not any(g[0] == group_id for g in found_groups):
+                        found_groups.append((group_id, group['display_name'], group['associations']))
         
-        return None
+        return found_groups
     
-    def get_group(self, group_id: str) -> Optional[Tuple[List[str], List[str]]]:
-        if group_id in self.group_to_keys:
-            return self.group_to_keys[group_id], self.group_to_associations[group_id]
-        return None
+    def get_group(self, group_id: str) -> Optional[Dict]:
+        return self.groups.get(group_id)
     
     def get_details(self, association: str) -> Optional[str]:
         return self.details.get(association)
@@ -137,6 +186,18 @@ class DataBase:
     
     def get_last_query(self, user_id: int) -> Optional[str]:
         return self.user_last_query.get(user_id)
+    
+    def log_stats(self):
+        logger.info(f"📊 Статистика:")
+        logger.info(f"   • Групп: {len(self.groups)}")
+        logger.info(f"   • Уникальных ключей: {len(self.key_to_groups)}")
+        
+        # Показываем ключи с дубликатами
+        duplicates = {key: groups for key, groups in self.key_to_groups.items() if len(groups) > 1}
+        if duplicates:
+            logger.info(f"   • Ключей с дубликатами: {len(duplicates)}")
+            for key, groups in list(duplicates.items())[:3]:  # Показываем первые 3
+                logger.info(f"     - '{key}' встречается в {len(groups)} группах")
 
 db = DataBase()
 
@@ -151,6 +212,23 @@ def back_to_list_keyboard(group_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔙 Назад к списку", callback_data=f"back_to_list_{group_id}")]
     ])
+
+def groups_keyboard(groups: List[Tuple[str, str, List[str]]]) -> InlineKeyboardMarkup:
+    """Клавиатура для выбора группы при дубликатах"""
+    keyboard = []
+    
+    for group_id, display_name, associations in groups:
+        # Показываем первые 2 ассоциации как пример
+        examples = ", ".join(associations[:2])
+        button_text = f"{display_name} ({examples}...)"
+        keyboard.append([InlineKeyboardButton(
+            text=button_text,
+            callback_data=f"group_{group_id}"
+        )])
+    
+    keyboard.append([InlineKeyboardButton(text="🔙 Назад к поиску", callback_data="back_to_search")])
+    
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 def associations_keyboard(associations: List[str], group_id: str) -> InlineKeyboardMarkup:
     keyboard = []
@@ -173,7 +251,14 @@ async def cmd_start(message: types.Message) -> None:
     await message.answer(
         f"👋 Привет, {message.from_user.full_name}!\n\n"
         f"🔍 Напиши слово для поиска.\n\n"
-        f"📋 Примеры: ноут, пицца, машина, кофе, python",
+        f"📋 **Примеры с дубликатами:**\n"
+        f"• 'яблоко' - фрукт, бренд, кулинария\n"
+        f"• 'apple' - фрукт, бренд\n"
+        f"• 'машина' - автомобиль, устройство\n"
+        f"• 'python' - змея, язык\n\n"
+        f"💡 Если слово встречается в нескольких категориях, "
+        f"бот предложит выбрать нужную!",
+        parse_mode="Markdown",
         reply_markup=ReplyKeyboardRemove()
     )
 
@@ -181,11 +266,27 @@ async def cmd_start(message: types.Message) -> None:
 async def cmd_help(message: types.Message) -> None:
     await message.answer(
         "🤖 **Помощь:**\n\n"
-        "• Напишите слово - бот покажет варианты\n"
-        "• Выберите вариант - получите информацию\n"
+        "• Напишите слово - бот покажет все категории\n"
+        "• Если слово в нескольких категориях - выберите нужную\n"
+        "• Затем выберите вариант\n"
         "• Кнопки назад вернут к выбору",
         parse_mode="Markdown"
     )
+
+@dp.message(Command("stats"))
+async def cmd_stats(message: types.Message) -> None:
+    """Статистика базы данных"""
+    stats = [
+        f"📊 **Статистика:**",
+        f"• Групп: {len(db.groups)}",
+        f"• Уникальных ключей: {len(db.key_to_groups)}",
+    ]
+    
+    # Считаем дубликаты
+    duplicates = sum(1 for groups in db.key_to_groups.values() if len(groups) > 1)
+    stats.append(f"• Ключей с дубликатами: {duplicates}")
+    
+    await message.answer("\n".join(stats), parse_mode="Markdown")
 
 # ========== ОБРАБОТЧИК ТЕКСТА ==========
 
@@ -198,28 +299,62 @@ async def handle_message(message: types.Message) -> None:
         return
     
     db.set_last_query(user_id, text)
-    result = db.find_group(text)
+    groups = db.find_groups(text)
     
-    if result:
-        group_id, keys, associations = result
-        display_name = keys[0]
+    if groups:
+        if len(groups) == 1:
+            # Если одна группа - показываем сразу ассоциации
+            group_id, display_name, associations = groups[0]
+            db.set_last_group(user_id, group_id)
+            
+            assoc_list = "\n".join([f"• {a}" for a in associations])
+            
+            await message.answer(
+                f"✅ **{display_name}**\n\n"
+                f"📌 **Варианты:**\n\n{assoc_list}",
+                parse_mode="Markdown",
+                reply_markup=associations_keyboard(associations, group_id)
+            )
+        else:
+            # Если несколько групп - показываем выбор
+            await message.answer(
+                f"🔍 **Найдено несколько категорий для '{text}':**\n\n"
+                f"Выберите нужную:",
+                parse_mode="Markdown",
+                reply_markup=groups_keyboard(groups)
+            )
+        logger.info(f"User {user_id} searched '{text}' -> {len(groups)} groups")
+    else:
+        await message.answer(
+            f"❌ Ничего не найдено для '{text}'\n\nПопробуйте другое слово",
+            reply_markup=back_to_main_keyboard()
+        )
+
+# ========== ОБРАБОТЧИКИ КНОПОК ==========
+
+@dp.callback_query(lambda c: c.data.startswith('group_'))
+async def process_group_select(callback: CallbackQuery):
+    """Обработка выбора группы при дубликатах"""
+    group_id = callback.data.replace('group_', '')
+    user_id = callback.from_user.id
+    
+    group = db.get_group(group_id)
+    
+    if group:
         db.set_last_group(user_id, group_id)
+        associations = group['associations']
+        display_name = group['display_name']
         
         assoc_list = "\n".join([f"• {a}" for a in associations])
         
-        await message.answer(
+        await callback.message.edit_text(
             f"✅ **{display_name}**\n\n"
             f"📌 **Варианты:**\n\n{assoc_list}",
             parse_mode="Markdown",
             reply_markup=associations_keyboard(associations, group_id)
         )
-    else:
-        await message.answer(
-            f"❌ Ничего не найдено\n\nПопробуйте другое слово",
-            reply_markup=back_to_main_keyboard()
-        )
-
-# ========== ОБРАБОТЧИКИ КНОПОК ==========
+    
+    await callback.answer()
 
 @dp.callback_query(lambda c: c.data.startswith('assoc_'))
 async def process_association(callback: CallbackQuery):
@@ -241,8 +376,8 @@ async def process_back_to_list(callback: CallbackQuery):
     group = db.get_group(group_id)
     
     if group:
-        keys, associations = group
-        display_name = keys[0]
+        associations = group['associations']
+        display_name = group['display_name']
         assoc_list = "\n".join([f"• {a}" for a in associations])
         
         await callback.message.edit_text(
