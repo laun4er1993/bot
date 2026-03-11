@@ -46,6 +46,7 @@ class PhotosDatabase:
         
         # История пользователей
         self.user_last_photos: Dict[int, List[str]] = {}
+        self.user_last_villages: Dict[int, str] = {}  # Добавлено для хранения списка деревень
         self.user_last_query: Dict[int, str] = {}
         
         self.load_all_data()
@@ -101,15 +102,11 @@ class PhotosDatabase:
                     content = f.read()
                     logger.info(f"📄 Читаем файл {self.details_file}, размер: {len(content)} байт")
                     
-                    # Разделяем по маркеру ===
                     entries = content.split('===')
                     
                     for i in range(len(entries) - 1):
-                        # Получаем номер снимка (последняя строка перед ===)
                         lines = entries[i].strip().split('\n')
                         photo_num = lines[-1].strip() if lines else ""
-                        
-                        # Получаем описание (всё что после ===)
                         description = entries[i + 1].strip()
                         
                         if photo_num and description and not photo_num.startswith('#'):
@@ -156,6 +153,16 @@ class PhotosDatabase:
                 unique_photos.append(photo)
         return unique_photos
     
+    def get_all_villages(self, records: List[Dict]) -> List[str]:
+        """Собирает все уникальные деревни из списка записей"""
+        all_villages = []
+        for record in records:
+            all_villages.extend(record['villages'])
+        
+        # Убираем дубликаты и сортируем
+        unique_villages = sorted(list(set(all_villages)))
+        return unique_villages
+    
     def get_photo_details(self, photo_num: str) -> Optional[str]:
         """Возвращает детальное описание снимка"""
         return self.photo_details.get(photo_num)
@@ -165,6 +172,12 @@ class PhotosDatabase:
     
     def get_last_photos(self, user_id: int) -> Optional[List[str]]:
         return self.user_last_photos.get(user_id)
+    
+    def set_last_villages(self, user_id: int, villages_text: str):
+        self.user_last_villages[user_id] = villages_text
+    
+    def get_last_villages(self, user_id: int) -> Optional[str]:
+        return self.user_last_villages.get(user_id)
     
     def set_last_query(self, user_id: int, query: str):
         self.user_last_query[user_id] = query
@@ -247,12 +260,23 @@ async def handle_message(message: types.Message) -> None:
     
     if results:
         all_photos = db.get_all_photos(results)
+        all_villages = db.get_all_villages(results)
+        
+        # Формируем текст со списком деревень
+        if len(all_villages) > 15:
+            villages_text = ', '.join(all_villages[:15]) + f" и ещё {len(all_villages)-15}"
+        else:
+            villages_text = ', '.join(all_villages)
+        
+        # Сохраняем для кнопки "Назад"
         db.set_last_photos(user_id, all_photos)
+        db.set_last_villages(user_id, villages_text)
         
         photos_list = "\n".join([f"• {photo}" for photo in all_photos])
         
         await message.answer(
             f"✅ **Найдено по запросу '{text}':**\n\n"
+            f"📍 **Деревни в этом районе:**\n{villages_text}\n\n"
             f"📸 **Снимки ({len(all_photos)} шт.):**\n\n{photos_list}",
             parse_mode="Markdown",
             reply_markup=photos_keyboard(all_photos)
@@ -286,6 +310,7 @@ async def process_photo_select(callback: CallbackQuery):
 async def process_back_to_photos(callback: CallbackQuery):
     user_id = callback.from_user.id
     last_photos = db.get_last_photos(user_id)
+    last_villages = db.get_last_villages(user_id)
     last_query = db.get_last_query(user_id)
     
     if last_photos:
@@ -293,6 +318,7 @@ async def process_back_to_photos(callback: CallbackQuery):
         
         await callback.message.edit_text(
             f"✅ **Найдено по запросу '{last_query}':**\n\n"
+            f"📍 **Деревни в этом районе:**\n{last_villages}\n\n"
             f"📸 **Снимки ({len(last_photos)} шт.):**\n\n{photos_list}",
             parse_mode="Markdown",
             reply_markup=photos_keyboard(last_photos)
