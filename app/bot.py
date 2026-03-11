@@ -5,6 +5,7 @@ import sys
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
+from aiogram.client.default import DefaultBotProperties
 
 # Токен берется из переменных окружения (обязательно для Railway)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -65,18 +66,50 @@ async def echo_message(message: types.Message) -> None:
     logger.debug(f"Echo reply to user {message.from_user.id}")
 
 
+async def delete_webhook_and_start() -> None:
+    """Удаляет вебхук и запускает polling"""
+    logger.info("🔄 Проверяем наличие активного webhook...")
+    
+    try:
+        # Получаем информацию о текущем webhook
+        webhook_info = await bot.get_webhook_info()
+        
+        if webhook_info.url:
+            logger.warning(f"⚠️ Найден активный webhook: {webhook_info.url}")
+            logger.info("🗑️ Удаляем webhook...")
+            
+            # Удаляем webhook
+            await bot.delete_webhook(drop_pending_updates=True)
+            logger.info("✅ Webhook успешно удален, ожидающие обновления сброшены")
+        else:
+            logger.info("✅ Активных webhook не найдено, можно запускать polling")
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка при проверке/удалении webhook: {e}", exc_info=True)
+        logger.info("⚠️ Продолжаем попытку запуска polling...")
+
+
 async def main() -> None:
     """Главная функция запуска бота"""
     logger.info("🚀 Бот запускается...")
     
-    # Информация о боте
-    bot_info = await bot.get_me()
-    logger.info(f"✅ Бот @{bot_info.username} успешно авторизован")
-    logger.info("🔄 Начинаем polling...")
-    
-    # Запуск бота
     try:
-        await dp.start_polling(bot)
+        # Информация о боте
+        bot_info = await bot.get_me()
+        logger.info(f"✅ Бот @{bot_info.username} успешно авторизован")
+        
+        # Удаляем webhook перед запуском polling
+        await delete_webhook_and_start()
+        
+        logger.info("🔄 Начинаем polling...")
+        
+        # Запуск бота
+        await dp.start_polling(
+            bot,
+            allowed_updates=["message", "callback_query"],  # Оптимизация: получаем только нужные типы обновлений
+            skip_updates=True  # Пропускаем старые обновления, накопившиеся пока бот не работал
+        )
+        
     except Exception as e:
         logger.error(f"❌ Критическая ошибка при работе бота: {e}", exc_info=True)
     finally:
