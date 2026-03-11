@@ -40,12 +40,12 @@ class DataBase:
         
         # Данные
         self.key_to_groups: Dict[str, List[str]] = {}  # ключ -> список group_id
-        self.groups: Dict[str, Dict] = {}  # group_id -> {keys, associations, category_name}
+        self.groups: Dict[str, Dict] = {}  # group_id -> {keys, associations, category_name, category_description}
         self.details: Dict[str, str] = {}  # ассоциация -> детали
         
         # История пользователей
-        self.user_last_group: Dict[int, str] = {}
-        self.user_last_query: Dict[int, str] = {}
+        self.user_last_query: Dict[int, str] = {}  # последний поисковый запрос
+        self.user_last_groups: Dict[int, List[Tuple[str, str, str, List[str]]]] = {}  # последние найденные группы (group_id, display_name, category_description, associations)
         
         self.load_all_data()
     
@@ -65,12 +65,13 @@ class DataBase:
                             continue
                         
                         if '|' in line:
-                            # Формат: категория|ключ1,ключ2|ассоциация1|ассоциация2
+                            # Новый формат: категория|описание|ключ1,ключ2|ассоциация1|ассоциация2
                             parts = line.split('|')
-                            if len(parts) >= 3:
+                            if len(parts) >= 4:
                                 category_name = parts[0].strip()
-                                keys_part = parts[1].strip()
-                                associations = [a.strip() for a in parts[2:] if a.strip()]
+                                category_description = parts[1].strip()  # Описание категории (с чем ассоциируется)
+                                keys_part = parts[2].strip()
+                                associations = [a.strip() for a in parts[3:] if a.strip()]
                                 
                                 keys = [k.strip().lower() for k in keys_part.split(',') if k.strip()]
                                 
@@ -81,7 +82,8 @@ class DataBase:
                                     self.groups[group_id] = {
                                         'keys': keys,
                                         'associations': associations,
-                                        'category_name': category_name
+                                        'category_name': category_name,
+                                        'category_description': category_description
                                     }
                                     
                                     # Для каждого ключа добавляем ссылку на эту группу
@@ -99,14 +101,14 @@ class DataBase:
             logger.error(f"❌ Ошибка загрузки: {e}")
     
     def _create_example_file(self) -> None:
-        """Создает пример файла с данными"""
-        example = '''# Формат: КАТЕГОРИЯ|ключ1,ключ2|ассоциация1|ассоциация2
+        """Создает пример файла с данными в новом формате"""
+        example = '''# Формат: КАТЕГОРИЯ|ОПИСАНИЕ|ключ1,ключ2|ассоциация1|ассоциация2
 
-Фрукты|яблоко,фрукт,apple|🍎 Красное яблоко|🍏 Зеленое яблоко
-Apple|apple,iphone,mac|📱 iPhone 15|💻 MacBook Pro
-Автомобили|машина,авто,car|🚗 Toyota Camry|🚙 Kia Sportage
-Бытовая техника|машина,стиралка|🧺 Стиральная машина|☕ Кофемашина
-Программирование|python,питон|🐍 Основы Python|🌐 Django
+Фрукты|Яблоко как фрукт|яблоко,фрукт,apple|🍎 Красное яблоко|🍏 Зеленое яблоко
+Apple|Яблоко как бренд Apple|apple,iphone,mac|📱 iPhone 15|💻 MacBook Pro
+Автомобили|Машина как автомобиль|машина,авто,car|🚗 Toyota Camry|🚙 Kia Sportage
+Бытовая техника|Машина как устройство|машина,стиралка|🧺 Стиральная машина|☕ Кофемашина
+Программирование|Python как язык|python,питон|🐍 Основы Python|🌐 Django
 '''
         with open(self.multi_keys_file, 'w', encoding='utf-8') as f:
             f.write(example)
@@ -130,10 +132,10 @@ Apple|apple,iphone,mac|📱 iPhone 15|💻 MacBook Pro
         except Exception as e:
             logger.error(f"❌ Ошибка загрузки деталей: {e}")
     
-    def find_groups(self, text: str) -> List[Tuple[str, str, List[str]]]:
+    def find_groups(self, text: str) -> List[Tuple[str, str, str, List[str]]]:
         """
         Ищет все группы по ключу
-        Возвращает список: (group_id, category_name, список ассоциаций)
+        Возвращает список: (group_id, category_name, category_description, список ассоциаций)
         """
         if not text or not self.key_to_groups:
             return []
@@ -147,7 +149,7 @@ Apple|apple,iphone,mac|📱 iPhone 15|💻 MacBook Pro
             for group_id in self.key_to_groups[text_lower]:
                 if group_id not in seen_group_ids:
                     group = self.groups[group_id]
-                    found_groups.append((group_id, group['category_name'], group['associations']))
+                    found_groups.append((group_id, group['category_name'], group['category_description'], group['associations']))
                     seen_group_ids.add(group_id)
         
         # Поиск по вхождению
@@ -156,7 +158,7 @@ Apple|apple,iphone,mac|📱 iPhone 15|💻 MacBook Pro
                 for group_id in group_ids:
                     if group_id not in seen_group_ids:
                         group = self.groups[group_id]
-                        found_groups.append((group_id, group['category_name'], group['associations']))
+                        found_groups.append((group_id, group['category_name'], group['category_description'], group['associations']))
                         seen_group_ids.add(group_id)
         
         return found_groups
@@ -167,17 +169,19 @@ Apple|apple,iphone,mac|📱 iPhone 15|💻 MacBook Pro
     def get_details(self, association: str) -> Optional[str]:
         return self.details.get(association)
     
-    def set_last_group(self, user_id: int, group_id: str):
-        self.user_last_group[user_id] = group_id
-    
-    def get_last_group(self, user_id: int) -> Optional[str]:
-        return self.user_last_group.get(user_id)
-    
     def set_last_query(self, user_id: int, query: str):
         self.user_last_query[user_id] = query
     
     def get_last_query(self, user_id: int) -> Optional[str]:
         return self.user_last_query.get(user_id)
+    
+    def set_last_groups(self, user_id: int, groups: List[Tuple[str, str, str, List[str]]]):
+        """Сохраняет последние найденные группы пользователя"""
+        self.user_last_groups[user_id] = groups
+    
+    def get_last_groups(self, user_id: int) -> Optional[List[Tuple[str, str, str, List[str]]]]:
+        """Возвращает последние найденные группы пользователя"""
+        return self.user_last_groups.get(user_id)
     
     def log_stats(self):
         logger.info(f"📊 Статистика:")
@@ -194,19 +198,26 @@ def back_to_main_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🏠 В начало", callback_data="back_to_main")]
     ])
 
+def back_to_categories_keyboard() -> InlineKeyboardMarkup:
+    """Кнопка возврата к выбору категории"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Назад к категориям", callback_data="back_to_categories")]
+    ])
+
 def back_to_list_keyboard(group_id: str) -> InlineKeyboardMarkup:
     """Кнопка возврата к списку ассоциаций"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔙 Назад к списку", callback_data=f"back_to_list_{group_id}")]
     ])
 
-def groups_keyboard(groups: List[Tuple[str, str, List[str]]]) -> InlineKeyboardMarkup:
-    """Клавиатура для выбора группы при дубликатах"""
+def groups_keyboard(groups: List[Tuple[str, str, str, List[str]]]) -> InlineKeyboardMarkup:
+    """Клавиатура для выбора группы при дубликатах - показывает понятные описания"""
     keyboard = []
     
-    for group_id, category_name, associations in groups:
+    for group_id, category_name, category_description, associations in groups:
+        # Используем описание категории для кнопки
         keyboard.append([InlineKeyboardButton(
-            text=category_name,
+            text=category_description,
             callback_data=f"select_group_{group_id}"
         )])
     
@@ -215,19 +226,19 @@ def groups_keyboard(groups: List[Tuple[str, str, List[str]]]) -> InlineKeyboardM
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 def associations_keyboard(associations: List[str], category_name: str, group_id: str) -> InlineKeyboardMarkup:
-    """Клавиатура со списком ассоциаций - теперь с названием категории"""
+    """Клавиатура со списком ассоциаций"""
     keyboard = []
     row = []
     
     for i, assoc in enumerate(associations):
-        # Добавляем название категории к каждой ассоциации
         button_text = f"{category_name} - {assoc}"
         row.append(InlineKeyboardButton(text=button_text, callback_data=f"show_details_{assoc}"))
         if len(row) == 2 or i == len(associations) - 1:
             keyboard.append(row)
             row = []
     
-    keyboard.append([InlineKeyboardButton(text="🔙 Назад к поиску", callback_data="back_to_search")])
+    # Добавляем кнопку возврата к категориям
+    keyboard.append([InlineKeyboardButton(text="🔙 Назад к категориям", callback_data="back_to_categories")])
     
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
@@ -277,21 +288,23 @@ async def handle_message(message: types.Message) -> None:
     groups = db.find_groups(text)
     
     if groups:
+        # Сохраняем найденные группы для возможности возврата
+        db.set_last_groups(user_id, groups)
+        
         if len(groups) == 1:
             # Если одна группа - показываем сразу ассоциации
-            group_id, category_name, associations = groups[0]
-            db.set_last_group(user_id, group_id)
+            group_id, category_name, category_description, associations = groups[0]
             
             assoc_list = "\n".join([f"• {category_name} - {a}" for a in associations])
             
             await message.answer(
-                f"✅ **{category_name}**\n\n"
+                f"✅ **{category_description}**\n\n"
                 f"📌 **Варианты:**\n\n{assoc_list}",
                 parse_mode="Markdown",
                 reply_markup=associations_keyboard(associations, category_name, group_id)
             )
         else:
-            # Если несколько групп - показываем выбор
+            # Если несколько групп - показываем выбор с понятными описаниями
             await message.answer(
                 f"🔍 **Найдено несколько категорий для '{text}':**\n\n"
                 f"Выберите нужную:",
@@ -316,14 +329,14 @@ async def process_group_select(callback: CallbackQuery):
     group = db.get_group(group_id)
     
     if group:
-        db.set_last_group(user_id, group_id)
         associations = group['associations']
         category_name = group['category_name']
+        category_description = group['category_description']
         
         assoc_list = "\n".join([f"• {category_name} - {a}" for a in associations])
         
         await callback.message.edit_text(
-            f"✅ **{category_name}**\n\n"
+            f"✅ **{category_description}**\n\n"
             f"📌 **Варианты:**\n\n{assoc_list}",
             parse_mode="Markdown",
             reply_markup=associations_keyboard(associations, category_name, group_id)
@@ -337,7 +350,6 @@ async def process_show_details(callback: CallbackQuery):
     association = callback.data.replace('show_details_', '')
     user_id = callback.from_user.id
     
-    last_group = db.get_last_group(user_id)
     details = db.get_details(association)
     
     if details:
@@ -345,9 +357,43 @@ async def process_show_details(callback: CallbackQuery):
     else:
         text = f"📖 **{association}**\n\n*Нет подробного описания*"
     
-    reply = back_to_list_keyboard(last_group) if last_group else back_to_main_keyboard()
+    # Показываем кнопку возврата к категориям
+    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=back_to_categories_keyboard())
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data == "back_to_categories")
+async def process_back_to_categories(callback: CallbackQuery):
+    """Возвращает к выбору категории"""
+    user_id = callback.from_user.id
+    last_groups = db.get_last_groups(user_id)
+    last_query = db.get_last_query(user_id)
     
-    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=reply)
+    if last_groups and len(last_groups) > 1:
+        # Если были несколько категорий - показываем их с описаниями
+        await callback.message.edit_text(
+            f"🔍 **Найдено несколько категорий для '{last_query}':**\n\n"
+            f"Выберите нужную:",
+            parse_mode="Markdown",
+            reply_markup=groups_keyboard(last_groups)
+        )
+    elif last_groups and len(last_groups) == 1:
+        # Если была одна категория - показываем ассоциации
+        group_id, category_name, category_description, associations = last_groups[0]
+        assoc_list = "\n".join([f"• {category_name} - {a}" for a in associations])
+        
+        await callback.message.edit_text(
+            f"✅ **{category_description}**\n\n"
+            f"📌 **Варианты:**\n\n{assoc_list}",
+            parse_mode="Markdown",
+            reply_markup=associations_keyboard(associations, category_name, group_id)
+        )
+    else:
+        # Если ничего не сохранилось - возвращаем к поиску
+        await callback.message.edit_text(
+            "🔍 Введите слово для поиска",
+            reply_markup=back_to_main_keyboard()
+        )
+    
     await callback.answer()
 
 @dp.callback_query(lambda c: c.data.startswith('back_to_list_'))
@@ -359,10 +405,11 @@ async def process_back_to_list(callback: CallbackQuery):
     if group:
         associations = group['associations']
         category_name = group['category_name']
+        category_description = group['category_description']
         assoc_list = "\n".join([f"• {category_name} - {a}" for a in associations])
         
         await callback.message.edit_text(
-            f"✅ **{category_name}**\n\n📌 **Варианты:**\n\n{assoc_list}",
+            f"✅ **{category_description}**\n\n📌 **Варианты:**\n\n{assoc_list}",
             parse_mode="Markdown",
             reply_markup=associations_keyboard(associations, category_name, group_id)
         )
