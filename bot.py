@@ -30,215 +30,160 @@ logger = logging.getLogger(__name__)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# ========== КЛАСС ДЛЯ РАБОТЫ С ДАННЫМИ ==========
+# ========== КЛАСС ДЛЯ РАБОТЫ С БАЗОЙ СНИМКОВ ==========
 
-class DataBase:
+class PhotosDatabase:
     def __init__(self, data_dir: str = "data"):
         self.data_dir = data_dir
-        self.multi_keys_file = os.path.join(data_dir, "multi_keys.txt")
-        self.details_file = os.path.join(data_dir, "details.txt")
+        self.photos_file = os.path.join(data_dir, "photos.txt")
         
         # Данные
-        self.key_to_groups: Dict[str, List[str]] = {}  # ключ -> список group_id
-        self.groups: Dict[str, Dict] = {}  # group_id -> {keys, associations, category_name, category_description}
-        self.details: Dict[str, str] = {}  # ассоциация -> детали
+        self.location_to_photos: Dict[str, List[str]] = {}  # локация (деревни) -> список снимков
+        self.photo_to_locations: Dict[str, List[str]] = {}  # снимок -> список локаций
+        self.all_locations: List[str] = []                  # все уникальные описания локаций
         
         # История пользователей
-        self.user_last_query: Dict[int, str] = {}  # последний поисковый запрос
-        self.user_last_groups: Dict[int, List[Tuple[str, str, str, List[str]]]] = {}  # последние найденные группы (group_id, display_name, category_description, associations)
+        self.user_last_locations: Dict[int, List[Tuple[str, str, List[str]]]] = {}
+        self.user_last_query: Dict[int, str] = {}
         
-        self.load_all_data()
+        self.load_data()
     
-    def load_all_data(self) -> None:
+    def load_data(self) -> None:
         os.makedirs(self.data_dir, exist_ok=True)
-        self.load_multi_keys()
-        self.load_details()
-        self.log_stats()
-    
-    def load_multi_keys(self) -> None:
+        
         try:
-            if os.path.exists(self.multi_keys_file):
-                with open(self.multi_keys_file, 'r', encoding='utf-8') as f:
+            if os.path.exists(self.photos_file):
+                with open(self.photos_file, 'r', encoding='utf-8') as f:
                     for line_num, line in enumerate(f):
                         line = line.strip()
                         if not line or line.startswith('#'):
                             continue
                         
-                        if '|' in line:
-                            # Новый формат: категория|описание|ключ1,ключ2|ассоциация1|ассоциация2
-                            parts = line.split('|')
-                            if len(parts) >= 4:
-                                category_name = parts[0].strip()
-                                category_description = parts[1].strip()  # Описание категории (с чем ассоциируется)
-                                keys_part = parts[2].strip()
-                                associations = [a.strip() for a in parts[3:] if a.strip()]
+                        # Формат: локация|снимок1|снимок2|...
+                        parts = line.split('|')
+                        if len(parts) >= 3:
+                            location_desc = parts[0].strip()  # список деревень
+                            photos = [p.strip() for p in parts[1:] if p.strip()]
+                            
+                            if photos:
+                                # Сохраняем связь локация -> снимки
+                                self.location_to_photos[location_desc] = photos
+                                self.all_locations.append(location_desc)
                                 
-                                keys = [k.strip().lower() for k in keys_part.split(',') if k.strip()]
-                                
-                                if keys and associations:
-                                    group_id = f"group_{line_num}"
-                                    
-                                    # Сохраняем группу
-                                    self.groups[group_id] = {
-                                        'keys': keys,
-                                        'associations': associations,
-                                        'category_name': category_name,
-                                        'category_description': category_description
-                                    }
-                                    
-                                    # Для каждого ключа добавляем ссылку на эту группу
-                                    for key in keys:
-                                        if key not in self.key_to_groups:
-                                            self.key_to_groups[key] = []
-                                        self.key_to_groups[key].append(group_id)
+                                # Сохраняем обратную связь снимок -> локации
+                                for photo in photos:
+                                    if photo not in self.photo_to_locations:
+                                        self.photo_to_locations[photo] = []
+                                    self.photo_to_locations[photo].append(location_desc)
                 
-                logger.info(f"✅ Загружено {len(self.groups)} групп")
+                logger.info(f"✅ Загружено {len(self.location_to_photos)} локаций")
+                logger.info(f"✅ Всего снимков: {len(self.photo_to_locations)}")
             else:
-                logger.warning(f"⚠️ Файл {self.multi_keys_file} не найден")
+                logger.warning(f"⚠️ Файл {self.photos_file} не найден")
                 self._create_example_file()
                 
         except Exception as e:
             logger.error(f"❌ Ошибка загрузки: {e}")
     
     def _create_example_file(self) -> None:
-        """Создает пример файла с данными в новом формате"""
-        example = '''# Формат: КАТЕГОРИЯ|ОПИСАНИЕ|ключ1,ключ2|ассоциация1|ассоциация2
+        """Создает пример файла с данными"""
+        example = '''# Формат: ОПИСАНИЕ_ЛОКАЦИИ|НОМЕР_СНИМКА1|НОМЕР_СНИМКА2
 
-Фрукты|Яблоко как фрукт|яблоко,фрукт,apple|🍎 Красное яблоко|🍏 Зеленое яблоко
-Apple|Яблоко как бренд Apple|apple,iphone,mac|📱 iPhone 15|💻 MacBook Pro
-Автомобили|Машина как автомобиль|машина,авто,car|🚗 Toyota Camry|🚙 Kia Sportage
-Бытовая техника|Машина как устройство|машина,стиралка|🧺 Стиральная машина|☕ Кофемашина
-Программирование|Python как язык|python,питон|🐍 Основы Python|🌐 Django
+Горбово,Нов.Ивановское,Ковынево,Скворцово,Дураково,Добрая,Мурылево,Ханино,Горы Казеки|N56E34-237-044|N56E34-237-045
+Старшевицы,Бельково,Харино,Дешевка|N56E34-237-053
+Полунино,Галахово,Тимофеево,Ердихино,Федорково|N56E34-237-048
+Крупцово,Гущино,Иружа,Разница|N56E34-224-011
 '''
-        with open(self.multi_keys_file, 'w', encoding='utf-8') as f:
+        with open(self.photos_file, 'w', encoding='utf-8') as f:
             f.write(example)
     
-    def load_details(self) -> None:
-        try:
-            if os.path.exists(self.details_file):
-                with open(self.details_file, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                
-                entries = content.split('===')
-                for i in range(len(entries) - 1):
-                    lines = entries[i].strip().split('\n')
-                    assoc = lines[-1].strip()
-                    details = entries[i + 1].strip()
-                    
-                    if not assoc.startswith('#'):
-                        self.details[assoc] = details
-                
-                logger.info(f"✅ Загружено {len(self.details)} описаний")
-        except Exception as e:
-            logger.error(f"❌ Ошибка загрузки деталей: {e}")
-    
-    def find_groups(self, text: str) -> List[Tuple[str, str, str, List[str]]]:
+    def find_locations(self, text: str) -> List[Tuple[str, List[str]]]:
         """
-        Ищет все группы по ключу
-        Возвращает список: (group_id, category_name, category_description, список ассоциаций)
+        Ищет локации по тексту (название деревни или номер снимка)
+        Возвращает список: (описание локации, список снимков)
         """
-        if not text or not self.key_to_groups:
+        if not text:
             return []
         
         text_lower = text.lower().strip()
-        found_groups = []
-        seen_group_ids = set()
+        found_locations = []
+        seen = set()
         
-        # Прямое совпадение
-        if text_lower in self.key_to_groups:
-            for group_id in self.key_to_groups[text_lower]:
-                if group_id not in seen_group_ids:
-                    group = self.groups[group_id]
-                    found_groups.append((group_id, group['category_name'], group['category_description'], group['associations']))
-                    seen_group_ids.add(group_id)
+        # Поиск по номеру снимка
+        if text_lower in self.photo_to_locations:
+            for loc_desc in self.photo_to_locations[text_lower]:
+                if loc_desc not in seen:
+                    found_locations.append((loc_desc, self.location_to_photos[loc_desc]))
+                    seen.add(loc_desc)
         
-        # Поиск по вхождению
-        for key, group_ids in self.key_to_groups.items():
-            if key in text_lower and key != text_lower:
-                for group_id in group_ids:
-                    if group_id not in seen_group_ids:
-                        group = self.groups[group_id]
-                        found_groups.append((group_id, group['category_name'], group['category_description'], group['associations']))
-                        seen_group_ids.add(group_id)
+        # Поиск по названию деревни (вхождение в описание локации)
+        for loc_desc, photos in self.location_to_photos.items():
+            if text_lower in loc_desc.lower():
+                if loc_desc not in seen:
+                    found_locations.append((loc_desc, photos))
+                    seen.add(loc_desc)
         
-        return found_groups
+        return found_locations
     
-    def get_group(self, group_id: str) -> Optional[Dict]:
-        return self.groups.get(group_id)
+    def set_last_locations(self, user_id: int, locations: List[Tuple[str, List[str]]]):
+        self.user_last_locations[user_id] = locations
     
-    def get_details(self, association: str) -> Optional[str]:
-        return self.details.get(association)
+    def get_last_locations(self, user_id: int) -> Optional[List[Tuple[str, List[str]]]]:
+        return self.user_last_locations.get(user_id)
     
     def set_last_query(self, user_id: int, query: str):
         self.user_last_query[user_id] = query
     
     def get_last_query(self, user_id: int) -> Optional[str]:
         return self.user_last_query.get(user_id)
-    
-    def set_last_groups(self, user_id: int, groups: List[Tuple[str, str, str, List[str]]]):
-        """Сохраняет последние найденные группы пользователя"""
-        self.user_last_groups[user_id] = groups
-    
-    def get_last_groups(self, user_id: int) -> Optional[List[Tuple[str, str, str, List[str]]]]:
-        """Возвращает последние найденные группы пользователя"""
-        return self.user_last_groups.get(user_id)
-    
-    def log_stats(self):
-        logger.info(f"📊 Статистика:")
-        logger.info(f"   • Групп: {len(self.groups)}")
-        logger.info(f"   • Уникальных ключей: {len(self.key_to_groups)}")
 
-db = DataBase()
+db = PhotosDatabase()
 
 # ========== КЛАВИАТУРЫ ==========
 
 def back_to_main_keyboard() -> InlineKeyboardMarkup:
-    """Кнопка возврата в главное меню"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🏠 В начало", callback_data="back_to_main")]
     ])
 
-def back_to_categories_keyboard() -> InlineKeyboardMarkup:
-    """Кнопка возврата к выбору категории"""
+def back_to_locations_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔙 Назад к категориям", callback_data="back_to_categories")]
+        [InlineKeyboardButton(text="🔙 Назад к списку", callback_data="back_to_locations")]
     ])
 
-def back_to_list_keyboard(group_id: str) -> InlineKeyboardMarkup:
-    """Кнопка возврата к списку ассоциаций"""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔙 Назад к списку", callback_data=f"back_to_list_{group_id}")]
-    ])
-
-def groups_keyboard(groups: List[Tuple[str, str, str, List[str]]]) -> InlineKeyboardMarkup:
-    """Клавиатура для выбора группы при дубликатах - показывает понятные описания"""
+def locations_keyboard(locations: List[Tuple[str, List[str]]]) -> InlineKeyboardMarkup:
+    """Клавиатура для выбора локации"""
     keyboard = []
     
-    for group_id, category_name, category_description, associations in groups:
-        # Используем описание категории для кнопки
+    for loc_desc, photos in locations:
+        # Показываем первые несколько деревень для краткости
+        villages = loc_desc.split(',')[:3]
+        short_desc = ', '.join(villages)
+        if len(loc_desc.split(',')) > 3:
+            short_desc += f" и ещё {len(loc_desc.split(','))-3}"
+        
+        button_text = f"📌 {short_desc} ({len(photos)} снимков)"
         keyboard.append([InlineKeyboardButton(
-            text=category_description,
-            callback_data=f"select_group_{group_id}"
+            text=button_text,
+            callback_data=f"loc_{loc_desc}"
         )])
     
-    keyboard.append([InlineKeyboardButton(text="🔙 Назад к поиску", callback_data="back_to_search")])
+    keyboard.append([InlineKeyboardButton(text="🔙 Новый поиск", callback_data="back_to_search")])
     
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
-def associations_keyboard(associations: List[str], category_name: str, group_id: str) -> InlineKeyboardMarkup:
-    """Клавиатура со списком ассоциаций"""
+def photos_keyboard(photos: List[str], loc_desc: str) -> InlineKeyboardMarkup:
+    """Клавиатура со списком снимков"""
     keyboard = []
     row = []
     
-    for i, assoc in enumerate(associations):
-        button_text = f"{category_name} - {assoc}"
-        row.append(InlineKeyboardButton(text=button_text, callback_data=f"show_details_{assoc}"))
-        if len(row) == 2 or i == len(associations) - 1:
+    for i, photo in enumerate(photos):
+        row.append(InlineKeyboardButton(text=photo, callback_data=f"photo_{photo}"))
+        if len(row) == 3 or i == len(photos) - 1:
             keyboard.append(row)
             row = []
     
-    # Добавляем кнопку возврата к категориям
-    keyboard.append([InlineKeyboardButton(text="🔙 Назад к категориям", callback_data="back_to_categories")])
+    keyboard.append([InlineKeyboardButton(text="🔙 Назад к списку", callback_data="back_to_locations")])
     
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
@@ -246,29 +191,26 @@ def associations_keyboard(associations: List[str], category_name: str, group_id:
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message) -> None:
-    """Обработчик команды /start"""
     await message.answer(
         f"👋 Привет, {message.from_user.full_name}!\n\n"
-        f"🔍 Напиши слово для поиска.\n\n"
+        f"🛩️ **Поиск аэрофотоснимков Ржевского района**\n\n"
+        f"🔍 Введите название деревни или номер снимка:\n\n"
         f"📋 **Примеры:**\n"
-        f"• яблоко - фрукт и бренд\n"
-        f"• машина - автомобиль и устройство\n"
-        f"• python - язык программирования\n\n"
-        f"💡 Если слово встречается в нескольких категориях, "
-        f"бот предложит выбрать нужную!",
+        f"• Горбово\n"
+        f"• Полунино\n"
+        f"• N56E34-237-044",
         parse_mode="Markdown",
         reply_markup=ReplyKeyboardRemove()
     )
 
 @dp.message(Command("help"))
 async def cmd_help(message: types.Message) -> None:
-    """Обработчик команды /help"""
     await message.answer(
-        "🤖 **Помощь:**\n\n"
-        "1️⃣ Напишите слово - бот покажет все категории\n"
-        "2️⃣ Если категорий несколько - выберите нужную\n"
-        "3️⃣ Выберите вариант из списка\n"
-        "4️⃣ Получите подробную информацию\n\n"
+        "🛩️ **Помощь по поиску снимков:**\n\n"
+        "1️⃣ Введите название деревни - найдете все снимки этого района\n"
+        "2️⃣ Введите номер снимка - узнаете какие деревни на нем\n"
+        "3️⃣ Выберите нужный вариант из списка\n"
+        "4️⃣ Нажмите на номер снимка для просмотра\n\n"
         "🔙 Кнопки «Назад» возвращают к предыдущему шагу",
         parse_mode="Markdown"
     )
@@ -277,7 +219,6 @@ async def cmd_help(message: types.Message) -> None:
 
 @dp.message()
 async def handle_message(message: types.Message) -> None:
-    """Обрабатывает текстовые сообщения"""
     text = message.text
     user_id = message.from_user.id
     
@@ -285,152 +226,109 @@ async def handle_message(message: types.Message) -> None:
         return
     
     db.set_last_query(user_id, text)
-    groups = db.find_groups(text)
+    locations = db.find_locations(text)
     
-    if groups:
-        # Сохраняем найденные группы для возможности возврата
-        db.set_last_groups(user_id, groups)
+    if locations:
+        db.set_last_locations(user_id, locations)
         
-        if len(groups) == 1:
-            # Если одна группа - показываем сразу ассоциации
-            group_id, category_name, category_description, associations = groups[0]
-            
-            assoc_list = "\n".join([f"• {category_name} - {a}" for a in associations])
+        if len(locations) == 1:
+            # Одна локация - показываем сразу снимки
+            loc_desc, photos = locations[0]
             
             await message.answer(
-                f"✅ **{category_description}**\n\n"
-                f"📌 **Варианты:**\n\n{assoc_list}",
+                f"✅ **Найден район:**\n{loc_desc}\n\n"
+                f"📸 **Доступные снимки ({len(photos)} шт.):**",
                 parse_mode="Markdown",
-                reply_markup=associations_keyboard(associations, category_name, group_id)
+                reply_markup=photos_keyboard(photos, loc_desc)
             )
         else:
-            # Если несколько групп - показываем выбор с понятными описаниями
+            # Несколько локаций - показываем выбор
             await message.answer(
-                f"🔍 **Найдено несколько категорий для '{text}':**\n\n"
-                f"Выберите нужную:",
+                f"🔍 **Найдено {len(locations)} районов по запросу '{text}':**\n\n"
+                f"Выберите нужный:",
                 parse_mode="Markdown",
-                reply_markup=groups_keyboard(groups)
+                reply_markup=locations_keyboard(locations)
             )
-        logger.info(f"User {user_id} searched '{text}' -> {len(groups)} groups")
     else:
         await message.answer(
-            f"❌ Ничего не найдено для '{text}'\n\nПопробуйте другое слово",
+            f"❌ Ничего не найдено для '{text}'\n\n"
+            f"Попробуйте другое название или номер снимка",
             reply_markup=back_to_main_keyboard()
         )
 
-# ========== ОБРАБОТЧИКИ ИНЛАЙН-КНОПОК ==========
+# ========== ОБРАБОТЧИКИ КНОПОК ==========
 
-@dp.callback_query(lambda c: c.data.startswith('select_group_'))
-async def process_group_select(callback: CallbackQuery):
-    """Обработка выбора группы при дубликатах"""
-    group_id = callback.data.replace('select_group_', '')
-    user_id = callback.from_user.id
+@dp.callback_query(lambda c: c.data.startswith('loc_'))
+async def process_location_select(callback: CallbackQuery):
+    loc_desc = callback.data.replace('loc_', '')
+    photos = db.location_to_photos.get(loc_desc, [])
     
-    group = db.get_group(group_id)
-    
-    if group:
-        associations = group['associations']
-        category_name = group['category_name']
-        category_description = group['category_description']
-        
-        assoc_list = "\n".join([f"• {category_name} - {a}" for a in associations])
-        
+    if photos:
         await callback.message.edit_text(
-            f"✅ **{category_description}**\n\n"
-            f"📌 **Варианты:**\n\n{assoc_list}",
+            f"✅ **{loc_desc}**\n\n"
+            f"📸 **Снимки ({len(photos)} шт.):**",
             parse_mode="Markdown",
-            reply_markup=associations_keyboard(associations, category_name, group_id)
+            reply_markup=photos_keyboard(photos, loc_desc)
         )
     
     await callback.answer()
 
-@dp.callback_query(lambda c: c.data.startswith('show_details_'))
-async def process_show_details(callback: CallbackQuery):
-    """Показывает детальную информацию по ассоциации"""
-    association = callback.data.replace('show_details_', '')
-    user_id = callback.from_user.id
+@dp.callback_query(lambda c: c.data.startswith('photo_'))
+async def process_photo_select(callback: CallbackQuery):
+    photo = callback.data.replace('photo_', '')
     
-    details = db.get_details(association)
+    # Здесь можно добавить логику для показа preview снимка
+    # Например, отправлять ссылку на изображение или файл
     
-    if details:
-        text = f"📖 **{association}**\n\n{details}"
-    else:
-        text = f"📖 **{association}**\n\n*Нет подробного описания*"
+    await callback.message.edit_text(
+        f"📸 **Снимок:** {photo}\n\n"
+        f"🔗 Ссылка на снимок будет здесь\n\n"
+        f"💡 В разработке...",
+        parse_mode="Markdown",
+        reply_markup=back_to_locations_keyboard()
+    )
     
-    # Показываем кнопку возврата к категориям
-    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=back_to_categories_keyboard())
     await callback.answer()
 
-@dp.callback_query(lambda c: c.data == "back_to_categories")
-async def process_back_to_categories(callback: CallbackQuery):
-    """Возвращает к выбору категории"""
+@dp.callback_query(lambda c: c.data == "back_to_locations")
+async def process_back_to_locations(callback: CallbackQuery):
     user_id = callback.from_user.id
-    last_groups = db.get_last_groups(user_id)
+    last_locations = db.get_last_locations(user_id)
     last_query = db.get_last_query(user_id)
     
-    if last_groups and len(last_groups) > 1:
-        # Если были несколько категорий - показываем их с описаниями
+    if last_locations and len(last_locations) > 1:
         await callback.message.edit_text(
-            f"🔍 **Найдено несколько категорий для '{last_query}':**\n\n"
-            f"Выберите нужную:",
+            f"🔍 **Найдено {len(last_locations)} районов по запросу '{last_query}':**\n\n"
+            f"Выберите нужный:",
             parse_mode="Markdown",
-            reply_markup=groups_keyboard(last_groups)
+            reply_markup=locations_keyboard(last_locations)
         )
-    elif last_groups and len(last_groups) == 1:
-        # Если была одна категория - показываем ассоциации
-        group_id, category_name, category_description, associations = last_groups[0]
-        assoc_list = "\n".join([f"• {category_name} - {a}" for a in associations])
-        
+    elif last_locations and len(last_locations) == 1:
+        loc_desc, photos = last_locations[0]
         await callback.message.edit_text(
-            f"✅ **{category_description}**\n\n"
-            f"📌 **Варианты:**\n\n{assoc_list}",
+            f"✅ **{loc_desc}**\n\n"
+            f"📸 **Снимки ({len(photos)} шт.):**",
             parse_mode="Markdown",
-            reply_markup=associations_keyboard(associations, category_name, group_id)
+            reply_markup=photos_keyboard(photos, loc_desc)
         )
     else:
-        # Если ничего не сохранилось - возвращаем к поиску
         await callback.message.edit_text(
-            "🔍 Введите слово для поиска",
+            "🔍 Введите название деревни или номер снимка",
             reply_markup=back_to_main_keyboard()
         )
     
-    await callback.answer()
-
-@dp.callback_query(lambda c: c.data.startswith('back_to_list_'))
-async def process_back_to_list(callback: CallbackQuery):
-    """Возвращает к списку ассоциаций"""
-    group_id = callback.data.replace('back_to_list_', '')
-    group = db.get_group(group_id)
-    
-    if group:
-        associations = group['associations']
-        category_name = group['category_name']
-        category_description = group['category_description']
-        assoc_list = "\n".join([f"• {category_name} - {a}" for a in associations])
-        
-        await callback.message.edit_text(
-            f"✅ **{category_description}**\n\n📌 **Варианты:**\n\n{assoc_list}",
-            parse_mode="Markdown",
-            reply_markup=associations_keyboard(associations, category_name, group_id)
-        )
     await callback.answer()
 
 @dp.callback_query(lambda c: c.data == "back_to_search")
 async def process_back_to_search(callback: CallbackQuery):
-    """Возвращает к поиску"""
-    user_id = callback.from_user.id
-    last_query = db.get_last_query(user_id)
-    
-    text = "🔍 Введите слово для поиска"
-    if last_query:
-        text += f"\n\nПоследний запрос: '{last_query}'"
-    
-    await callback.message.edit_text(text, reply_markup=back_to_main_keyboard())
+    await callback.message.edit_text(
+        "🔍 Введите название деревни или номер снимка",
+        reply_markup=back_to_main_keyboard()
+    )
     await callback.answer()
 
 @dp.callback_query(lambda c: c.data == "back_to_main")
 async def process_back_to_main(callback: CallbackQuery):
-    """Возвращает в главное меню"""
     await callback.message.delete()
     await cmd_start(callback.message)
     await callback.answer()
@@ -438,7 +336,6 @@ async def process_back_to_main(callback: CallbackQuery):
 # ========== ЗАПУСК ==========
 
 async def delete_webhook() -> None:
-    """Удаляет вебхук если есть"""
     try:
         info = await bot.get_webhook_info()
         if info.url:
@@ -448,8 +345,7 @@ async def delete_webhook() -> None:
         logger.error(f"Ошибка удаления webhook: {e}")
 
 async def main() -> None:
-    """Главная функция"""
-    logger.info("🚀 Бот запускается...")
+    logger.info("🛩️ Бот для поиска аэрофотоснимков запускается...")
     await delete_webhook()
     logger.info("🔄 Polling...")
     await dp.start_polling(bot, skip_updates=True)
