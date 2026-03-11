@@ -30,40 +30,50 @@ logger = logging.getLogger(__name__)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# ========== КЛАСС ДЛЯ РАБОТЫ С БАЗОЙ СНИМКОВ ==========
+# ========== КЛАСС ДЛЯ РАБОТЫ С ДАННЫМИ ==========
 
 class PhotosDatabase:
     def __init__(self, data_dir: str = "data"):
         self.data_dir = data_dir
-        self.photos_file = os.path.join(data_dir, "photos.txt")
+        self.multi_keys_file = os.path.join(data_dir, "multi_keys.txt")
+        self.details_file = os.path.join(data_dir, "details.txt")
         
-        # Данные
+        # Данные из multi_keys.txt
         self.location_to_photos: Dict[str, List[str]] = {}  # локация (деревни) -> список снимков
         self.photo_to_locations: Dict[str, List[str]] = {}  # снимок -> список локаций
         self.all_locations: List[str] = []                  # все уникальные описания локаций
         
+        # Данные из details.txt
+        self.photo_details: Dict[str, str] = {}             # снимок -> детальное описание
+        
         # История пользователей
-        self.user_last_locations: Dict[int, List[Tuple[str, str, List[str]]]] = {}
+        self.user_last_locations: Dict[int, List[Tuple[str, List[str]]]] = {}
         self.user_last_query: Dict[int, str] = {}
         
-        self.load_data()
+        self.load_all_data()
     
-    def load_data(self) -> None:
+    def load_all_data(self) -> None:
         os.makedirs(self.data_dir, exist_ok=True)
-        
+        self.load_multi_keys()
+        self.load_details()
+        self.log_stats()
+    
+    def load_multi_keys(self) -> None:
+        """Загружает данные из multi_keys.txt"""
         try:
-            if os.path.exists(self.photos_file):
-                with open(self.photos_file, 'r', encoding='utf-8') as f:
+            if os.path.exists(self.multi_keys_file):
+                with open(self.multi_keys_file, 'r', encoding='utf-8') as f:
                     for line_num, line in enumerate(f):
                         line = line.strip()
                         if not line or line.startswith('#'):
                             continue
                         
-                        # Формат: локация|снимок1|снимок2|...
+                        # Формат: категория|описание|ключ1|ключ2|...
                         parts = line.split('|')
-                        if len(parts) >= 3:
-                            location_desc = parts[0].strip()  # список деревень
-                            photos = [p.strip() for p in parts[1:] if p.strip()]
+                        if len(parts) >= 4:
+                            category = parts[0].strip()      # Ржев (не используется)
+                            location_desc = parts[1].strip()  # список деревень
+                            photos = [p.strip() for p in parts[2:] if p.strip()]  # номера снимков
                             
                             if photos:
                                 # Сохраняем связь локация -> снимки
@@ -76,25 +86,63 @@ class PhotosDatabase:
                                         self.photo_to_locations[photo] = []
                                     self.photo_to_locations[photo].append(location_desc)
                 
-                logger.info(f"✅ Загружено {len(self.location_to_photos)} локаций")
-                logger.info(f"✅ Всего снимков: {len(self.photo_to_locations)}")
+                logger.info(f"✅ Загружено {len(self.location_to_photos)} локаций из multi_keys.txt")
             else:
-                logger.warning(f"⚠️ Файл {self.photos_file} не найден")
-                self._create_example_file()
+                logger.warning(f"⚠️ Файл {self.multi_keys_file} не найден")
                 
         except Exception as e:
-            logger.error(f"❌ Ошибка загрузки: {e}")
+            logger.error(f"❌ Ошибка загрузки multi_keys: {e}")
     
-    def _create_example_file(self) -> None:
-        """Создает пример файла с данными"""
-        example = '''# Формат: ОПИСАНИЕ_ЛОКАЦИИ|НОМЕР_СНИМКА1|НОМЕР_СНИМКА2
+    def load_details(self) -> None:
+        """Загружает детальную информацию о снимках из details.txt"""
+        try:
+            if os.path.exists(self.details_file):
+                with open(self.details_file, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line or line.startswith('#'):
+                            continue
+                        
+                        # Формат: НОМЕР_СНИМКА===ПОДРОБНОЕ_ОПИСАНИЕ
+                        if '===' in line:
+                            photo_num, details = line.split('===', 1)
+                            photo_num = photo_num.strip()
+                            details = details.strip()
+                            
+                            if photo_num and details:
+                                self.photo_details[photo_num] = details
+                
+                logger.info(f"✅ Загружено {len(self.photo_details)} описаний снимков из details.txt")
+            else:
+                logger.warning(f"⚠️ Файл {self.details_file} не найден")
+                self._create_example_details()
+                
+        except Exception as e:
+            logger.error(f"❌ Ошибка загрузки details: {e}")
+    
+    def _create_example_details(self) -> None:
+        """Создает пример файла с деталями снимков"""
+        example = '''# Формат: НОМЕР_СНИМКА===ПОДРОБНОЕ_ОПИСАНИЕ
 
-Горбово,Нов.Ивановское,Ковынево,Скворцово,Дураково,Добрая,Мурылево,Ханино,Горы Казеки|N56E34-237-044|N56E34-237-045
-Старшевицы,Бельково,Харино,Дешевка|N56E34-237-053
-Полунино,Галахово,Тимофеево,Ердихино,Федорково|N56E34-237-048
-Крупцово,Гущино,Иружа,Разница|N56E34-224-011
+N56E34-237-044===📸 **Снимок N56E34-237-044**
+📅 Дата съемки: 1943-07-15
+🛩️ Высота: 4500 м
+🎞️ Масштаб: 1:15000
+📋 Описание: Район деревень Горбово, Нов.Ивановское, Ковынево. Хорошо видны укрепления.
+
+N56E34-237-045===📸 **Снимок N56E34-237-045**
+📅 Дата съемки: 1943-07-15
+🛩️ Высота: 4800 м
+🎞️ Масштаб: 1:16000
+📋 Описание: Продолжение предыдущего снимка. Видна линия окопов.
+
+N56E34-237-053===📸 **Снимок N56E34-237-053**
+📅 Дата съемки: 1943-08-02
+🛩️ Высота: 4200 м
+🎞️ Масштаб: 1:14000
+📋 Описание: Район Старшевицы, Бельково, Харино. Заметны следы боев.
 '''
-        with open(self.photos_file, 'w', encoding='utf-8') as f:
+        with open(self.details_file, 'w', encoding='utf-8') as f:
             f.write(example)
     
     def find_locations(self, text: str) -> List[Tuple[str, List[str]]]:
@@ -125,6 +173,10 @@ class PhotosDatabase:
         
         return found_locations
     
+    def get_photo_details(self, photo_num: str) -> Optional[str]:
+        """Возвращает детальное описание снимка"""
+        return self.photo_details.get(photo_num)
+    
     def set_last_locations(self, user_id: int, locations: List[Tuple[str, List[str]]]):
         self.user_last_locations[user_id] = locations
     
@@ -136,6 +188,12 @@ class PhotosDatabase:
     
     def get_last_query(self, user_id: int) -> Optional[str]:
         return self.user_last_query.get(user_id)
+    
+    def log_stats(self):
+        logger.info(f"📊 Статистика:")
+        logger.info(f"   • Локаций в multi_keys.txt: {len(self.location_to_photos)}")
+        logger.info(f"   • Уникальных снимков: {len(self.photo_to_locations)}")
+        logger.info(f"   • Описаний в details.txt: {len(self.photo_details)}")
 
 db = PhotosDatabase()
 
@@ -210,7 +268,7 @@ async def cmd_help(message: types.Message) -> None:
         "1️⃣ Введите название деревни - найдете все снимки этого района\n"
         "2️⃣ Введите номер снимка - узнаете какие деревни на нем\n"
         "3️⃣ Выберите нужный вариант из списка\n"
-        "4️⃣ Нажмите на номер снимка для просмотра\n\n"
+        "4️⃣ Нажмите на номер снимка для просмотра детальной информации\n\n"
         "🔙 Кнопки «Назад» возвращают к предыдущему шагу",
         parse_mode="Markdown"
     )
@@ -235,8 +293,15 @@ async def handle_message(message: types.Message) -> None:
             # Одна локация - показываем сразу снимки
             loc_desc, photos = locations[0]
             
+            # Показываем краткое описание локации
+            villages = loc_desc.split(',')
+            if len(villages) > 5:
+                short_desc = ', '.join(villages[:5]) + f" и ещё {len(villages)-5}"
+            else:
+                short_desc = loc_desc
+            
             await message.answer(
-                f"✅ **Найден район:**\n{loc_desc}\n\n"
+                f"✅ **Найден район:**\n{short_desc}\n\n"
                 f"📸 **Доступные снимки ({len(photos)} шт.):**",
                 parse_mode="Markdown",
                 reply_markup=photos_keyboard(photos, loc_desc)
@@ -264,8 +329,15 @@ async def process_location_select(callback: CallbackQuery):
     photos = db.location_to_photos.get(loc_desc, [])
     
     if photos:
+        # Показываем краткое описание локации
+        villages = loc_desc.split(',')
+        if len(villages) > 5:
+            short_desc = ', '.join(villages[:5]) + f" и ещё {len(villages)-5}"
+        else:
+            short_desc = loc_desc
+        
         await callback.message.edit_text(
-            f"✅ **{loc_desc}**\n\n"
+            f"✅ **{short_desc}**\n\n"
             f"📸 **Снимки ({len(photos)} шт.):**",
             parse_mode="Markdown",
             reply_markup=photos_keyboard(photos, loc_desc)
@@ -277,13 +349,22 @@ async def process_location_select(callback: CallbackQuery):
 async def process_photo_select(callback: CallbackQuery):
     photo = callback.data.replace('photo_', '')
     
-    # Здесь можно добавить логику для показа preview снимка
-    # Например, отправлять ссылку на изображение или файл
+    # Получаем детальное описание снимка из details.txt
+    details = db.get_photo_details(photo)
+    
+    if details:
+        text = details
+    else:
+        # Если нет описания, показываем базовую информацию
+        locations = db.photo_to_locations.get(photo, [])
+        loc_text = ", ".join(locations) if locations else "неизвестно"
+        
+        text = f"📸 **Снимок {photo}**\n\n"
+        text += f"📍 Район: {loc_text}\n"
+        text += f"📝 Подробное описание отсутствует"
     
     await callback.message.edit_text(
-        f"📸 **Снимок:** {photo}\n\n"
-        f"🔗 Ссылка на снимок будет здесь\n\n"
-        f"💡 В разработке...",
+        text,
         parse_mode="Markdown",
         reply_markup=back_to_locations_keyboard()
     )
@@ -305,8 +386,16 @@ async def process_back_to_locations(callback: CallbackQuery):
         )
     elif last_locations and len(last_locations) == 1:
         loc_desc, photos = last_locations[0]
+        
+        # Показываем краткое описание локации
+        villages = loc_desc.split(',')
+        if len(villages) > 5:
+            short_desc = ', '.join(villages[:5]) + f" и ещё {len(villages)-5}"
+        else:
+            short_desc = loc_desc
+        
         await callback.message.edit_text(
-            f"✅ **{loc_desc}**\n\n"
+            f"✅ **{short_desc}**\n\n"
             f"📸 **Снимки ({len(photos)} шт.):**",
             parse_mode="Markdown",
             reply_markup=photos_keyboard(photos, loc_desc)
