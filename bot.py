@@ -109,9 +109,6 @@ apple,iphone,mac|📱 iPhone 15|💻 MacBook Pro
 
 # Машина как устройство
 машина,стиралка|🧺 Стиральная машина|☕ Кофемашина
-
-# Python как язык
-python,питон|🐍 Основы Python|🌐 Django
 '''
         with open(self.multi_keys_file, 'w', encoding='utf-8') as f:
             f.write(example)
@@ -206,15 +203,13 @@ def back_to_list_keyboard(group_id: str) -> InlineKeyboardMarkup:
     ])
 
 def groups_keyboard(groups: List[Tuple[str, str, List[str]]]) -> InlineKeyboardMarkup:
-    """Клавиатура для выбора группы при дубликатах"""
+    """Клавиатура для выбора группы при дубликатах - показывает только названия ключей"""
     keyboard = []
     
     for group_id, display_name, associations in groups:
-        # Показываем первую ассоциацию как пример
-        example = associations[0] if associations else ""
-        button_text = f"{display_name} ({example})"
+        # Показываем только display_name (первый ключ) без примеров ассоциаций
         keyboard.append([InlineKeyboardButton(
-            text=button_text,
+            text=display_name,
             callback_data=f"select_group_{group_id}"
         )])
     
@@ -297,10 +292,10 @@ async def handle_message(message: types.Message) -> None:
                 reply_markup=associations_keyboard(associations, group_id)
             )
         else:
-            # Если несколько групп - показываем выбор
+            # Если несколько групп - показываем выбор (только названия ключей)
             await message.answer(
-                f"🔍 **Найдено несколько категорий для '{text}':**\n\n"
-                f"Выберите нужную:",
+                f"🔍 **Найдено несколько снимков для '{text}':**\n\n"
+                f"Выберите нужный:",
                 parse_mode="Markdown",
                 reply_markup=groups_keyboard(groups)
             )
