@@ -39,15 +39,15 @@ class PhotosDatabase:
         self.details_file = os.path.join(data_dir, "details.txt")
         
         # Данные из multi_keys.txt
-        self.location_to_photos: Dict[str, List[str]] = {}  # локация (деревни) -> список снимков
-        self.photo_to_locations: Dict[str, List[str]] = {}  # снимок -> список локаций
-        self.all_locations: List[str] = []                  # все уникальные описания локаций
+        self.locations: List[Dict] = []  # список всех записей
+        self.village_to_locations: Dict[str, List[int]] = {}  # деревня -> индексы записей
+        self.photo_to_locations: Dict[str, List[int]] = {}  # снимок -> индексы записей
         
         # Данные из details.txt
-        self.photo_details: Dict[str, str] = {}             # снимок -> детальное описание
+        self.photo_details: Dict[str, str] = {}  # снимок -> детальное описание
         
         # История пользователей
-        self.user_last_locations: Dict[int, List[Tuple[str, List[str]]]] = {}
+        self.user_last_results: Dict[int, List[Dict]] = {}  # последние результаты поиска
         self.user_last_query: Dict[int, str] = {}
         
         self.load_all_data()
@@ -66,38 +66,65 @@ class PhotosDatabase:
                     lines = f.readlines()
                     logger.info(f"📄 Читаем файл {self.multi_keys_file}, всего строк: {len(lines)}")
                     
-                    for line_num, line in enumerate(lines):
+                    for idx, line in enumerate(lines):
                         line = line.strip()
                         if not line or line.startswith('#'):
                             continue
                         
-                        # Формат: категория|описание|ключ1|ключ2|...
+                        # Формат: категория|список_деревень|снимок1|снимок2|...
                         parts = line.split('|')
                         
-                        if len(parts) >= 4:
-                            category = parts[0].strip()      # Ржев
-                            location_desc = parts[1].strip()  # список деревень
+                        if len(parts) >= 3:
+                            category = parts[0].strip()           # Ржев
+                            villages_str = parts[1].strip()       # список деревень через запятую
                             photos = [p.strip() for p in parts[2:] if p.strip()]  # номера снимков
                             
-                            logger.info(f"  Строка {line_num}: '{location_desc[:30]}...' ({len(photos)} снимков)")
+                            # Разбиваем деревни
+                            villages = [v.strip() for v in villages_str.split(',') if v.strip()]
                             
-                            if photos:
-                                # Сохраняем связь локация -> снимки
-                                self.location_to_photos[location_desc] = photos
-                                self.all_locations.append(location_desc)
-                                
-                                # Сохраняем обратную связь снимок -> локации
-                                for photo in photos:
-                                    if photo not in self.photo_to_locations:
-                                        self.photo_to_locations[photo] = []
-                                    self.photo_to_locations[photo].append(location_desc)
+                            # Сохраняем запись
+                            record = {
+                                'id': idx,
+                                'category': category,
+                                'villages_str': villages_str,
+                                'villages': villages,
+                                'photos': photos
+                            }
+                            self.locations.append(record)
+                            
+                            # Индексируем по деревням
+                            for village in villages:
+                                village_lower = village.lower()
+                                if village_lower not in self.village_to_locations:
+                                    self.village_to_locations[village_lower] = []
+                                self.village_to_locations[village_lower].append(idx)
+                            
+                            # Индексируем по снимкам
+                            for photo in photos:
+                                photo_lower = photo.lower()
+                                if photo_lower not in self.photo_to_locations:
+                                    self.photo_to_locations[photo_lower] = []
+                                self.photo_to_locations[photo_lower].append(idx)
+                            
+                            logger.info(f"  Строка {idx}: {len(villages)} деревень, {len(photos)} снимков")
                 
-                logger.info(f"✅ Загружено {len(self.location_to_photos)} локаций из multi_keys.txt")
+                logger.info(f"✅ Загружено {len(self.locations)} записей из multi_keys.txt")
             else:
                 logger.warning(f"⚠️ Файл {self.multi_keys_file} не найден")
+                self._create_example_multi_keys()
                 
         except Exception as e:
             logger.error(f"❌ Ошибка загрузки multi_keys: {e}")
+    
+    def _create_example_multi_keys(self) -> None:
+        """Создает пример файла multi_keys.txt"""
+        example = '''# Формат: КАТЕГОРИЯ|СПИСОК_ДЕРЕВЕНЬ|СНИМОК1|СНИМОК2|...
+Ржев|Горбово,Нов.Ивановское,Ковынево,Скворцово,Дураково,Добрая,Мурылево,Ханино,Горы Казеки|N56E34-237-044|N56E34-237-045
+Ржев|Старшевицы,Бельково,Харино,Дешевка|N56E34-237-053
+Ржев|Полунино,Галахово,Тимофеево,Ердихино,Федорково|N56E34-237-048
+'''
+        with open(self.multi_keys_file, 'w', encoding='utf-8') as f:
+            f.write(example)
     
     def load_details(self) -> None:
         """Загружает детальную информацию о снимках из details.txt"""
@@ -134,92 +161,68 @@ N56E34-237-044===📸 **Снимок N56E34-237-044**
 📅 Дата съемки: 1943-07-15
 🛩️ Высота: 4500 м
 🎞️ Масштаб: 1:15000
-📋 Описание: Район деревень Горбово, Нов.Ивановское, Ковынево. Хорошо видны укрепления.
-
-N56E34-237-045===📸 **Снимок N56E34-237-045**
-📅 Дата съемки: 1943-07-15
-🛩️ Высота: 4800 м
-🎞️ Масштаб: 1:16000
-📋 Описание: Продолжение предыдущего снимка. Видна линия окопов.
-
-N56E34-237-053===📸 **Снимок N56E34-237-053**
-📅 Дата съемки: 1943-08-02
-🛩️ Высота: 4200 м
-🎞️ Масштаб: 1:14000
-📋 Описание: Район Старшевицы, Бельково, Харино. Заметны следы боев.
+📋 Описание: Район деревень Горбово, Нов.Ивановское, Ковынево.
 '''
         with open(self.details_file, 'w', encoding='utf-8') as f:
             f.write(example)
     
-    def find_locations(self, text: str) -> List[Tuple[str, List[str]]]:
+    def search_by_village(self, query: str) -> List[Dict]:
         """
-        Ищет локации по тексту (название деревни или номер снимка)
-        Возвращает список: (описание локации, список снимков)
+        Ищет записи по названию деревни
+        Возвращает список записей, где встречается искомое слово
         """
-        if not text:
+        if not query:
             return []
         
-        text_lower = text.lower().strip()
-        found_locations = []
-        seen = set()
+        query_lower = query.lower().strip()
+        found_indices = set()
         
-        logger.info(f"🔍 Поиск: '{text}'")
+        logger.info(f"🔍 Поиск деревни: '{query}'")
         
-        # ПОИСК 1: По номеру снимка (точное совпадение)
-        if text_lower in self.photo_to_locations:
-            for loc_desc in self.photo_to_locations[text_lower]:
-                if loc_desc not in seen:
-                    found_locations.append((loc_desc, self.location_to_photos[loc_desc]))
-                    seen.add(loc_desc)
-                    logger.info(f"  ✓ Найдено по номеру снимка: {loc_desc[:50]}...")
+        # Точное совпадение с названием деревни
+        if query_lower in self.village_to_locations:
+            for idx in self.village_to_locations[query_lower]:
+                found_indices.add(idx)
+                logger.info(f"  ✓ Точное совпадение: '{query}' в записи {idx}")
         
-        # ПОИСК 2: По точному названию деревни
-        for loc_desc, photos in self.location_to_photos.items():
-            # Разбиваем описание локации на отдельные деревни
-            villages = [v.strip().lower() for v in loc_desc.split(',')]
-            
-            # Проверяем, есть ли искомый текст в списке деревень
-            if text_lower in villages:
-                if loc_desc not in seen:
-                    found_locations.append((loc_desc, photos))
-                    seen.add(loc_desc)
-                    logger.info(f"  ✓ Точное совпадение с деревней: {loc_desc[:50]}...")
+        # Частичное совпадение (если слово содержится в названии деревни)
+        for village, indices in self.village_to_locations.items():
+            if query_lower in village and len(query_lower) > 2:
+                for idx in indices:
+                    if idx not in found_indices:
+                        found_indices.add(idx)
+                        logger.info(f"  ✓ Частичное совпадение: '{query}' в '{village}' (запись {idx})")
         
-        # ПОИСК 3: По вхождению в название деревни (если еще не нашли)
-        if len(found_locations) < 3:  # Ограничиваем, чтобы не было слишком много
-            for loc_desc, photos in self.location_to_photos.items():
-                # Проверяем каждую деревню в описании
-                villages = [v.strip().lower() for v in loc_desc.split(',')]
-                
-                for village in villages:
-                    if text_lower in village and len(text_lower) > 3:  # Не ищем по очень коротким словам
-                        if loc_desc not in seen:
-                            found_locations.append((loc_desc, photos))
-                            seen.add(loc_desc)
-                            logger.info(f"  ✓ Частичное совпадение: '{text}' в '{village}'")
-                            break  # Нашли одну деревню в этой локации, переходим к следующей
+        # Возвращаем записи в порядке возрастания индекса
+        results = [self.locations[idx] for idx in sorted(found_indices)]
+        logger.info(f"✅ Найдено записей: {len(results)}")
         
-        # ПОИСК 4: По вхождению в описание локации (самый широкий поиск)
-        if not found_locations:  # Если ничего не нашли, пробуем самый широкий поиск
-            for loc_desc, photos in self.location_to_photos.items():
-                if text_lower in loc_desc.lower():
-                    if loc_desc not in seen:
-                        found_locations.append((loc_desc, photos))
-                        seen.add(loc_desc)
-                        logger.info(f"  ✓ Широкий поиск: '{text}' в {loc_desc[:50]}...")
+        return results
+    
+    def search_by_photo(self, query: str) -> List[Dict]:
+        """
+        Ищет записи по номеру снимка
+        """
+        if not query:
+            return []
         
-        logger.info(f"✅ Всего найдено локаций: {len(found_locations)}")
-        return found_locations
+        query_lower = query.lower().strip()
+        
+        if query_lower in self.photo_to_locations:
+            indices = self.photo_to_locations[query_lower]
+            return [self.locations[idx] for idx in indices]
+        
+        return []
     
     def get_photo_details(self, photo_num: str) -> Optional[str]:
         """Возвращает детальное описание снимка"""
         return self.photo_details.get(photo_num)
     
-    def set_last_locations(self, user_id: int, locations: List[Tuple[str, List[str]]]):
-        self.user_last_locations[user_id] = locations
+    def set_last_results(self, user_id: int, results: List[Dict]):
+        self.user_last_results[user_id] = results
     
-    def get_last_locations(self, user_id: int) -> Optional[List[Tuple[str, List[str]]]]:
-        return self.user_last_locations.get(user_id)
+    def get_last_results(self, user_id: int) -> Optional[List[Dict]]:
+        return self.user_last_results.get(user_id)
     
     def set_last_query(self, user_id: int, query: str):
         self.user_last_query[user_id] = query
@@ -229,7 +232,8 @@ N56E34-237-053===📸 **Снимок N56E34-237-053**
     
     def log_stats(self):
         logger.info(f"📊 Статистика:")
-        logger.info(f"   • Локаций в multi_keys.txt: {len(self.location_to_photos)}")
+        logger.info(f"   • Записей в multi_keys.txt: {len(self.locations)}")
+        logger.info(f"   • Уникальных деревень: {len(self.village_to_locations)}")
         logger.info(f"   • Уникальных снимков: {len(self.photo_to_locations)}")
         logger.info(f"   • Описаний в details.txt: {len(self.photo_details)}")
 
@@ -242,33 +246,33 @@ def back_to_main_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🏠 В начало", callback_data="back_to_main")]
     ])
 
-def back_to_locations_keyboard() -> InlineKeyboardMarkup:
+def back_to_results_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔙 Назад к списку", callback_data="back_to_locations")]
+        [InlineKeyboardButton(text="🔙 Назад к результатам", callback_data="back_to_results")]
     ])
 
-def locations_keyboard(locations: List[Tuple[str, List[str]]]) -> InlineKeyboardMarkup:
-    """Клавиатура для выбора локации"""
+def results_keyboard(results: List[Dict]) -> InlineKeyboardMarkup:
+    """Клавиатура для выбора результата поиска"""
     keyboard = []
     
-    for loc_desc, photos in locations:
-        # Показываем первые несколько деревень для краткости
-        villages = loc_desc.split(',')[:3]
+    for i, record in enumerate(results):
+        # Показываем первые несколько деревень
+        villages = record['villages'][:3]
         short_desc = ', '.join(villages)
-        if len(loc_desc.split(',')) > 3:
-            short_desc += f" и ещё {len(loc_desc.split(','))-3}"
+        if len(record['villages']) > 3:
+            short_desc += f" и ещё {len(record['villages'])-3}"
         
-        button_text = f"📌 {short_desc} ({len(photos)} снимков)"
+        button_text = f"📌 Вариант {i+1}: {short_desc} ({len(record['photos'])} снимков)"
         keyboard.append([InlineKeyboardButton(
             text=button_text,
-            callback_data=f"loc_{loc_desc}"
+            callback_data=f"record_{record['id']}"
         )])
     
     keyboard.append([InlineKeyboardButton(text="🔙 Новый поиск", callback_data="back_to_search")])
     
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
-def photos_keyboard(photos: List[str], loc_desc: str) -> InlineKeyboardMarkup:
+def photos_keyboard(photos: List[str], record_id: int) -> InlineKeyboardMarkup:
     """Клавиатура со списком снимков"""
     keyboard = []
     row = []
@@ -279,7 +283,7 @@ def photos_keyboard(photos: List[str], loc_desc: str) -> InlineKeyboardMarkup:
             keyboard.append(row)
             row = []
     
-    keyboard.append([InlineKeyboardButton(text="🔙 Назад к списку", callback_data="back_to_locations")])
+    keyboard.append([InlineKeyboardButton(text="🔙 Назад к результатам", callback_data="back_to_results")])
     
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
@@ -290,11 +294,13 @@ async def cmd_start(message: types.Message) -> None:
     await message.answer(
         f"👋 Привет, {message.from_user.full_name}!\n\n"
         f"🛩️ **Поиск аэрофотоснимков Ржевского района**\n\n"
-        f"🔍 Введите название деревни или номер снимка:\n\n"
+        f"🔍 Введите название деревни:\n\n"
         f"📋 **Примеры:**\n"
         f"• Горбово\n"
         f"• Полунино\n"
-        f"• N56E34-237-044",
+        f"• Дураково\n\n"
+        f"💡 Если деревня встречается в нескольких списках, "
+        f"бот покажет все варианты!",
         parse_mode="Markdown",
         reply_markup=ReplyKeyboardRemove()
     )
@@ -303,9 +309,9 @@ async def cmd_start(message: types.Message) -> None:
 async def cmd_help(message: types.Message) -> None:
     await message.answer(
         "🛩️ **Помощь по поиску снимков:**\n\n"
-        "1️⃣ Введите название деревни - найдете все снимки этого района\n"
-        "2️⃣ Введите номер снимка - узнаете какие деревни на нем\n"
-        "3️⃣ Выберите нужный вариант из списка\n"
+        "1️⃣ Введите название деревни\n"
+        "2️⃣ Бот покажет все списки, где встречается эта деревня\n"
+        "3️⃣ Выберите нужный вариант\n"
         "4️⃣ Нажмите на номер снимка для просмотра детальной информации\n\n"
         "🔙 Кнопки «Назад» возвращают к предыдущему шагу",
         parse_mode="Markdown"
@@ -322,63 +328,69 @@ async def handle_message(message: types.Message) -> None:
         return
     
     db.set_last_query(user_id, text)
-    locations = db.find_locations(text)
     
-    if locations:
-        db.set_last_locations(user_id, locations)
+    # Сначала ищем по деревне
+    results = db.search_by_village(text)
+    
+    # Если ничего не нашли, пробуем искать по снимку
+    if not results:
+        results = db.search_by_photo(text)
+        search_type = "снимку"
+    else:
+        search_type = "деревне"
+    
+    if results:
+        db.set_last_results(user_id, results)
         
-        if len(locations) == 1:
-            # Одна локация - показываем сразу снимки
-            loc_desc, photos = locations[0]
+        if len(results) == 1:
+            # Один результат - показываем сразу снимки
+            record = results[0]
             
-            # Показываем краткое описание локации
-            villages = loc_desc.split(',')
-            if len(villages) > 5:
-                short_desc = ', '.join(villages[:5]) + f" и ещё {len(villages)-5}"
-            else:
-                short_desc = loc_desc
+            # Показываем список деревень
+            villages_text = ', '.join(record['villages'])
             
             await message.answer(
-                f"✅ **Найден район:**\n{short_desc}\n\n"
-                f"📸 **Доступные снимки ({len(photos)} шт.):**",
+                f"✅ **Найден по {search_type}:**\n{villages_text}\n\n"
+                f"📸 **Снимки ({len(record['photos'])} шт.):**",
                 parse_mode="Markdown",
-                reply_markup=photos_keyboard(photos, loc_desc)
+                reply_markup=photos_keyboard(record['photos'], record['id'])
             )
         else:
-            # Несколько локаций - показываем выбор
+            # Несколько результатов - показываем выбор
             await message.answer(
-                f"🔍 **Найдено {len(locations)} районов по запросу '{text}':**\n\n"
+                f"🔍 **Найдено {len(results)} вариантов по запросу '{text}':**\n\n"
                 f"Выберите нужный:",
                 parse_mode="Markdown",
-                reply_markup=locations_keyboard(locations)
+                reply_markup=results_keyboard(results)
             )
     else:
         await message.answer(
             f"❌ Ничего не найдено для '{text}'\n\n"
-            f"Попробуйте другое название или номер снимка",
+            f"Попробуйте другое название деревни",
             reply_markup=back_to_main_keyboard()
         )
 
 # ========== ОБРАБОТЧИКИ КНОПОК ==========
 
-@dp.callback_query(lambda c: c.data.startswith('loc_'))
-async def process_location_select(callback: CallbackQuery):
-    loc_desc = callback.data.replace('loc_', '')
-    photos = db.location_to_photos.get(loc_desc, [])
+@dp.callback_query(lambda c: c.data.startswith('record_'))
+async def process_record_select(callback: CallbackQuery):
+    record_id = int(callback.data.replace('record_', ''))
     
-    if photos:
-        # Показываем краткое описание локации
-        villages = loc_desc.split(',')
-        if len(villages) > 5:
-            short_desc = ', '.join(villages[:5]) + f" и ещё {len(villages)-5}"
-        else:
-            short_desc = loc_desc
+    # Находим запись по id
+    record = None
+    for r in db.locations:
+        if r['id'] == record_id:
+            record = r
+            break
+    
+    if record:
+        villages_text = ', '.join(record['villages'])
         
         await callback.message.edit_text(
-            f"✅ **{short_desc}**\n\n"
-            f"📸 **Снимки ({len(photos)} шт.):**",
+            f"✅ **{villages_text}**\n\n"
+            f"📸 **Снимки ({len(record['photos'])} шт.):**",
             parse_mode="Markdown",
-            reply_markup=photos_keyboard(photos, loc_desc)
+            reply_markup=photos_keyboard(record['photos'], record_id)
         )
     
     await callback.answer()
@@ -387,60 +399,48 @@ async def process_location_select(callback: CallbackQuery):
 async def process_photo_select(callback: CallbackQuery):
     photo = callback.data.replace('photo_', '')
     
-    # Получаем детальное описание снимка из details.txt
+    # Получаем детальное описание снимка
     details = db.get_photo_details(photo)
     
     if details:
         text = details
     else:
-        # Если нет описания, показываем базовую информацию
-        locations = db.photo_to_locations.get(photo, [])
-        loc_text = ", ".join(locations) if locations else "неизвестно"
-        
-        text = f"📸 **Снимок {photo}**\n\n"
-        text += f"📍 Район: {loc_text}\n"
-        text += f"📝 Подробное описание отсутствует"
+        text = f"📸 **Снимок {photo}**\n\n*Нет подробного описания*"
     
     await callback.message.edit_text(
         text,
         parse_mode="Markdown",
-        reply_markup=back_to_locations_keyboard()
+        reply_markup=back_to_results_keyboard()
     )
     
     await callback.answer()
 
-@dp.callback_query(lambda c: c.data == "back_to_locations")
-async def process_back_to_locations(callback: CallbackQuery):
+@dp.callback_query(lambda c: c.data == "back_to_results")
+async def process_back_to_results(callback: CallbackQuery):
     user_id = callback.from_user.id
-    last_locations = db.get_last_locations(user_id)
+    last_results = db.get_last_results(user_id)
     last_query = db.get_last_query(user_id)
     
-    if last_locations and len(last_locations) > 1:
+    if last_results and len(last_results) > 1:
         await callback.message.edit_text(
-            f"🔍 **Найдено {len(last_locations)} районов по запросу '{last_query}':**\n\n"
+            f"🔍 **Найдено {len(last_results)} вариантов по запросу '{last_query}':**\n\n"
             f"Выберите нужный:",
             parse_mode="Markdown",
-            reply_markup=locations_keyboard(last_locations)
+            reply_markup=results_keyboard(last_results)
         )
-    elif last_locations and len(last_locations) == 1:
-        loc_desc, photos = last_locations[0]
-        
-        # Показываем краткое описание локации
-        villages = loc_desc.split(',')
-        if len(villages) > 5:
-            short_desc = ', '.join(villages[:5]) + f" и ещё {len(villages)-5}"
-        else:
-            short_desc = loc_desc
+    elif last_results and len(last_results) == 1:
+        record = last_results[0]
+        villages_text = ', '.join(record['villages'])
         
         await callback.message.edit_text(
-            f"✅ **{short_desc}**\n\n"
-            f"📸 **Снимки ({len(photos)} шт.):**",
+            f"✅ **{villages_text}**\n\n"
+            f"📸 **Снимки ({len(record['photos'])} шт.):**",
             parse_mode="Markdown",
-            reply_markup=photos_keyboard(photos, loc_desc)
+            reply_markup=photos_keyboard(record['photos'], record['id'])
         )
     else:
         await callback.message.edit_text(
-            "🔍 Введите название деревни или номер снимка",
+            "🔍 Введите название деревни",
             reply_markup=back_to_main_keyboard()
         )
     
@@ -449,7 +449,7 @@ async def process_back_to_locations(callback: CallbackQuery):
 @dp.callback_query(lambda c: c.data == "back_to_search")
 async def process_back_to_search(callback: CallbackQuery):
     await callback.message.edit_text(
-        "🔍 Введите название деревни или номер снимка",
+        "🔍 Введите название деревни",
         reply_markup=back_to_main_keyboard()
     )
     await callback.answer()
