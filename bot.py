@@ -46,10 +46,10 @@ class MultiKeyToAssociationsDB:
         self.details_file = os.path.join(data_dir, "details.txt")
         
         # Структуры данных
-        self.key_to_group: Dict[str, str] = {}      # ключ -> ID группы (первые 10 символов)
+        self.key_to_group: Dict[str, str] = {}      # ключ -> ID группы
         self.group_to_keys: Dict[str, List[str]] = {}  # ID группы -> список ключей
         self.group_to_associations: Dict[str, List[str]] = {}  # ID группы -> список ассоциаций
-        self.group_to_display: Dict[str, str] = {}  # ID группы -> отображаемое имя (первый ключ)
+        self.group_to_display: Dict[str, str] = {}  # ID группы -> отображаемое имя
         self.details: Dict[str, str] = {}            # ассоциация -> детали
         
         self.load_all_data()
@@ -71,32 +71,24 @@ class MultiKeyToAssociationsDB:
                         if not line or line.startswith('#'):
                             continue
                         
-                        # Разделяем на ключи и ассоциации
                         if '|' in line:
                             keys_part, assoc_part = line.split('|', 1)
-                            
-                            # Парсим ключи (разделитель запятая)
                             keys = [k.strip().lower() for k in keys_part.split(',') if k.strip()]
-                            
-                            # Парсим ассоциации (разделитель |)
                             associations = [a.strip() for a in assoc_part.split('|') if a.strip()]
                             
                             if keys and associations:
-                                # Создаем уникальный ID для группы (используем первый ключ + номер строки)
                                 group_id = f"{keys[0]}_{line_num}"
-                                display_name = keys[0]  # Первый ключ как отображаемое имя
+                                display_name = keys[0]
                                 
-                                # Сохраняем группу
                                 self.group_to_keys[group_id] = keys
                                 self.group_to_associations[group_id] = associations
                                 self.group_to_display[group_id] = display_name
                                 
-                                # Создаем обратную связь: каждый ключ ведет к этой группе
                                 for key in keys:
                                     self.key_to_group[key] = group_id
                 
                 logger.info(f"✅ Загружено {len(self.group_to_associations)} групп ключей")
-                logger.info(f"✅ Всего ключей (с синонимами): {len(self.key_to_group)}")
+                logger.info(f"✅ Всего ключей: {len(self.key_to_group)}")
             else:
                 self._create_example_multi_keys()
                 
@@ -129,7 +121,6 @@ class MultiKeyToAssociationsDB:
     def _create_example_multi_keys(self) -> None:
         """Создает пример файла с множественными ключами"""
         example = '''# Формат: КЛЮЧ,КЛЮЧ2,КЛЮЧ3|Ассоциация1|Ассоциация2|Ассоциация3
-# Несколько ключей ведут к одним и тем же ассоциациям
 
 ноутбук,ноут,лэптоп,laptop,макбук,macbook|💻 Игровой|🖥️ Офисный|💼 Б/у|🍏 MacBook
 пицца,pizza,итальянская|🍕 Маргарита|🍄 Грибная|🥓 Пепперони|🍖 Четыре сыра
@@ -144,17 +135,43 @@ python,питон,пайтон,python3|🐍 Основы|🌐 Веб|🤖 Маш
         """Создает пример файла с деталями"""
         example = '''# Детальная информация для ассоциаций
 
-💻 Игровой===🖥️ **ИГРОВОЙ НОУТБУК**
-Характеристики: RTX 3060, i7, 16GB RAM
-Цена: 129 999 ₽
+💻 Игровой===🖥️ **ИГРОВОЙ НОУТБУК ASUS ROG**
 
-🍏 MacBook===🍏 **MacBook Pro M3**
-Характеристики: M3 Pro, 18GB RAM, 512GB SSD
-Цена: 199 990 ₽
+🔹 Характеристики:
+• Процессор: Intel Core i7-12700H
+• Видеокарта: NVIDIA RTX 3060 6GB
+• Оперативная память: 16GB DDR5
+• Накопитель: 512GB NVMe SSD
+• Экран: 15.6" 240Hz IPS
+
+💰 Цена: 129 999 ₽
+⭐ Рейтинг: 4.7/5
+
+✅ Плюсы:
+• Отличная производительность в играх
+• Качественный экран с высокой частотой
+
+🍏 MacBook===🍏 **MacBook Pro 14" M3**
+
+🔹 Характеристики:
+• Процессор: Apple M3 Pro (11 ядер)
+• Оперативная память: 18GB
+• Накопитель: 512GB SSD
+• Экран: 14.2" Liquid Retina XDR
+• Вес: 1.6 кг
+
+💰 Цена: 199 990 ₽
+⭐ Рейтинг: 4.9/5
 
 🍕 Маргарита===🍕 **ПИЦЦА МАРГАРИТА**
-Состав: томаты, моцарелла, базилик
-Цена: 550 ₽
+
+🥫 Состав:
+• Томатный соус
+• Моцарелла
+• Свежий базилик
+
+💰 Цена: 550 ₽
+⚖️ Вес: 400 г
 '''
         with open(self.details_file, 'w', encoding='utf-8') as f:
             f.write(example)
@@ -181,17 +198,6 @@ python,питон,пайтон,python3|🐍 Основы|🌐 Веб|🤖 Маш
         
         return None
     
-    def get_all_groups_info(self) -> List[Dict]:
-        """Возвращает информацию о всех группах для отображения"""
-        groups = []
-        for group_id, keys in self.group_to_keys.items():
-            groups.append({
-                'display': keys[0],  # Первый ключ как основное имя
-                'keys': keys,
-                'assoc_count': len(self.group_to_associations[group_id])
-            })
-        return sorted(groups, key=lambda x: x['display'])
-    
     def get_details(self, association: str) -> Optional[str]:
         """Возвращает детали для ассоциации"""
         return self.details.get(association)
@@ -201,7 +207,7 @@ python,питон,пайтон,python3|🐍 Основы|🌐 Веб|🤖 Маш
         total_associations = sum(len(assoc) for assoc in self.group_to_associations.values())
         logger.info(f"📊 Статистика базы данных:")
         logger.info(f"   • Групп ключей: {len(self.group_to_associations)}")
-        logger.info(f"   • Всего ключей (с синонимами): {len(self.key_to_group)}")
+        logger.info(f"   • Всего ключей: {len(self.key_to_group)}")
         logger.info(f"   • Всего ассоциаций: {total_associations}")
         logger.info(f"   • Ассоциаций с деталями: {len(self.details)}")
 
@@ -213,7 +219,7 @@ db = MultiKeyToAssociationsDB()
 def get_main_keyboard() -> ReplyKeyboardMarkup:
     """Создает главную клавиатуру"""
     keyboard = [
-        [KeyboardButton(text="🔍 Поиск"), KeyboardButton(text="📋 Категории")],
+        [KeyboardButton(text="🔍 Поиск"), KeyboardButton(text="🏠 К началу")],
         [KeyboardButton(text="❓ Помощь")]
     ]
     return ReplyKeyboardMarkup(
@@ -226,7 +232,7 @@ def get_associations_keyboard(associations: List[str], group_id: str) -> InlineK
     """Создает клавиатуру с ассоциациями"""
     keyboard = []
     
-    # Добавляем кнопки для каждой ассоциации (по 2 в ряд для компактности)
+    # Добавляем кнопки для каждой ассоциации (по 2 в ряд)
     row = []
     for i, assoc in enumerate(associations):
         row.append(InlineKeyboardButton(
@@ -237,10 +243,10 @@ def get_associations_keyboard(associations: List[str], group_id: str) -> InlineK
             keyboard.append(row)
             row = []
     
-    # Добавляем кнопку отмены
+    # Добавляем кнопку "🏠 К началу" внизу
     keyboard.append([InlineKeyboardButton(
-        text="❌ Отмена", 
-        callback_data=f"cancel_{group_id}"
+        text="🏠 К началу", 
+        callback_data="back_to_start"
     )])
     
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
@@ -250,7 +256,7 @@ def get_associations_keyboard(associations: List[str], group_id: str) -> InlineK
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message) -> None:
     """Обработчик команды /start"""
-    await message.answer(
+    welcome_text = (
         f"👋 Привет, {message.from_user.full_name}!\n\n"
         f"🔍 **Как это работает:**\n"
         f"1️⃣ Напиши что хочешь найти (например: ноут, машина, питон)\n"
@@ -262,7 +268,11 @@ async def cmd_start(message: types.Message) -> None:
         f"• пицца, pizza → еда\n"
         f"• машина, car, авто → автомобили\n"
         f"• кофе, coffee → напитки\n\n"
-        f"📊 **Категории** - показать все доступные группы",
+        f"🏠 **Кнопка «К началу»** всегда вернёт тебя сюда!"
+    )
+    
+    await message.answer(
+        welcome_text,
         parse_mode="Markdown",
         reply_markup=get_main_keyboard()
     )
@@ -272,12 +282,11 @@ async def cmd_start(message: types.Message) -> None:
 @dp.message(lambda msg: msg.text == "❓ Помощь")
 async def cmd_help(message: types.Message) -> None:
     """Обработчик команды /help"""
-    await message.answer(
+    help_text = (
         "🤖 **Помощь по боту:**\n\n"
         "**Команды:**\n"
         "• /start - Начать работу\n"
-        "• /help - Это сообщение\n"
-        "• /categories - Список всех категорий\n\n"
+        "• /help - Это сообщение\n\n"
         "**Как пользоваться:**\n"
         "1. Напишите любое слово (например: **ноут**)\n"
         "2. Бот покажет все ассоциации для этой категории\n"
@@ -286,35 +295,11 @@ async def cmd_help(message: types.Message) -> None:
         "**Примеры синонимов:**\n"
         "• ноут, laptop, макбук → категория **ноутбук**\n"
         "• питон, пайтон → категория **python**\n"
-        "• машина, авто, car → категория **автомобиль**",
-        parse_mode="Markdown"
+        "• машина, авто, car → категория **автомобиль**\n\n"
+        "🏠 **Кнопка «К началу»** возвращает в главное меню"
     )
-
-@dp.message(Command("categories"))
-@dp.message(lambda msg: msg.text == "📋 Категории")
-async def cmd_categories(message: types.Message) -> None:
-    """Показывает все доступные категории"""
-    groups = db.get_all_groups_info()
     
-    if not groups:
-        await message.answer("📭 База данных пуста")
-        return
-    
-    response = "📋 **Доступные категории:**\n\n"
-    
-    for group in groups:
-        response += f"• **{group['display']}** - {group['assoc_count']} ассоциаций\n"
-        # Показываем примеры синонимов
-        other_keys = [k for k in group['keys'] if k != group['display']]
-        if other_keys:
-            examples = ", ".join(other_keys[:3])
-            if len(other_keys) > 3:
-                examples += f" и ещё {len(other_keys)-3}"
-            response += f"  (синонимы: {examples})\n"
-    
-    response += f"\n💡 Напишите любое слово из списка!"
-    
-    await message.answer(response, parse_mode="Markdown")
+    await message.answer(help_text, parse_mode="Markdown")
 
 # ========== ОБРАБОТЧИК ТЕКСТОВЫХ СООБЩЕНИЙ ==========
 
@@ -336,17 +321,22 @@ async def handle_message(message: types.Message) -> None:
         )
         return
     
+    # Обработка кнопки "🏠 К началу"
+    if text == "🏠 К началу":
+        await cmd_start(message)
+        return
+    
     # Ищем группу по ключу
     result = db.find_group_by_key(text)
     
     if result:
         group_id, keys, associations = result
-        display_name = keys[0]  # Первый ключ как основное имя
+        display_name = keys[0]
         
-        # Показываем все ассоциации для этой группы
+        # Формируем список ассоциаций
         assoc_list = "\n".join([f"• {a}" for a in associations])
         
-        # Показываем другие синонимы (если есть)
+        # Показываем другие синонимы
         other_keys = [k for k in keys if k != display_name]
         syn_msg = f"\n✨ Также можно искать: {', '.join(other_keys[:5])}" if other_keys else ""
         
@@ -358,14 +348,14 @@ async def handle_message(message: types.Message) -> None:
             parse_mode="Markdown",
             reply_markup=get_associations_keyboard(associations, group_id)
         )
-        logger.info(f"Пользователь '{message.from_user.id}' искал '{text}' -> категория '{display_name}'")
+        logger.info(f"User {message.from_user.id} searched '{text}' -> category '{display_name}'")
     else:
         # Ничего не найдено
         await message.answer(
             f"❌ **Ничего не найдено**\n\n"
             f"'{text}' - нет в базе данных.\n\n"
-            f"📋 Посмотрите /categories - список категорий\n"
-            f"💡 Попробуйте: ноут, машина, питон, кофе, пицца",
+            f"💡 Попробуйте: ноут, машина, питон, кофе, пицца\n"
+            f"🏠 Нажмите «К началу» для возврата в меню",
             parse_mode="Markdown"
         )
 
@@ -379,31 +369,44 @@ async def process_association(callback: CallbackQuery):
     # Получаем детали
     details = db.get_details(association)
     
+    # Создаем клавиатуру с кнопкой "К началу"
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🏠 К началу", callback_data="back_to_start")]
+    ])
+    
     if details:
         await callback.message.edit_text(
             f"📖 **{association}**\n\n{details}",
-            parse_mode="Markdown"
+            parse_mode="Markdown",
+            reply_markup=keyboard
         )
     else:
         await callback.message.edit_text(
             f"⚠️ Информация для '{association}' не найдена\n\n"
             f"Но вы можете посмотреть другие ассоциации!",
-            parse_mode="Markdown"
+            parse_mode="Markdown",
+            reply_markup=keyboard
         )
     
     await callback.answer()
 
-@dp.callback_query(lambda c: c.data.startswith('cancel_'))
-async def process_cancel(callback: CallbackQuery):
-    """Отменяет выбор ассоциации"""
-    group_id = callback.data.replace('cancel_', '')
+@dp.callback_query(lambda c: c.data == "back_to_start")
+async def process_back_to_start(callback: CallbackQuery):
+    """Возвращает в главное меню"""
+    await callback.message.delete()  # Удаляем текущее сообщение
     
-    await callback.message.edit_text(
-        f"❌ Выбор отменен.\n\n"
-        f"Можете попробовать другое слово!\n"
-        f"📋 /categories - список всех категорий",
-        parse_mode="Markdown"
+    # Отправляем новое приветствие
+    welcome_text = (
+        f"👋 С возвращением, {callback.from_user.full_name}!\n\n"
+        f"🔍 Напишите слово для поиска или выберите действие:"
     )
+    
+    await callback.message.answer(
+        welcome_text,
+        parse_mode="Markdown",
+        reply_markup=get_main_keyboard()
+    )
+    
     await callback.answer()
 
 # ========== ЗАПУСК БОТА ==========
