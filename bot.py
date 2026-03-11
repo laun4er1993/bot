@@ -2,11 +2,17 @@ import asyncio
 import logging
 import os
 import sys
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import (
+    ReplyKeyboardMarkup, 
+    KeyboardButton,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    CallbackQuery
+)
 
 # Токен берется из переменных окружения
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -26,101 +32,135 @@ logger = logging.getLogger(__name__)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# ========== ПРОСТОЙ КЛАСС ДЛЯ РАБОТЫ С ТЕКСТОВЫМ ФАЙЛОМ ==========
+# ========== КЛАСС ДЛЯ РАБОТЫ С АССОЦИАЦИЯМИ ==========
 
-class SimpleDatabase:
-    """Очень простой класс для работы с текстовым файлом формата КЛЮЧ===ИНФО"""
+class AssociationDatabase:
+    """Класс для работы с ассоциациями и деталями"""
     
-    def __init__(self, file_path: str = "data/details.txt"):
-        self.file_path = file_path
-        self.data: Dict[str, str] = {}
+    def __init__(self, assoc_file: str = "data/associations.txt", details_file: str = "data/details.txt"):
+        self.assoc_file = assoc_file
+        self.details_file = details_file
+        self.associations: Dict[str, List[str]] = {}  # ключ -> список ассоциаций
+        self.details: Dict[str, str] = {}              # ассоциация -> детали
         self.load_data()
     
     def load_data(self) -> None:
-        """Загружает данные из текстового файла"""
+        """Загружает все данные из файлов"""
+        os.makedirs("data", exist_ok=True)
+        self.load_associations()
+        self.load_details()
+    
+    def load_associations(self) -> None:
+        """Загружает ассоциации из файла"""
         try:
-            # Создаем папку data, если её нет
-            os.makedirs(os.path.dirname(self.file_path), exist_ok=True)
-            
-            if os.path.exists(self.file_path):
-                with open(self.file_path, 'r', encoding='utf-8') as f:
-                    content = f.read()
+            if os.path.exists(self.assoc_file):
+                with open(self.assoc_file, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line or line.startswith('#'):
+                            continue
+                        
+                        if '===' in line:
+                            key, assoc_str = line.split('===', 1)
+                            key = key.strip().lower()
+                            associations = [a.strip() for a in assoc_str.split('###')]
+                            self.associations[key] = associations
                 
-                # Разделяем по === и собираем словарь
-                entries = content.split('===')
-                
-                for i in range(len(entries) - 1):
-                    # Получаем ключ (последняя строка перед ===)
-                    lines = entries[i].strip().split('\n')
-                    key = lines[-1].strip().lower()
-                    
-                    # Получаем значение (всё что после === до следующего === или конца файла)
-                    value = entries[i + 1].strip()
-                    
-                    # Убираем комментарии из ключа
-                    if not key.startswith('#'):
-                        self.data[key] = value
-                
-                logger.info(f"✅ Загружено {len(self.data)} записей из {self.file_path}")
+                logger.info(f"✅ Загружено {len(self.associations)} ключевых слов")
             else:
-                # Создаем пример файла
-                self._create_example()
-                logger.info(f"📝 Создан пример файла {self.file_path}")
+                self._create_example_associations()
                 
         except Exception as e:
-            logger.error(f"❌ Ошибка при загрузке: {e}")
-            self.data = {}
+            logger.error(f"❌ Ошибка при загрузке ассоциаций: {e}")
     
-    def _create_example(self) -> None:
-        """Создает пример файла"""
-        example = '''# Пример базы знаний
-# Формат: КЛЮЧ===ИНФОРМАЦИЯ
+    def load_details(self) -> None:
+        """Загружает детальную информацию из файла"""
+        try:
+            if os.path.exists(self.details_file):
+                with open(self.details_file, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                
+                entries = content.split('===')
+                for i in range(len(entries) - 1):
+                    lines = entries[i].strip().split('\n')
+                    assoc = lines[-1].strip()
+                    details = entries[i + 1].strip()
+                    
+                    if not assoc.startswith('#'):
+                        self.details[assoc] = details
+                
+                logger.info(f"✅ Загружено {len(self.details)} ассоциаций с деталями")
+            else:
+                self._create_example_details()
+                
+        except Exception as e:
+            logger.error(f"❌ Ошибка при загрузке деталей: {e}")
+    
+    def _create_example_associations(self) -> None:
+        """Создает пример файла ассоциаций"""
+        example = '''# База ассоциаций
+# Формат: КЛЮЧ===АССОЦИАЦИЯ1###АССОЦИАЦИЯ2###АССОЦИАЦИЯ3
 
-ноутбук===🖥️ ИНФОРМАЦИЯ О НОУТБУКЕ
+ноутбук===💻 ИГРОВОЙ НОУТБУК###🖥️ ОФИСНЫЙ НОУТБУК###💼 Б/У НОУТБУК
 
-Модель: ASUS ROG Strix G15
-Цена: 129 999 ₽
-Рейтинг: 4.7/5
+пицца===🍕 МАРГАРИТА###🍄 ГРИБНАЯ###🥓 ПЕППЕРОНИ
 
-Описание:
-Игровой ноутбук с RTX 3060
-
-пицца===🍕 ПИЦЦА МАРГАРИТА
-
-Цена: 550 ₽
-Вес: 400г
-Состав: сыр, томаты, базилик
+python===🐍 ОСНОВЫ PYTHON###🌐 ВЕБ-РАЗРАБОТКА###🤖 МАШИННОЕ ОБУЧЕНИЕ
 '''
-        with open(self.file_path, 'w', encoding='utf-8') as f:
+        with open(self.assoc_file, 'w', encoding='utf-8') as f:
             f.write(example)
     
-    def find_info(self, text: str) -> Optional[str]:
-        """Ищет информацию по тексту"""
-        if not text or not self.data:
+    def _create_example_details(self) -> None:
+        """Создает пример файла деталей"""
+        example = '''# Детальная информация для ассоциаций
+# Формат: АССОЦИАЦИЯ===ПОДРОБНАЯ ИНФОРМАЦИЯ
+
+💻 ИГРОВОЙ НОУТБУК===🖥️ **ИГРОВОЙ НОУТБУК**
+Характеристики: RTX 3060, i7, 16GB RAM
+Цена: 129 999 ₽
+
+🖥️ ОФИСНЫЙ НОУТБУК===💼 **ОФИСНЫЙ НОУТБУК**
+Характеристики: i5, 8GB RAM, SSD
+Цена: 65 999 ₽
+'''
+        with open(self.details_file, 'w', encoding='utf-8') as f:
+            f.write(example)
+    
+    def find_keyword(self, text: str) -> Optional[str]:
+        """Ищет ключевое слово в тексте"""
+        if not text or not self.associations:
             return None
         
         text_lower = text.lower().strip()
         
         # Прямое совпадение
-        if text_lower in self.data:
-            return self.data[text_lower]
+        if text_lower in self.associations:
+            return text_lower
         
         # Поиск по вхождению
-        for key, value in self.data.items():
+        for key in self.associations.keys():
             if key in text_lower:
-                return value
+                return key
         
         return None
+    
+    def get_associations(self, key: str) -> Optional[List[str]]:
+        """Возвращает список ассоциаций для ключа"""
+        return self.associations.get(key)
+    
+    def get_details(self, association: str) -> Optional[str]:
+        """Возвращает детали для ассоциации"""
+        return self.details.get(association)
 
 # Создаем базу данных
-db = SimpleDatabase()
+db = AssociationDatabase()
 
-# ========== КЛАВИАТУРА ==========
+# ========== КЛАВИАТУРЫ ==========
 
 def get_main_keyboard() -> ReplyKeyboardMarkup:
     """Создает главную клавиатуру"""
     keyboard = [
-        [KeyboardButton(text="🔍 Поиск"), KeyboardButton(text="📊 Список команд")],
+        [KeyboardButton(text="🔍 Поиск"), KeyboardButton(text="📋 Список слов")],
         [KeyboardButton(text="❓ Помощь")]
     ]
     return ReplyKeyboardMarkup(
@@ -129,16 +169,39 @@ def get_main_keyboard() -> ReplyKeyboardMarkup:
         input_field_placeholder="Напишите слово для поиска..."
     )
 
-# ========== ОБРАБОТЧИКИ ==========
+def get_associations_keyboard(associations: List[str], keyword: str) -> InlineKeyboardMarkup:
+    """Создает клавиатуру с ассоциациями"""
+    keyboard = []
+    
+    # Добавляем кнопки для каждой ассоциации
+    for assoc in associations:
+        keyboard.append([InlineKeyboardButton(
+            text=assoc,
+            callback_data=f"assoc_{assoc}"
+        )])
+    
+    # Добавляем кнопку отмены
+    keyboard.append([InlineKeyboardButton(
+        text="❌ Отмена", 
+        callback_data=f"cancel_{keyword}"
+    )])
+    
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+# ========== ОБРАБОТЧИКИ КОМАНД ==========
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message) -> None:
     """Обработчик команды /start"""
     await message.answer(
         f"👋 Привет, {message.from_user.full_name}!\n\n"
-        f"🔍 Просто напиши слово, и я покажу всю информацию о нём.\n"
-        f"📋 Например: ноутбук, пицца, python\n\n"
-        f"📊 Список команд - показать все доступные слова",
+        f"🔍 **Как это работает:**\n"
+        f"1️⃣ Напиши любое слово (например: ноутбук)\n"
+        f"2️⃣ Бот покажет все ассоциации с этим словом\n"
+        f"3️⃣ Выбери нужную ассоциацию\n"
+        f"4️⃣ Получи подробную информацию!\n\n"
+        f"📋 Например: ноутбук, пицца, python, автомобиль, кофе",
+        parse_mode="Markdown",
         reply_markup=get_main_keyboard()
     )
     logger.info(f"User {message.from_user.id} started the bot")
@@ -148,39 +211,42 @@ async def cmd_start(message: types.Message) -> None:
 async def cmd_help(message: types.Message) -> None:
     """Обработчик команды /help"""
     await message.answer(
-        "🤖 **Как пользоваться ботом:**\n\n"
-        "1️⃣ Напишите слово (например: ноутбук)\n"
-        "2️⃣ Бот покажет всю информацию по этому слову\n\n"
-        "📋 **Список команд:**\n"
-        "/start - Начать\n"
-        "/help - Это сообщение\n"
-        "/list - Список доступных слов\n\n"
-        "📁 База данных хранится в файле data/details.txt",
+        "🤖 **Помощь по боту:**\n\n"
+        "**Команды:**\n"
+        "• /start - Начать работу\n"
+        "• /help - Это сообщение\n"
+        "• /list - Список доступных ключевых слов\n\n"
+        "**Как пользоваться:**\n"
+        "1. Напишите слово, например **ноутбук**\n"
+        "2. Бот покажет все связанные ассоциации\n"
+        "3. Выберите интересующую ассоциацию\n"
+        "4. Получите подробную информацию!",
         parse_mode="Markdown"
     )
 
 @dp.message(Command("list"))
-@dp.message(lambda msg: msg.text == "📊 Список команд")
+@dp.message(lambda msg: msg.text == "📋 Список слов")
 async def cmd_list(message: types.Message) -> None:
-    """Показывает список всех доступных слов"""
-    if not db.data:
+    """Показывает список всех доступных ключевых слов"""
+    if not db.associations:
         await message.answer("📭 База данных пуста")
         return
     
-    # Создаем список слов
-    words = list(db.data.keys())
+    words = list(db.associations.keys())
     words_list = "\n".join([f"• {word}" for word in words])
     
     await message.answer(
-        f"📋 **Доступные слова ({len(words)} шт.):**\n\n"
+        f"📋 **Доступные ключевые слова ({len(words)} шт.):**\n\n"
         f"{words_list}\n\n"
-        f"💡 Напишите любое слово, чтобы получить информацию!",
+        f"💡 Напишите любое слово, чтобы увидеть ассоциации!",
         parse_mode="Markdown"
     )
 
+# ========== ОБРАБОТЧИК ТЕКСТОВЫХ СООБЩЕНИЙ ==========
+
 @dp.message()
 async def handle_message(message: types.Message) -> None:
-    """Основной обработчик - ищет информацию по слову"""
+    """Обрабатывает текстовые сообщения"""
     text = message.text
     
     if not text:
@@ -189,32 +255,82 @@ async def handle_message(message: types.Message) -> None:
     # Обработка кнопки "Поиск"
     if text == "🔍 Поиск":
         await message.answer(
-            "🔍 Режим поиска\n"
-            "Напишите слово, и я покажу всю информацию о нём!"
+            "🔍 **Режим поиска**\n\n"
+            "Напишите ключевое слово, я покажу все связанные ассоциации!",
+            parse_mode="Markdown"
         )
         return
     
-    # Ищем информацию
-    info = db.find_info(text)
+    # Ищем ключевое слово
+    keyword = db.find_keyword(text)
     
-    if info:
-        # Отправляем найденную информацию
-        await message.answer(
-            f"✅ **Найдено по запросу: {text}**\n\n{info}",
-            parse_mode="Markdown"
-        )
-        logger.info(f"Найдена информация для '{text}'")
+    if keyword:
+        # Получаем ассоциации
+        associations = db.get_associations(keyword)
+        
+        if associations:
+            # Показываем ассоциации
+            assoc_list = "\n".join([f"• {a}" for a in associations])
+            
+            await message.answer(
+                f"✅ **Ключевое слово найдено: {keyword}**\n\n"
+                f"📌 **Связанные ассоциации ({len(associations)} шт.):**\n\n"
+                f"{assoc_list}\n\n"
+                f"👇 **Выберите ассоциацию ниже:**",
+                parse_mode="Markdown",
+                reply_markup=get_associations_keyboard(associations, keyword)
+            )
+            logger.info(f"Показаны ассоциации для '{keyword}' пользователю {message.from_user.id}")
+        else:
+            await message.answer(
+                f"⚠️ Для слова '{keyword}' нет ассоциаций",
+                parse_mode="Markdown"
+            )
     else:
-        # Ничего не найдено
+        # Слово не найдено
         await message.answer(
-            f"❌ **Ничего не найдено**\n\n"
-            f"Запрос: '{text}'\n\n"
-            f"Этого слова нет в базе данных.\n"
-            f"Посмотрите /list - список доступных слов",
+            f"❌ **Ключевое слово не найдено**\n\n"
+            f"'{text}' - нет в базе данных.\n\n"
+            f"📋 Посмотрите /list - список доступных слов",
             parse_mode="Markdown"
         )
 
-# ========== ЗАПУСК ==========
+# ========== ОБРАБОТЧИКИ ИНЛАЙН-КНОПОК ==========
+
+@dp.callback_query(lambda c: c.data.startswith('assoc_'))
+async def process_association(callback: CallbackQuery):
+    """Показывает детальную информацию по выбранной ассоциации"""
+    association = callback.data.replace('assoc_', '')
+    
+    # Получаем детали
+    details = db.get_details(association)
+    
+    if details:
+        await callback.message.edit_text(
+            f"📖 **{association}**\n\n{details}",
+            parse_mode="Markdown"
+        )
+    else:
+        await callback.message.edit_text(
+            f"⚠️ Информация для '{association}' не найдена",
+            parse_mode="Markdown"
+        )
+    
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data.startswith('cancel_'))
+async def process_cancel(callback: CallbackQuery):
+    """Отменяет выбор ассоциации"""
+    keyword = callback.data.replace('cancel_', '')
+    
+    await callback.message.edit_text(
+        f"❌ Выбор ассоциации для '{keyword}' отменен.\n\n"
+        f"Можете попробовать другое слово!",
+        parse_mode="Markdown"
+    )
+    await callback.answer()
+
+# ========== ЗАПУСК БОТА ==========
 
 async def delete_webhook_and_start() -> None:
     """Удаляет вебхук и запускает polling"""
@@ -233,7 +349,8 @@ async def main() -> None:
     try:
         bot_info = await bot.get_me()
         logger.info(f"✅ Бот @{bot_info.username} авторизован")
-        logger.info(f"📊 В базе {len(db.data)} записей")
+        logger.info(f"📊 Ключевых слов: {len(db.associations)}")
+        logger.info(f"📊 Ассоциаций с деталями: {len(db.details)}")
         
         await delete_webhook_and_start()
         
