@@ -65,11 +65,11 @@ class DataBase:
                             continue
                         
                         if '|' in line:
-                            # Новый формат: категория|ключ1,ключ2|ассоциация1|ассоциация2
+                            # Формат: категория|ключ1,ключ2|ассоциация1|ассоциация2
                             parts = line.split('|')
                             if len(parts) >= 3:
-                                category_name = parts[0].strip()  # Название категории
-                                keys_part = parts[1].strip()      # Ключи через запятую
+                                category_name = parts[0].strip()
+                                keys_part = parts[1].strip()
                                 associations = [a.strip() for a in parts[2:] if a.strip()]
                                 
                                 keys = [k.strip().lower() for k in keys_part.split(',') if k.strip()]
@@ -77,11 +77,11 @@ class DataBase:
                                 if keys and associations:
                                     group_id = f"group_{line_num}"
                                     
-                                    # Сохраняем группу с отдельным названием категории
+                                    # Сохраняем группу
                                     self.groups[group_id] = {
                                         'keys': keys,
                                         'associations': associations,
-                                        'category_name': category_name  # Отдельное название для отображения
+                                        'category_name': category_name
                                     }
                                     
                                     # Для каждого ключа добавляем ссылку на эту группу
@@ -99,22 +99,13 @@ class DataBase:
             logger.error(f"❌ Ошибка загрузки: {e}")
     
     def _create_example_file(self) -> None:
-        """Создает пример файла с данными в новом формате"""
+        """Создает пример файла с данными"""
         example = '''# Формат: КАТЕГОРИЯ|ключ1,ключ2|ассоциация1|ассоциация2
 
-# Яблоко как фрукт
 Фрукты|яблоко,фрукт,apple|🍎 Красное яблоко|🍏 Зеленое яблоко
-
-# Яблоко как бренд
 Apple|apple,iphone,mac|📱 iPhone 15|💻 MacBook Pro
-
-# Машина как автомобиль
 Автомобили|машина,авто,car|🚗 Toyota Camry|🚙 Kia Sportage
-
-# Машина как устройство
 Бытовая техника|машина,стиралка|🧺 Стиральная машина|☕ Кофемашина
-
-# Python как язык
 Программирование|python,питон|🐍 Основы Python|🌐 Django
 '''
         with open(self.multi_keys_file, 'w', encoding='utf-8') as f:
@@ -214,7 +205,6 @@ def groups_keyboard(groups: List[Tuple[str, str, List[str]]]) -> InlineKeyboardM
     keyboard = []
     
     for group_id, category_name, associations in groups:
-        # Показываем только название категории
         keyboard.append([InlineKeyboardButton(
             text=category_name,
             callback_data=f"select_group_{group_id}"
@@ -224,13 +214,15 @@ def groups_keyboard(groups: List[Tuple[str, str, List[str]]]) -> InlineKeyboardM
     
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
-def associations_keyboard(associations: List[str], group_id: str) -> InlineKeyboardMarkup:
-    """Клавиатура со списком ассоциаций"""
+def associations_keyboard(associations: List[str], category_name: str, group_id: str) -> InlineKeyboardMarkup:
+    """Клавиатура со списком ассоциаций - теперь с названием категории"""
     keyboard = []
     row = []
     
     for i, assoc in enumerate(associations):
-        row.append(InlineKeyboardButton(text=assoc, callback_data=f"show_details_{assoc}"))
+        # Добавляем название категории к каждой ассоциации
+        button_text = f"{category_name} - {assoc}"
+        row.append(InlineKeyboardButton(text=button_text, callback_data=f"show_details_{assoc}"))
         if len(row) == 2 or i == len(associations) - 1:
             keyboard.append(row)
             row = []
@@ -290,13 +282,13 @@ async def handle_message(message: types.Message) -> None:
             group_id, category_name, associations = groups[0]
             db.set_last_group(user_id, group_id)
             
-            assoc_list = "\n".join([f"• {a}" for a in associations])
+            assoc_list = "\n".join([f"• {category_name} - {a}" for a in associations])
             
             await message.answer(
                 f"✅ **{category_name}**\n\n"
                 f"📌 **Варианты:**\n\n{assoc_list}",
                 parse_mode="Markdown",
-                reply_markup=associations_keyboard(associations, group_id)
+                reply_markup=associations_keyboard(associations, category_name, group_id)
             )
         else:
             # Если несколько групп - показываем выбор
@@ -328,13 +320,13 @@ async def process_group_select(callback: CallbackQuery):
         associations = group['associations']
         category_name = group['category_name']
         
-        assoc_list = "\n".join([f"• {a}" for a in associations])
+        assoc_list = "\n".join([f"• {category_name} - {a}" for a in associations])
         
         await callback.message.edit_text(
             f"✅ **{category_name}**\n\n"
             f"📌 **Варианты:**\n\n{assoc_list}",
             parse_mode="Markdown",
-            reply_markup=associations_keyboard(associations, group_id)
+            reply_markup=associations_keyboard(associations, category_name, group_id)
         )
     
     await callback.answer()
@@ -367,12 +359,12 @@ async def process_back_to_list(callback: CallbackQuery):
     if group:
         associations = group['associations']
         category_name = group['category_name']
-        assoc_list = "\n".join([f"• {a}" for a in associations])
+        assoc_list = "\n".join([f"• {category_name} - {a}" for a in associations])
         
         await callback.message.edit_text(
             f"✅ **{category_name}**\n\n📌 **Варианты:**\n\n{assoc_list}",
             parse_mode="Markdown",
-            reply_markup=associations_keyboard(associations, group_id)
+            reply_markup=associations_keyboard(associations, category_name, group_id)
         )
     await callback.answer()
 
