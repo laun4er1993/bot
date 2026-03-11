@@ -359,14 +359,26 @@ async def process_photo_select(callback: CallbackQuery):
     else:
         text = f"📸 **Снимок {photo}**\n\n*Нет подробного описания*"
     
+    # Добавляем кнопки для ссылок, если они есть
+    keyboard = []
+    
+    # Проверяем наличие ссылок в деталях (можно добавить логику извлечения ссылок)
+    if "MBTiles:" in text:
+        # Здесь можно добавить кнопку для скачивания
+        pass
+    
+    if "KMZ:" in text:
+        # Здесь можно добавить кнопку для скачивания
+        pass
+    
     await callback.message.edit_text(
         text,
         parse_mode="Markdown",
-        reply_markup=back_to_photos_keyboard()
+        reply_markup=back_to_photos_keyboard()  # Пока просто кнопка назад
     )
     
     await callback.answer()
-
+    
 @dp.callback_query(lambda c: c.data == "back_to_photos")
 async def process_back_to_photos(callback: CallbackQuery):
     user_id = callback.from_user.id
