@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 import sys
-from typing import Dict, Optional
+from typing import Optional, Dict
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
@@ -12,7 +12,7 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 if not BOT_TOKEN:
-    logging.critical("❌ ОШИБКА: BOT_TOKEN не найден в переменных окружения!")
+    logging.critical("❌ ОШИБКА: BOT_TOKEN не найден!")
     sys.exit(1)
 
 # Настройка логирования
@@ -26,12 +26,12 @@ logger = logging.getLogger(__name__)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# ========== РАБОТА С ФАЙЛОМ ==========
+# ========== ПРОСТОЙ КЛАСС ДЛЯ РАБОТЫ С ТЕКСТОВЫМ ФАЙЛОМ ==========
 
-class TextDatabase:
-    """Класс для работы с текстовым файлом базы данных"""
+class SimpleDatabase:
+    """Очень простой класс для работы с текстовым файлом формата КЛЮЧ===ИНФО"""
     
-    def __init__(self, file_path: str = "data/database.txt"):
+    def __init__(self, file_path: str = "data/details.txt"):
         self.file_path = file_path
         self.data: Dict[str, str] = {}
         self.load_data()
@@ -39,53 +39,63 @@ class TextDatabase:
     def load_data(self) -> None:
         """Загружает данные из текстового файла"""
         try:
-            # Проверяем существование папки data
+            # Создаем папку data, если её нет
             os.makedirs(os.path.dirname(self.file_path), exist_ok=True)
             
-            # Пытаемся прочитать файл
             if os.path.exists(self.file_path):
                 with open(self.file_path, 'r', encoding='utf-8') as f:
-                    for line_num, line in enumerate(f, 1):
-                        line = line.strip()
-                        if not line or line.startswith('#'):  # Пропускаем пустые строки и комментарии
-                            continue
-                        
-                        # Разделяем по запятой (максимум 2 части)
-                        parts = line.split(',', 1)
-                        if len(parts) == 2:
-                            key = parts[0].strip().lower()
-                            value = parts[1].strip()
-                            self.data[key] = value
-                        else:
-                            logger.warning(f"Строка {line_num} имеет неверный формат: {line}")
+                    content = f.read()
+                
+                # Разделяем по === и собираем словарь
+                entries = content.split('===')
+                
+                for i in range(len(entries) - 1):
+                    # Получаем ключ (последняя строка перед ===)
+                    lines = entries[i].strip().split('\n')
+                    key = lines[-1].strip().lower()
+                    
+                    # Получаем значение (всё что после === до следующего === или конца файла)
+                    value = entries[i + 1].strip()
+                    
+                    # Убираем комментарии из ключа
+                    if not key.startswith('#'):
+                        self.data[key] = value
                 
                 logger.info(f"✅ Загружено {len(self.data)} записей из {self.file_path}")
             else:
-                # Создаем пример файла, если его нет
-                self._create_example_file()
+                # Создаем пример файла
+                self._create_example()
                 logger.info(f"📝 Создан пример файла {self.file_path}")
                 
         except Exception as e:
-            logger.error(f"❌ Ошибка при загрузке данных: {e}", exc_info=True)
+            logger.error(f"❌ Ошибка при загрузке: {e}")
             self.data = {}
     
-    def _create_example_file(self) -> None:
-        """Создает пример файла с данными"""
-        example_data = [
-            "# Формат: ключ,значение",
-            "привет,здравствуйте!",
-            "как дела,хорошо! а у тебя?",
-            "пока,до свидания!",
-            "кто ты,я бот помощник",
-            "",
-            "# Добавляйте свои записи ниже"
-        ]
-        
+    def _create_example(self) -> None:
+        """Создает пример файла"""
+        example = '''# Пример базы знаний
+# Формат: КЛЮЧ===ИНФОРМАЦИЯ
+
+ноутбук===🖥️ ИНФОРМАЦИЯ О НОУТБУКЕ
+
+Модель: ASUS ROG Strix G15
+Цена: 129 999 ₽
+Рейтинг: 4.7/5
+
+Описание:
+Игровой ноутбук с RTX 3060
+
+пицца===🍕 ПИЦЦА МАРГАРИТА
+
+Цена: 550 ₽
+Вес: 400г
+Состав: сыр, томаты, базилик
+'''
         with open(self.file_path, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(example_data))
+            f.write(example)
     
-    def find_answer(self, text: str) -> Optional[str]:
-        """Ищет ответ на текст пользователя"""
+    def find_info(self, text: str) -> Optional[str]:
+        """Ищет информацию по тексту"""
         if not text or not self.data:
             return None
         
@@ -95,72 +105,43 @@ class TextDatabase:
         if text_lower in self.data:
             return self.data[text_lower]
         
-        # Поиск по вхождению ключа в текст
+        # Поиск по вхождению
         for key, value in self.data.items():
             if key in text_lower:
                 return value
         
         return None
-    
-    def add_record(self, key: str, value: str) -> bool:
-        """Добавляет новую запись в файл"""
-        try:
-            key = key.strip().lower()
-            value = value.strip()
-            
-            if not key or not value:
-                return False
-            
-            # Добавляем в файл
-            with open(self.file_path, 'a', encoding='utf-8') as f:
-                f.write(f"\n{key},{value}")
-            
-            # Обновляем данные в памяти
-            self.data[key] = value
-            logger.info(f"✅ Добавлена запись: {key} -> {value}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"❌ Ошибка при добавлении записи: {e}")
-            return False
-    
-    def get_stats(self) -> Dict:
-        """Возвращает статистику базы данных"""
-        return {
-            "total_records": len(self.data),
-            "file_path": self.file_path
-        }
 
-# Создаем экземпляр базы данных
-db = TextDatabase()
+# Создаем базу данных
+db = SimpleDatabase()
 
-# ========== КЛАВИАТУРЫ ==========
+# ========== КЛАВИАТУРА ==========
 
 def get_main_keyboard() -> ReplyKeyboardMarkup:
     """Создает главную клавиатуру"""
     keyboard = [
-        [KeyboardButton(text="🔍 Поиск"), KeyboardButton(text="📊 Статистика")],
-        [KeyboardButton(text="➕ Добавить запись"), KeyboardButton(text="❓ Помощь")]
+        [KeyboardButton(text="🔍 Поиск"), KeyboardButton(text="📊 Список команд")],
+        [KeyboardButton(text="❓ Помощь")]
     ]
     return ReplyKeyboardMarkup(
         keyboard=keyboard,
         resize_keyboard=True,
-        input_field_placeholder="Выберите действие или напишите текст..."
+        input_field_placeholder="Напишите слово для поиска..."
     )
 
-# ========== ОБРАБОТЧИКИ КОМАНД ==========
+# ========== ОБРАБОТЧИКИ ==========
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message) -> None:
     """Обработчик команды /start"""
     await message.answer(
-        f"👋 Привет, {message.from_user.full_name}!\n"
-        f"Я бот с базой знаний из текстового файла!\n\n"
-        f"📝 Просто напиши мне что-нибудь, и я поищу ответ в файле.",
+        f"👋 Привет, {message.from_user.full_name}!\n\n"
+        f"🔍 Просто напиши слово, и я покажу всю информацию о нём.\n"
+        f"📋 Например: ноутбук, пицца, python\n\n"
+        f"📊 Список команд - показать все доступные слова",
         reply_markup=get_main_keyboard()
     )
     logger.info(f"User {message.from_user.id} started the bot")
-
 
 @dp.message(Command("help"))
 @dp.message(lambda msg: msg.text == "❓ Помощь")
@@ -168,167 +149,101 @@ async def cmd_help(message: types.Message) -> None:
     """Обработчик команды /help"""
     await message.answer(
         "🤖 **Как пользоваться ботом:**\n\n"
-        "• **Просто напиши текст** - я поищу ответ в базе\n"
-        "• **➕ Добавить запись** - новая пара вопрос-ответ\n"
-        "• **📊 Статистика** - информация о базе данных\n"
-        "• **🔍 Поиск** - режим поиска (можно просто писать)\n\n"
-        "**Формат базы данных:**\n"
-        "Файл `data/database.txt` с записями: `ключ,значение`",
-        parse_mode="Markdown",
-        reply_markup=get_main_keyboard()
-    )
-
-
-@dp.message(Command("stats"))
-@dp.message(lambda msg: msg.text == "📊 Статистика")
-async def cmd_stats(message: types.Message) -> None:
-    """Показывает статистику базы данных"""
-    stats = db.get_stats()
-    await message.answer(
-        f"📊 **Статистика базы данных:**\n\n"
-        f"• Всего записей: **{stats['total_records']}**\n"
-        f"• Файл: `{stats['file_path']}`\n\n"
-        f"💡 Отправь мне любое сообщение для поиска ответа!",
+        "1️⃣ Напишите слово (например: ноутбук)\n"
+        "2️⃣ Бот покажет всю информацию по этому слову\n\n"
+        "📋 **Список команд:**\n"
+        "/start - Начать\n"
+        "/help - Это сообщение\n"
+        "/list - Список доступных слов\n\n"
+        "📁 База данных хранится в файле data/details.txt",
         parse_mode="Markdown"
     )
 
-
-# Состояние для добавления записи
-user_states = {}
-
-@dp.message(lambda msg: msg.text == "➕ Добавить запись")
-async def cmd_add_start(message: types.Message) -> None:
-    """Начинает процесс добавления записи"""
-    user_states[message.from_user.id] = {"state": "waiting_for_key"}
+@dp.message(Command("list"))
+@dp.message(lambda msg: msg.text == "📊 Список команд")
+async def cmd_list(message: types.Message) -> None:
+    """Показывает список всех доступных слов"""
+    if not db.data:
+        await message.answer("📭 База данных пуста")
+        return
+    
+    # Создаем список слов
+    words = list(db.data.keys())
+    words_list = "\n".join([f"• {word}" for word in words])
+    
     await message.answer(
-        "📝 **Добавление новой записи**\n\n"
-        "Введите **ключ** (слово, на которое будет реагировать бот):",
+        f"📋 **Доступные слова ({len(words)} шт.):**\n\n"
+        f"{words_list}\n\n"
+        f"💡 Напишите любое слово, чтобы получить информацию!",
         parse_mode="Markdown"
     )
-
 
 @dp.message()
 async def handle_message(message: types.Message) -> None:
-    """Основной обработчик сообщений"""
-    user_id = message.from_user.id
+    """Основной обработчик - ищет информацию по слову"""
     text = message.text
     
     if not text:
         return
     
-    # Проверяем состояние пользователя (добавление записи)
-    if user_id in user_states:
-        state = user_states[user_id]["state"]
-        
-        if state == "waiting_for_key":
-            # Сохраняем ключ и ждем значение
-            user_states[user_id] = {
-                "state": "waiting_for_value",
-                "key": text
-            }
-            await message.answer(
-                f"✅ Ключ **'{text}'** сохранен.\n\n"
-                f"Теперь введите **значение** (ответ бота):",
-                parse_mode="Markdown"
-            )
-            
-        elif state == "waiting_for_value":
-            # Получаем ключ и значение, сохраняем
-            key = user_states[user_id]["key"]
-            value = text
-            
-            # Добавляем в базу
-            if db.add_record(key, value):
-                await message.answer(
-                    f"✅ **Запись успешно добавлена!**\n\n"
-                    f"• Ключ: **{key}**\n"
-                    f"• Значение: **{value}**\n\n"
-                    f"Теперь попробуйте написать '{key}'",
-                    parse_mode="Markdown",
-                    reply_markup=get_main_keyboard()
-                )
-            else:
-                await message.answer(
-                    "❌ Ошибка при добавлении записи. Попробуйте снова.",
-                    reply_markup=get_main_keyboard()
-                )
-            
-            # Очищаем состояние
-            del user_states[user_id]
-        
-        return
-    
     # Обработка кнопки "Поиск"
     if text == "🔍 Поиск":
         await message.answer(
-            "🔍 Режим поиска активен!\n"
-            "Напишите текст, и я найду ответ в базе данных."
+            "🔍 Режим поиска\n"
+            "Напишите слово, и я покажу всю информацию о нём!"
         )
         return
     
-    # ПОИСК В БАЗЕ ДАННЫХ - основная логика
-    answer = db.find_answer(text)
+    # Ищем информацию
+    info = db.find_info(text)
     
-    if answer:
+    if info:
+        # Отправляем найденную информацию
         await message.answer(
-            f"✅ **Найдено в базе:**\n\n{answer}",
+            f"✅ **Найдено по запросу: {text}**\n\n{info}",
             parse_mode="Markdown"
         )
-        logger.info(f"Найден ответ для '{text}' -> '{answer}'")
+        logger.info(f"Найдена информация для '{text}'")
     else:
+        # Ничего не найдено
         await message.answer(
-            f"❌ **Не найдено**\n\n"
+            f"❌ **Ничего не найдено**\n\n"
             f"Запрос: '{text}'\n\n"
             f"Этого слова нет в базе данных.\n"
-            f"Можете добавить его через кнопку **➕ Добавить запись**",
+            f"Посмотрите /list - список доступных слов",
             parse_mode="Markdown"
         )
 
+# ========== ЗАПУСК ==========
 
 async def delete_webhook_and_start() -> None:
     """Удаляет вебхук и запускает polling"""
-    logger.info("🔄 Проверяем наличие активного webhook...")
-    
     try:
         webhook_info = await bot.get_webhook_info()
-        
         if webhook_info.url:
-            logger.warning(f"⚠️ Найден активный webhook: {webhook_info.url}")
             await bot.delete_webhook(drop_pending_updates=True)
-            logger.info("✅ Webhook успешно удален")
-        else:
-            logger.info("✅ Активных webhook не найдено")
-            
+            logger.info("✅ Webhook удален")
     except Exception as e:
-        logger.error(f"❌ Ошибка при удалении webhook: {e}")
-
+        logger.error(f"Ошибка при удалении webhook: {e}")
 
 async def main() -> None:
-    """Главная функция запуска бота"""
+    """Главная функция запуска"""
     logger.info("🚀 Бот запускается...")
     
     try:
         bot_info = await bot.get_me()
         logger.info(f"✅ Бот @{bot_info.username} авторизован")
-        
-        # Показываем статистику базы данных при запуске
-        stats = db.get_stats()
-        logger.info(f"📊 База данных: {stats['total_records']} записей в {stats['file_path']}")
+        logger.info(f"📊 В базе {len(db.data)} записей")
         
         await delete_webhook_and_start()
         
         logger.info("🔄 Начинаем polling...")
-        await dp.start_polling(
-            bot,
-            allowed_updates=["message"],
-            skip_updates=True
-        )
+        await dp.start_polling(bot, skip_updates=True)
         
     except Exception as e:
-        logger.error(f"❌ Критическая ошибка: {e}", exc_info=True)
+        logger.error(f"❌ Ошибка: {e}")
     finally:
         await bot.session.close()
-
 
 if __name__ == "__main__":
     try:
