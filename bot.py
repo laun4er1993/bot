@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 import sys
-from typing import Optional, Dict, List, Tuple
+from typing import Optional, Dict, List
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
@@ -41,9 +41,11 @@ class PhotosDatabase:
         # Данные из multi_keys.txt
         self.locations: List[Dict] = []  # список всех записей
         
+        # Данные из details.txt
+        self.photo_details: Dict[str, str] = {}  # снимок -> детальное описание
+        
         # История пользователей
         self.user_last_photos: Dict[int, List[str]] = {}  # последние найденные снимки
-        self.user_last_villages: Dict[int, str] = {}      # последние найденные деревни
         self.user_last_query: Dict[int, str] = {}         # последний запрос
         
         self.load_all_data()
@@ -81,9 +83,8 @@ class PhotosDatabase:
                             # Сохраняем запись
                             record = {
                                 'id': idx,
-                                'category': category,
-                                'villages_str': villages_str,
                                 'villages': villages,
+                                'villages_str': villages_str,
                                 'photos': photos
                             }
                             self.locations.append(record)
@@ -93,60 +94,40 @@ class PhotosDatabase:
                 logger.info(f"✅ Загружено {len(self.locations)} записей из multi_keys.txt")
             else:
                 logger.warning(f"⚠️ Файл {self.multi_keys_file} не найден")
-                self._create_example_multi_keys()
                 
         except Exception as e:
             logger.error(f"❌ Ошибка загрузки multi_keys: {e}")
-    
-    def _create_example_multi_keys(self) -> None:
-        """Создает пример файла multi_keys.txt"""
-        example = '''# Формат: КАТЕГОРИЯ|СПИСОК_ДЕРЕВЕНЬ|СНИМОК1|СНИМОК2|...
-Ржев|Горбово,Нов.Ивановское,Ковынево,Скворцово,Дураково,Добрая,Мурылево,Ханино,Горы Казеки|N56E34-237-044|N56E34-237-045
-Ржев|Старшевицы,Бельково,Харино,Дешевка|N56E34-237-053
-Ржев|Полунино,Галахово,Тимофеево,Ердихино,Федорково|N56E34-237-048
-'''
-        with open(self.multi_keys_file, 'w', encoding='utf-8') as f:
-            f.write(example)
     
     def load_details(self) -> None:
         """Загружает детальную информацию о снимках из details.txt"""
         try:
             if os.path.exists(self.details_file):
                 with open(self.details_file, 'r', encoding='utf-8') as f:
-                    for line in f:
+                    lines = f.readlines()
+                    logger.info(f"📄 Читаем файл {self.details_file}, всего строк: {len(lines)}")
+                    
+                    for line_num, line in enumerate(lines):
                         line = line.strip()
                         if not line or line.startswith('#'):
                             continue
                         
                         # Формат: НОМЕР_СНИМКА===ПОДРОБНОЕ_ОПИСАНИЕ
                         if '===' in line:
-                            photo_num, details = line.split('===', 1)
-                            photo_num = photo_num.strip()
-                            details = details.strip()
-                            
-                            if photo_num and details:
-                                self.photo_details[photo_num] = details
+                            parts = line.split('===', 1)
+                            if len(parts) == 2:
+                                photo_num = parts[0].strip()
+                                details = parts[1].strip()
+                                
+                                if photo_num and details:
+                                    self.photo_details[photo_num] = details
+                                    logger.info(f"  Загружен снимок: {photo_num}")
                 
                 logger.info(f"✅ Загружено {len(self.photo_details)} описаний снимков из details.txt")
             else:
                 logger.warning(f"⚠️ Файл {self.details_file} не найден")
-                self._create_example_details()
                 
         except Exception as e:
-            logger.error(f"❌ Ошибка загрузки details: {e}")
-    
-    def _create_example_details(self) -> None:
-        """Создает пример файла с деталями снимков"""
-        example = '''# Формат: НОМЕР_СНИМКА===ПОДРОБНОЕ_ОПИСАНИЕ
-
-N56E34-237-044===📸 **Снимок N56E34-237-044**
-📅 Дата съемки: 1943-07-15
-🛩️ Высота: 4500 м
-🎞️ Масштаб: 1:15000
-📋 Описание: Район деревень Горбово, Нов.Ивановское, Ковынево.
-'''
-        with open(self.details_file, 'w', encoding='utf-8') as f:
-            f.write(example)
+            logger.error(f"❌ Ошибка загрузки details: {e}", exc_info=True)
     
     def search_by_village(self, query: str) -> List[Dict]:
         """
@@ -173,16 +154,16 @@ N56E34-237-044===📸 **Снимок N56E34-237-044**
                     if record['id'] not in seen_ids:
                         found_records.append(record)
                         seen_ids.add(record['id'])
-                        logger.info(f"  ✓ Точное совпадение: '{query}' в записи {record['id']} (деревня {village})")
-                    break  # Нашли совпадение в этой записи, переходим к следующей
+                        logger.info(f"  ✓ Точное совпадение: '{query}' в записи {record['id']}")
+                    break
                 
                 # Частичное совпадение для длинных слов
                 elif len(query_lower) > 2 and query_lower in village_lower:
                     if record['id'] not in seen_ids:
                         found_records.append(record)
                         seen_ids.add(record['id'])
-                        logger.info(f"  ✓ Частичное совпадение: '{query}' в '{village}' (запись {record['id']})")
-                    break  # Нашли совпадение в этой записи, переходим к следующей
+                        logger.info(f"  ✓ Частичное совпадение: '{query}' в записи {record['id']}")
+                    break
         
         logger.info(f"✅ Найдено записей: {len(found_records)}")
         return found_records
@@ -192,40 +173,27 @@ N56E34-237-044===📸 **Снимок N56E34-237-044**
         all_photos = []
         for record in records:
             all_photos.extend(record['photos'])
-        # Убираем дубликаты, сохраняя порядок
+        # Убираем дубликаты
         unique_photos = []
         for photo in all_photos:
             if photo not in unique_photos:
                 unique_photos.append(photo)
         return unique_photos
     
-    def get_all_villages_from_records(self, records: List[Dict]) -> List[str]:
-        """Собирает все уникальные деревни из списка записей"""
-        all_villages = []
-        for record in records:
-            all_villages.extend(record['villages'])
-        # Убираем дубликаты, сохраняя порядок
-        unique_villages = []
-        for village in all_villages:
-            if village not in unique_villages:
-                unique_villages.append(village)
-        return unique_villages
-    
     def get_photo_details(self, photo_num: str) -> Optional[str]:
         """Возвращает детальное описание снимка"""
-        return self.photo_details.get(photo_num)
+        details = self.photo_details.get(photo_num)
+        if details:
+            logger.info(f"✅ Найдены детали для снимка {photo_num}")
+        else:
+            logger.warning(f"❌ Детали не найдены для снимка {photo_num}")
+        return details
     
     def set_last_photos(self, user_id: int, photos: List[str]):
         self.user_last_photos[user_id] = photos
     
     def get_last_photos(self, user_id: int) -> Optional[List[str]]:
         return self.user_last_photos.get(user_id)
-    
-    def set_last_villages(self, user_id: int, villages_text: str):
-        self.user_last_villages[user_id] = villages_text
-    
-    def get_last_villages(self, user_id: int) -> Optional[str]:
-        return self.user_last_villages.get(user_id)
     
     def set_last_query(self, user_id: int, query: str):
         self.user_last_query[user_id] = query
@@ -236,6 +204,7 @@ N56E34-237-044===📸 **Снимок N56E34-237-044**
     def log_stats(self):
         logger.info(f"📊 Статистика:")
         logger.info(f"   • Записей в multi_keys.txt: {len(self.locations)}")
+        logger.info(f"   • Описаний в details.txt: {len(self.photo_details)}")
 
 # Создаем экземпляр базы данных
 db = PhotosDatabase()
@@ -273,14 +242,14 @@ def photos_keyboard(photos: List[str]) -> InlineKeyboardMarkup:
 async def cmd_start(message: types.Message) -> None:
     await message.answer(
         f"👋 Привет, {message.from_user.full_name}!\n\n"
-        f"🛩️ **Поиск аэрофотоснимков Ржевского района**\n\n"
+        f"🛩️ **Поиск информации об аэрофотоснимках Ржевского района**\n\n"
         f"🔍 Введите название деревни:\n\n"
         f"📋 **Примеры:**\n"
         f"• Горбово\n"
         f"• Полунино\n"
         f"• Дураково\n\n"
-        f"💡 Бот покажет **все снимки** из всех списков, "
-        f"где встречается эта деревня!",
+        f"📸 Бот покажет **все снимки**, где встречается эта деревня, "
+        f"и вы сможете посмотреть детальную информацию о каждом снимке.",
         parse_mode="Markdown",
         reply_markup=ReplyKeyboardRemove()
     )
@@ -290,10 +259,16 @@ async def cmd_help(message: types.Message) -> None:
     await message.answer(
         "🛩️ **Помощь по поиску снимков:**\n\n"
         "1️⃣ Введите название деревни\n"
-        "2️⃣ Бот найдет все списки с этой деревней\n"
-        "3️⃣ Покажет **все снимки** из всех найденных списков\n"
-        "4️⃣ Нажмите на номер снимка для просмотра детальной информации\n\n"
-        "🔙 Кнопки «Назад» возвращают к предыдущему шагу",
+        "2️⃣ Бот покажет список всех снимков, где есть эта деревня\n"
+        "3️⃣ Нажмите на номер снимка\n"
+        "4️⃣ Получите детальную информацию:\n"
+        "   • Дата съемки\n"
+        "   • Масштаб\n"
+        "   • Номер вылета\n"
+        "   • Качество\n"
+        "   • Квадрат, наложение, кадр\n"
+        "   • Владелец\n\n"
+        "🔙 Кнопка «Назад» возвращает к списку снимков",
         parse_mode="Markdown"
     )
 
@@ -316,23 +291,17 @@ async def handle_message(message: types.Message) -> None:
         # Собираем все уникальные снимки из всех найденных записей
         all_photos = db.get_all_photos_from_records(results)
         
-        # Собираем все уникальные деревни для информации
-        all_villages = db.get_all_villages_from_records(results)
-        
-        # Формируем текст с деревнями (показываем первые 10)
-        if len(all_villages) > 10:
-            villages_text = ', '.join(all_villages[:10]) + f" и ещё {len(all_villages)-10}"
-        else:
-            villages_text = ', '.join(all_villages)
-        
         # Сохраняем для кнопки "Назад"
         db.set_last_photos(user_id, all_photos)
-        db.set_last_villages(user_id, villages_text)
+        
+        # Показываем список снимков
+        photos_list = "\n".join([f"• {photo}" for photo in all_photos])
         
         await message.answer(
-            f"✅ **Найдено по запросу '{text}':**\n"
-            f"📍 Деревни: {villages_text}\n\n"
-            f"📸 **Все снимки ({len(all_photos)} шт.):**",
+            f"✅ **Найдено по запросу '{text}':**\n\n"
+            f"📸 **Снимки ({len(all_photos)} шт.):**\n\n"
+            f"{photos_list}\n\n"
+            f"👇 **Нажмите на номер снимка для просмотра информации:**",
             parse_mode="Markdown",
             reply_markup=photos_keyboard(all_photos)
         )
@@ -350,47 +319,47 @@ async def handle_message(message: types.Message) -> None:
 @dp.callback_query(lambda c: c.data.startswith('photo_'))
 async def process_photo_select(callback: CallbackQuery):
     photo = callback.data.replace('photo_', '')
+    user_id = callback.from_user.id
     
-    # Получаем детальное описание снимка
+    logger.info(f"Пользователь {user_id} выбрал снимок {photo}")
+    
+    # Получаем детальное описание снимка из details.txt
     details = db.get_photo_details(photo)
     
     if details:
         text = details
+        logger.info(f"✅ Детали найдены для {photo}")
     else:
-        text = f"📸 **Снимок {photo}**\n\n*Нет подробного описания*"
-    
-    # Добавляем кнопки для ссылок, если они есть
-    keyboard = []
-    
-    # Проверяем наличие ссылок в деталях (можно добавить логику извлечения ссылок)
-    if "MBTiles:" in text:
-        # Здесь можно добавить кнопку для скачивания
-        pass
-    
-    if "KMZ:" in text:
-        # Здесь можно добавить кнопку для скачивания
-        pass
+        # Если нет описания, показываем базовую информацию
+        text = (
+            f"📸 **Снимок {photo}**\n\n"
+            f"❌ Подробная информация отсутствует в базе данных\n\n"
+            f"📍 Номер снимка: {photo}"
+        )
+        logger.warning(f"❌ Детали не найдены для {photo}")
     
     await callback.message.edit_text(
         text,
         parse_mode="Markdown",
-        reply_markup=back_to_photos_keyboard()  # Пока просто кнопка назад
+        reply_markup=back_to_photos_keyboard()
     )
     
     await callback.answer()
-    
+
 @dp.callback_query(lambda c: c.data == "back_to_photos")
 async def process_back_to_photos(callback: CallbackQuery):
     user_id = callback.from_user.id
     last_photos = db.get_last_photos(user_id)
-    last_villages = db.get_last_villages(user_id)
     last_query = db.get_last_query(user_id)
     
     if last_photos:
+        photos_list = "\n".join([f"• {photo}" for photo in last_photos])
+        
         await callback.message.edit_text(
-            f"✅ **Найдено по запросу '{last_query}':**\n"
-            f"📍 Деревни: {last_villages}\n\n"
-            f"📸 **Все снимки ({len(last_photos)} шт.):**",
+            f"✅ **Найдено по запросу '{last_query}':**\n\n"
+            f"📸 **Снимки ({len(last_photos)} шт.):**\n\n"
+            f"{photos_list}\n\n"
+            f"👇 **Нажмите на номер снимка для просмотра информации:**",
             parse_mode="Markdown",
             reply_markup=photos_keyboard(last_photos)
         )
@@ -428,7 +397,16 @@ async def delete_webhook() -> None:
         logger.error(f"Ошибка удаления webhook: {e}")
 
 async def main() -> None:
-    logger.info("🛩️ Бот для поиска аэрофотоснимков запускается...")
+    logger.info("🛩️ Бот для поиска информации об аэрофотоснимках запускается...")
+    
+    # Проверяем загрузку данных
+    logger.info(f"📊 Загружено локаций: {len(db.locations)}")
+    logger.info(f"📊 Загружено описаний снимков: {len(db.photo_details)}")
+    
+    if len(db.photo_details) == 0:
+        logger.warning("⚠️ ВНИМАНИЕ: Не загружено ни одного описания снимков!")
+        logger.warning("⚠️ Проверьте файл data/details.txt")
+    
     await delete_webhook()
     logger.info("🔄 Polling...")
     await dp.start_polling(bot, skip_updates=True)
