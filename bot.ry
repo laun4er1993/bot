@@ -1,0 +1,57 @@
+import asyncio
+import logging
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import Command
+
+# 1. ВСТАВЬ СВОЙ ТОКЕН СЮДА (в кавычках)
+BOT_TOKEN = "8636773672:AAEUmRC7PRjNkpeZVxS66x5m7bLPG_ZKfJA"
+
+# Включаем логирование, чтобы видеть ошибки
+logging.basicConfig(level=logging.INFO)
+
+# Создаем объекты бота и диспетчера
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher()
+
+# --- ОБРАБОТЧИКИ КОМАНД ---
+
+# Хэндлер на команду /start
+@dp.message(Command("start"))
+async def cmd_start(message: types.Message):
+    """
+    Этот хэндлер срабатывает на команду /start.
+    """
+    await message.answer(
+        f"Привет, {message.from_user.full_name}!\n"
+        "Я твой первый бот. Отправь мне команду /help, чтобы узнать, что я умею."
+    )
+
+# Хэндлер на команду /help
+@dp.message(Command("help"))
+async def cmd_help(message: types.Message):
+    """
+    Этот хэндлер срабатывает на команду /help.
+    """
+    await message.answer(
+        "Я пока умею немного:\n"
+        "/start - Приветствие\n"
+        "/help - Это сообщение\n"
+        "А еще я повторю за тобой любое текстовое сообщение!"
+    )
+
+# Хэндлер на любое текстовое сообщение (не команду)
+@dp.message()
+async def echo_message(message: types.Message):
+    """
+    Этот хэндлер срабатывает на любое сообщение, которое не является командой.
+    """
+    await message.answer(f"Ты написал: {message.text}")
+
+# --- ЗАПУСК БОТА ---
+async def main():
+    print("Бот запущен и готов к работе!")
+    # Запускаем процесс polling (опрос сервера на наличие новых сообщений)
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
