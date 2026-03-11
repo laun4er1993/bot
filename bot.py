@@ -40,7 +40,7 @@ class DataBase:
         
         # Данные
         self.key_to_groups: Dict[str, List[str]] = {}  # ключ -> список group_id
-        self.groups: Dict[str, Dict] = {}  # group_id -> {keys, associations, display_name}
+        self.groups: Dict[str, Dict] = {}  # group_id -> {keys, associations, category_name}
         self.details: Dict[str, str] = {}  # ассоциация -> детали
         
         # История пользователей
@@ -65,26 +65,30 @@ class DataBase:
                             continue
                         
                         if '|' in line:
-                            keys_part, assoc_part = line.split('|', 1)
-                            keys = [k.strip().lower() for k in keys_part.split(',') if k.strip()]
-                            associations = [a.strip() for a in assoc_part.split('|') if a.strip()]
-                            
-                            if keys and associations:
-                                group_id = f"group_{line_num}"
-                                display_name = keys[0]
+                            # Новый формат: категория|ключ1,ключ2|ассоциация1|ассоциация2
+                            parts = line.split('|')
+                            if len(parts) >= 3:
+                                category_name = parts[0].strip()  # Название категории
+                                keys_part = parts[1].strip()      # Ключи через запятую
+                                associations = [a.strip() for a in parts[2:] if a.strip()]
                                 
-                                # Сохраняем группу
-                                self.groups[group_id] = {
-                                    'keys': keys,
-                                    'associations': associations,
-                                    'display_name': display_name
-                                }
+                                keys = [k.strip().lower() for k in keys_part.split(',') if k.strip()]
                                 
-                                # Для каждого ключа добавляем ссылку на эту группу
-                                for key in keys:
-                                    if key not in self.key_to_groups:
-                                        self.key_to_groups[key] = []
-                                    self.key_to_groups[key].append(group_id)
+                                if keys and associations:
+                                    group_id = f"group_{line_num}"
+                                    
+                                    # Сохраняем группу с отдельным названием категории
+                                    self.groups[group_id] = {
+                                        'keys': keys,
+                                        'associations': associations,
+                                        'category_name': category_name  # Отдельное название для отображения
+                                    }
+                                    
+                                    # Для каждого ключа добавляем ссылку на эту группу
+                                    for key in keys:
+                                        if key not in self.key_to_groups:
+                                            self.key_to_groups[key] = []
+                                        self.key_to_groups[key].append(group_id)
                 
                 logger.info(f"✅ Загружено {len(self.groups)} групп")
             else:
@@ -95,20 +99,23 @@ class DataBase:
             logger.error(f"❌ Ошибка загрузки: {e}")
     
     def _create_example_file(self) -> None:
-        """Создает пример файла с данными"""
-        example = '''# Формат: ключ1,ключ2|ассоциация1|ассоциация2
+        """Создает пример файла с данными в новом формате"""
+        example = '''# Формат: КАТЕГОРИЯ|ключ1,ключ2|ассоциация1|ассоциация2
 
 # Яблоко как фрукт
-яблоко,фрукт,apple|🍎 Красное яблоко|🍏 Зеленое яблоко
+Фрукты|яблоко,фрукт,apple|🍎 Красное яблоко|🍏 Зеленое яблоко
 
 # Яблоко как бренд
-apple,iphone,mac|📱 iPhone 15|💻 MacBook Pro
+Apple|apple,iphone,mac|📱 iPhone 15|💻 MacBook Pro
 
 # Машина как автомобиль
-машина,авто,car|🚗 Toyota Camry|🚙 Kia Sportage
+Автомобили|машина,авто,car|🚗 Toyota Camry|🚙 Kia Sportage
 
 # Машина как устройство
-машина,стиралка|🧺 Стиральная машина|☕ Кофемашина
+Бытовая техника|машина,стиралка|🧺 Стиральная машина|☕ Кофемашина
+
+# Python как язык
+Программирование|python,питон|🐍 Основы Python|🌐 Django
 '''
         with open(self.multi_keys_file, 'w', encoding='utf-8') as f:
             f.write(example)
@@ -135,7 +142,7 @@ apple,iphone,mac|📱 iPhone 15|💻 MacBook Pro
     def find_groups(self, text: str) -> List[Tuple[str, str, List[str]]]:
         """
         Ищет все группы по ключу
-        Возвращает список: (group_id, display_name, список ассоциаций)
+        Возвращает список: (group_id, category_name, список ассоциаций)
         """
         if not text or not self.key_to_groups:
             return []
@@ -149,7 +156,7 @@ apple,iphone,mac|📱 iPhone 15|💻 MacBook Pro
             for group_id in self.key_to_groups[text_lower]:
                 if group_id not in seen_group_ids:
                     group = self.groups[group_id]
-                    found_groups.append((group_id, group['display_name'], group['associations']))
+                    found_groups.append((group_id, group['category_name'], group['associations']))
                     seen_group_ids.add(group_id)
         
         # Поиск по вхождению
@@ -158,7 +165,7 @@ apple,iphone,mac|📱 iPhone 15|💻 MacBook Pro
                 for group_id in group_ids:
                     if group_id not in seen_group_ids:
                         group = self.groups[group_id]
-                        found_groups.append((group_id, group['display_name'], group['associations']))
+                        found_groups.append((group_id, group['category_name'], group['associations']))
                         seen_group_ids.add(group_id)
         
         return found_groups
@@ -203,13 +210,13 @@ def back_to_list_keyboard(group_id: str) -> InlineKeyboardMarkup:
     ])
 
 def groups_keyboard(groups: List[Tuple[str, str, List[str]]]) -> InlineKeyboardMarkup:
-    """Клавиатура для выбора группы при дубликатах - показывает только названия ключей"""
+    """Клавиатура для выбора группы при дубликатах"""
     keyboard = []
     
-    for group_id, display_name, associations in groups:
-        # Показываем только display_name (первый ключ) без примеров ассоциаций
+    for group_id, category_name, associations in groups:
+        # Показываем только название категории
         keyboard.append([InlineKeyboardButton(
-            text=display_name,
+            text=category_name,
             callback_data=f"select_group_{group_id}"
         )])
     
@@ -280,22 +287,22 @@ async def handle_message(message: types.Message) -> None:
     if groups:
         if len(groups) == 1:
             # Если одна группа - показываем сразу ассоциации
-            group_id, display_name, associations = groups[0]
+            group_id, category_name, associations = groups[0]
             db.set_last_group(user_id, group_id)
             
             assoc_list = "\n".join([f"• {a}" for a in associations])
             
             await message.answer(
-                f"✅ **{display_name}**\n\n"
+                f"✅ **{category_name}**\n\n"
                 f"📌 **Варианты:**\n\n{assoc_list}",
                 parse_mode="Markdown",
                 reply_markup=associations_keyboard(associations, group_id)
             )
         else:
-            # Если несколько групп - показываем выбор (только названия ключей)
+            # Если несколько групп - показываем выбор
             await message.answer(
-                f"🔍 **Найдено несколько снимков для '{text}':**\n\n"
-                f"Выберите нужный:",
+                f"🔍 **Найдено несколько категорий для '{text}':**\n\n"
+                f"Выберите нужную:",
                 parse_mode="Markdown",
                 reply_markup=groups_keyboard(groups)
             )
@@ -319,12 +326,12 @@ async def process_group_select(callback: CallbackQuery):
     if group:
         db.set_last_group(user_id, group_id)
         associations = group['associations']
-        display_name = group['display_name']
+        category_name = group['category_name']
         
         assoc_list = "\n".join([f"• {a}" for a in associations])
         
         await callback.message.edit_text(
-            f"✅ **{display_name}**\n\n"
+            f"✅ **{category_name}**\n\n"
             f"📌 **Варианты:**\n\n{assoc_list}",
             parse_mode="Markdown",
             reply_markup=associations_keyboard(associations, group_id)
@@ -359,11 +366,11 @@ async def process_back_to_list(callback: CallbackQuery):
     
     if group:
         associations = group['associations']
-        display_name = group['display_name']
+        category_name = group['category_name']
         assoc_list = "\n".join([f"• {a}" for a in associations])
         
         await callback.message.edit_text(
-            f"✅ **{display_name}**\n\n📌 **Варианты:**\n\n{assoc_list}",
+            f"✅ **{category_name}**\n\n📌 **Варианты:**\n\n{assoc_list}",
             parse_mode="Markdown",
             reply_markup=associations_keyboard(associations, group_id)
         )
