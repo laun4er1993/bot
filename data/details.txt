@@ -1,22 +1,40 @@
 # Это комментарий - строки с # игнорируются
 # Формат: КЛЮЧ===ИНФОРМАЦИЯ (всё что после === будет ответом)
 
-Добрая===🖥️ Наличие аэрофотоснимка
+N56E34-237-044===🖥️ АФС Добрая
 
-💻 Модель: 1
-⚡ Процессор: 1
-🎮 Видеокарта: 1
-💾 Память: 1
-💰 Цена: 1
-⭐ Рейтинг: 4.7/5
+2.09.1942
+Scale: 1 :19.000
 
-✅ Плюсы:
-• 1
-• 1
-• 1
+Keyword: Добрая-Горбово-Победа
 
-❌ Минусы:
-• Шумный под нагрузкой
-• Небольшая автономность
+Sortie:    TUGX-9 F2146 SG
+Quality:  Good
+Square:  N56E34
+Overlay: 237
+Frame:   044
+Owner:  
+GM WS: 
+Rectified by:
 
-🔗 Где купить: https://example.com/laptop
+Загрузить MBTiles: https://example.com/laptop
+Загрузить KMZ: https://example.com/laptop
+
+N56E34-237-045===🖥️ АФС Добрая 2
+
+2.09.1942
+Scale: 1 :19.000
+
+Keyword: Добрая-Горбово-Победа
+
+Sortie:    TUGX-9 F2146 SG
+Quality:  Good
+Square:  N56E34
+Overlay: 237
+Frame:   045
+Owner:  
+GM WS: 
+Rectified by:
+
+Загрузить MBTiles: https://example.com/laptop
+Загрузить KMZ: https://example.com/laptop
