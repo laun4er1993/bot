@@ -63,17 +63,23 @@ class PhotosDatabase:
         try:
             if os.path.exists(self.multi_keys_file):
                 with open(self.multi_keys_file, 'r', encoding='utf-8') as f:
-                    for line_num, line in enumerate(f):
+                    lines = f.readlines()
+                    logger.info(f"📄 Читаем файл {self.multi_keys_file}, всего строк: {len(lines)}")
+                    
+                    for line_num, line in enumerate(lines):
                         line = line.strip()
                         if not line or line.startswith('#'):
                             continue
                         
                         # Формат: категория|описание|ключ1|ключ2|...
                         parts = line.split('|')
+                        
                         if len(parts) >= 4:
-                            category = parts[0].strip()      # Ржев (не используется)
+                            category = parts[0].strip()      # Ржев
                             location_desc = parts[1].strip()  # список деревень
                             photos = [p.strip() for p in parts[2:] if p.strip()]  # номера снимков
+                            
+                            logger.info(f"  Строка {line_num}: '{location_desc[:30]}...' ({len(photos)} снимков)")
                             
                             if photos:
                                 # Сохраняем связь локация -> снимки
@@ -157,20 +163,52 @@ N56E34-237-053===📸 **Снимок N56E34-237-053**
         found_locations = []
         seen = set()
         
-        # Поиск по номеру снимка
+        logger.info(f"🔍 Поиск: '{text}'")
+        
+        # ПОИСК 1: По номеру снимка (точное совпадение)
         if text_lower in self.photo_to_locations:
             for loc_desc in self.photo_to_locations[text_lower]:
                 if loc_desc not in seen:
                     found_locations.append((loc_desc, self.location_to_photos[loc_desc]))
                     seen.add(loc_desc)
+                    logger.info(f"  ✓ Найдено по номеру снимка: {loc_desc[:50]}...")
         
-        # Поиск по названию деревни (вхождение в описание локации)
+        # ПОИСК 2: По точному названию деревни
         for loc_desc, photos in self.location_to_photos.items():
-            if text_lower in loc_desc.lower():
+            # Разбиваем описание локации на отдельные деревни
+            villages = [v.strip().lower() for v in loc_desc.split(',')]
+            
+            # Проверяем, есть ли искомый текст в списке деревень
+            if text_lower in villages:
                 if loc_desc not in seen:
                     found_locations.append((loc_desc, photos))
                     seen.add(loc_desc)
+                    logger.info(f"  ✓ Точное совпадение с деревней: {loc_desc[:50]}...")
         
+        # ПОИСК 3: По вхождению в название деревни (если еще не нашли)
+        if len(found_locations) < 3:  # Ограничиваем, чтобы не было слишком много
+            for loc_desc, photos in self.location_to_photos.items():
+                # Проверяем каждую деревню в описании
+                villages = [v.strip().lower() for v in loc_desc.split(',')]
+                
+                for village in villages:
+                    if text_lower in village and len(text_lower) > 3:  # Не ищем по очень коротким словам
+                        if loc_desc not in seen:
+                            found_locations.append((loc_desc, photos))
+                            seen.add(loc_desc)
+                            logger.info(f"  ✓ Частичное совпадение: '{text}' в '{village}'")
+                            break  # Нашли одну деревню в этой локации, переходим к следующей
+        
+        # ПОИСК 4: По вхождению в описание локации (самый широкий поиск)
+        if not found_locations:  # Если ничего не нашли, пробуем самый широкий поиск
+            for loc_desc, photos in self.location_to_photos.items():
+                if text_lower in loc_desc.lower():
+                    if loc_desc not in seen:
+                        found_locations.append((loc_desc, photos))
+                        seen.add(loc_desc)
+                        logger.info(f"  ✓ Широкий поиск: '{text}' в {loc_desc[:50]}...")
+        
+        logger.info(f"✅ Всего найдено локаций: {len(found_locations)}")
         return found_locations
     
     def get_photo_details(self, photo_num: str) -> Optional[str]:
