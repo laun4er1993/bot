@@ -13,7 +13,7 @@ from aiogram.types import (
     CallbackQuery
 )
 
-# Токен берется из переменных окружения
+# Токен из переменных окружения
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 if not BOT_TOKEN:
@@ -27,44 +27,33 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Инициализация бота
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# ========== КЛАСС ДЛЯ РАБОТЫ С МНОЖЕСТВОМ КЛЮЧЕЙ ==========
+# ========== КЛАСС ДЛЯ РАБОТЫ С ДАННЫМИ ==========
 
-class MultiKeyToAssociationsDB:
-    """
-    Класс где несколько ключей ведут к одному набору ассоциаций
-    Формат: ключ1,ключ2,ключ3|ассоциация1|ассоциация2|ассоциация3
-    """
-    
+class DataBase:
     def __init__(self, data_dir: str = "data"):
         self.data_dir = data_dir
         self.multi_keys_file = os.path.join(data_dir, "multi_keys.txt")
         self.details_file = os.path.join(data_dir, "details.txt")
         
-        # Структуры данных
-        self.key_to_group: Dict[str, str] = {}      # ключ -> ID группы
-        self.group_to_keys: Dict[str, List[str]] = {}  # ID группы -> список ключей
-        self.group_to_associations: Dict[str, List[str]] = {}  # ID группы -> список ассоциаций
-        self.group_to_display: Dict[str, str] = {}  # ID группы -> отображаемое имя
-        self.details: Dict[str, str] = {}            # ассоциация -> детали
+        self.key_to_group: Dict[str, str] = {}
+        self.group_to_keys: Dict[str, List[str]] = {}
+        self.group_to_associations: Dict[str, List[str]] = {}
+        self.details: Dict[str, str] = {}
         
-        # Для хранения предыдущего состояния пользователя
-        self.user_last_group: Dict[int, str] = {}    # user_id -> последняя group_id
+        self.user_last_group: Dict[int, str] = {}
+        self.user_last_query: Dict[int, str] = {}
         
         self.load_all_data()
     
     def load_all_data(self) -> None:
-        """Загружает все данные из файлов"""
         os.makedirs(self.data_dir, exist_ok=True)
         self.load_multi_keys()
         self.load_details()
-        self.log_stats()
     
     def load_multi_keys(self) -> None:
-        """Загружает данные из файла с множественными ключами"""
         try:
             if os.path.exists(self.multi_keys_file):
                 with open(self.multi_keys_file, 'r', encoding='utf-8') as f:
@@ -80,25 +69,21 @@ class MultiKeyToAssociationsDB:
                             
                             if keys and associations:
                                 group_id = f"{keys[0]}_{line_num}"
-                                display_name = keys[0]
                                 
                                 self.group_to_keys[group_id] = keys
                                 self.group_to_associations[group_id] = associations
-                                self.group_to_display[group_id] = display_name
                                 
                                 for key in keys:
                                     self.key_to_group[key] = group_id
                 
-                logger.info(f"✅ Загружено {len(self.group_to_associations)} групп ключей")
-                logger.info(f"✅ Всего ключей: {len(self.key_to_group)}")
+                logger.info(f"✅ Загружено {len(self.group_to_associations)} групп")
             else:
-                self._create_example_multi_keys()
+                logger.warning(f"⚠️ Файл {self.multi_keys_file} не найден")
                 
         except Exception as e:
-            logger.error(f"❌ Ошибка при загрузке multi_keys: {e}")
+            logger.error(f"❌ Ошибка загрузки: {e}")
     
     def load_details(self) -> None:
-        """Загружает детальную информацию для ассоциаций"""
         try:
             if os.path.exists(self.details_file):
                 with open(self.details_file, 'r', encoding='utf-8') as f:
@@ -113,146 +98,71 @@ class MultiKeyToAssociationsDB:
                     if not assoc.startswith('#'):
                         self.details[assoc] = details
                 
-                logger.info(f"✅ Загружено {len(self.details)} ассоциаций с деталями")
-            else:
-                self._create_example_details()
-                
+                logger.info(f"✅ Загружено {len(self.details)} описаний")
         except Exception as e:
-            logger.error(f"❌ Ошибка при загрузке деталей: {e}")
+            logger.error(f"❌ Ошибка загрузки деталей: {e}")
     
-    def _create_example_multi_keys(self) -> None:
-        """Создает пример файла с множественными ключами"""
-        example = '''# Формат: КЛЮЧ,КЛЮЧ2,КЛЮЧ3|Ассоциация1|Ассоциация2|Ассоциация3
-
-ноутбук,ноут,лэптоп,laptop,макбук,macbook|💻 Игровой|🖥️ Офисный|💼 Б/у|🍏 MacBook
-пицца,pizza,итальянская|🍕 Маргарита|🍄 Грибная|🥓 Пепперони|🍖 Четыре сыра
-python,питон,пайтон,python3|🐍 Основы|🌐 Веб|🤖 Машинное обучение|📊 Анализ данных
-автомобиль,машина,авто,car,тачка|🚗 Седан|🚙 Кроссовер|🏎️ Спорткар|🚐 Микроавтобус
-кофе,кофейный,coffee,капучино,латте|☕ Эспрессо|🥛 Латте|🍫 Капучино|🧊 Холодный
-'''
-        with open(self.multi_keys_file, 'w', encoding='utf-8') as f:
-            f.write(example)
-    
-    def _create_example_details(self) -> None:
-        """Создает пример файла с деталями"""
-        example = '''# Детальная информация для ассоциаций
-
-💻 Игровой===🖥️ **ИГРОВОЙ НОУТБУК ASUS ROG**
-
-🔹 Характеристики:
-• Процессор: Intel Core i7-12700H
-• Видеокарта: NVIDIA RTX 3060 6GB
-• Оперативная память: 16GB DDR5
-• Накопитель: 512GB NVMe SSD
-• Экран: 15.6" 240Hz IPS
-
-💰 Цена: 129 999 ₽
-⭐ Рейтинг: 4.7/5
-
-✅ Плюсы:
-• Отличная производительность в играх
-• Качественный экран с высокой частотой
-
-🍏 MacBook===🍏 **MacBook Pro 14" M3**
-
-🔹 Характеристики:
-• Процессор: Apple M3 Pro (11 ядер)
-• Оперативная память: 18GB
-• Накопитель: 512GB SSD
-• Экран: 14.2" Liquid Retina XDR
-• Вес: 1.6 кг
-
-💰 Цена: 199 990 ₽
-⭐ Рейтинг: 4.9/5
-
-🍕 Маргарита===🍕 **ПИЦЦА МАРГАРИТА**
-
-🥫 Состав:
-• Томатный соус
-• Моцарелла
-• Свежий базилик
-
-💰 Цена: 550 ₽
-⚖️ Вес: 400 г
-'''
-        with open(self.details_file, 'w', encoding='utf-8') as f:
-            f.write(example)
-    
-    def find_group_by_key(self, text: str) -> Optional[Tuple[str, List[str], List[str]]]:
-        """
-        Ищет группу по ключу
-        Возвращает: (group_id, список ключей, список ассоциаций) или None
-        """
+    def find_group(self, text: str) -> Optional[Tuple[str, List[str], List[str]]]:
         if not text or not self.key_to_group:
             return None
         
         text_lower = text.lower().strip()
         
-        # Прямое совпадение с ключом
         if text_lower in self.key_to_group:
             group_id = self.key_to_group[text_lower]
             return group_id, self.group_to_keys[group_id], self.group_to_associations[group_id]
         
-        # Поиск по вхождению ключа в текст
         for key, group_id in self.key_to_group.items():
             if key in text_lower:
                 return group_id, self.group_to_keys[group_id], self.group_to_associations[group_id]
         
         return None
     
-    def get_group_by_id(self, group_id: str) -> Optional[Tuple[List[str], List[str]]]:
-        """Возвращает группу по ID"""
+    def get_group(self, group_id: str) -> Optional[Tuple[List[str], List[str]]]:
         if group_id in self.group_to_keys:
             return self.group_to_keys[group_id], self.group_to_associations[group_id]
         return None
     
     def get_details(self, association: str) -> Optional[str]:
-        """Возвращает детали для ассоциации"""
         return self.details.get(association)
     
-    def set_user_last_group(self, user_id: int, group_id: str):
-        """Сохраняет последнюю группу пользователя"""
+    def set_last_group(self, user_id: int, group_id: str):
         self.user_last_group[user_id] = group_id
     
-    def get_user_last_group(self, user_id: int) -> Optional[str]:
-        """Возвращает последнюю группу пользователя"""
+    def get_last_group(self, user_id: int) -> Optional[str]:
         return self.user_last_group.get(user_id)
     
-    def log_stats(self):
-        """Логирует статистику базы данных"""
-        total_associations = sum(len(assoc) for assoc in self.group_to_associations.values())
-        logger.info(f"📊 Статистика базы данных:")
-        logger.info(f"   • Групп ключей: {len(self.group_to_associations)}")
-        logger.info(f"   • Всего ключей: {len(self.key_to_group)}")
-        logger.info(f"   • Всего ассоциаций: {total_associations}")
-        logger.info(f"   • Ассоциаций с деталями: {len(self.details)}")
+    def set_last_query(self, user_id: int, query: str):
+        self.user_last_query[user_id] = query
+    
+    def get_last_query(self, user_id: int) -> Optional[str]:
+        return self.user_last_query.get(user_id)
 
-# Создаем базу данных
-db = MultiKeyToAssociationsDB()
+db = DataBase()
 
 # ========== КЛАВИАТУРЫ ==========
 
-def get_back_keyboard(group_id: str) -> InlineKeyboardMarkup:
-    """Создает клавиатуру с кнопкой 'Назад'"""
-    keyboard = [
-        [InlineKeyboardButton(text="🔙 Назад к списку", callback_data=f"back_{group_id}")]
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+def back_to_main_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🏠 В начало", callback_data="back_to_main")]
+    ])
 
-def get_associations_keyboard(associations: List[str], group_id: str) -> InlineKeyboardMarkup:
-    """Создает клавиатуру с ассоциациями"""
+def back_to_list_keyboard(group_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Назад к списку", callback_data=f"back_to_list_{group_id}")]
+    ])
+
+def associations_keyboard(associations: List[str], group_id: str) -> InlineKeyboardMarkup:
     keyboard = []
-    
-    # Добавляем кнопки для каждой ассоциации (по 2 в ряд)
     row = []
+    
     for i, assoc in enumerate(associations):
-        row.append(InlineKeyboardButton(
-            text=assoc,
-            callback_data=f"assoc_{assoc}"
-        ))
+        row.append(InlineKeyboardButton(text=assoc, callback_data=f"assoc_{assoc}"))
         if len(row) == 2 or i == len(associations) - 1:
             keyboard.append(row)
             row = []
+    
+    keyboard.append([InlineKeyboardButton(text="🔙 Назад к поиску", callback_data="back_to_search")])
     
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
@@ -260,204 +170,122 @@ def get_associations_keyboard(associations: List[str], group_id: str) -> InlineK
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message) -> None:
-    """Обработчик команды /start"""
-    welcome_text = (
-        f"👋 Привет, {message.from_user.full_name}!\n\n"
-        f"🔍 **Как это работает:**\n"
-        f"Просто напиши что хочешь найти, и я покажу все варианты!\n\n"
-        f"📋 **Примеры запросов:**\n"
-        f"• ноут, laptop, макбук\n"
-        f"• пицца, pizza\n"
-        f"• машина, car, авто\n"
-        f"• кофе, coffee\n"
-        f"• питон, python\n\n"
-        f"💡 **Совет:** Можно использовать разные слова для поиска!"
-    )
-    
-    # Убираем все кнопки (ReplyKeyboardRemove)
     await message.answer(
-        welcome_text,
-        parse_mode="Markdown",
+        f"👋 Привет, {message.from_user.full_name}!\n\n"
+        f"🔍 Напиши слово для поиска.\n\n"
+        f"📋 Примеры: ноут, пицца, машина, кофе, python",
         reply_markup=ReplyKeyboardRemove()
     )
-    logger.info(f"User {message.from_user.id} started the bot")
 
 @dp.message(Command("help"))
 async def cmd_help(message: types.Message) -> None:
-    """Обработчик команды /help"""
-    help_text = (
-        "🤖 **Помощь по боту:**\n\n"
-        "**Команды:**\n"
-        "• /start - Начать работу\n"
-        "• /help - Это сообщение\n\n"
-        "**Как пользоваться:**\n"
-        "1. Напишите любое слово (например: **ноут**)\n"
-        "2. Бот покажет все варианты для этой категории\n"
-        "3. Нажмите на кнопку с интересующим вариантом\n"
-        "4. Получите подробную информацию!\n\n"
-        "**Примеры синонимов:**\n"
-        "• ноут, laptop, макбук → категория **ноутбук**\n"
-        "• питон, пайтон → категория **python**\n"
-        "• машина, авто, car → категория **автомобиль**\n\n"
-        "🔙 **Кнопка «Назад»** возвращает к списку вариантов"
+    await message.answer(
+        "🤖 **Помощь:**\n\n"
+        "• Напишите слово - бот покажет варианты\n"
+        "• Выберите вариант - получите информацию\n"
+        "• Кнопки назад вернут к выбору",
+        parse_mode="Markdown"
     )
-    
-    await message.answer(help_text, parse_mode="Markdown")
 
-# ========== ОБРАБОТЧИК ТЕКСТОВЫХ СООБЩЕНИЙ ==========
+# ========== ОБРАБОТЧИК ТЕКСТА ==========
 
 @dp.message()
 async def handle_message(message: types.Message) -> None:
-    """Обрабатывает текстовые сообщения"""
     text = message.text
+    user_id = message.from_user.id
     
     if not text:
         return
     
-    # Ищем группу по ключу
-    result = db.find_group_by_key(text)
+    db.set_last_query(user_id, text)
+    result = db.find_group(text)
     
     if result:
         group_id, keys, associations = result
         display_name = keys[0]
+        db.set_last_group(user_id, group_id)
         
-        # Сохраняем последнюю группу пользователя
-        db.set_user_last_group(message.from_user.id, group_id)
-        
-        # Формируем список ассоциаций
         assoc_list = "\n".join([f"• {a}" for a in associations])
         
-        # Показываем другие синонимы
-        other_keys = [k for k in keys if k != display_name]
-        syn_msg = f"\n✨ Также можно искать: {', '.join(other_keys[:5])}" if other_keys else ""
-        
         await message.answer(
-            f"✅ **Категория: {display_name}**{syn_msg}\n\n"
-            f"📌 **Варианты ({len(associations)} шт.):**\n\n"
-            f"{assoc_list}\n\n"
-            f"👇 **Выберите интересующий вариант:**",
+            f"✅ **{display_name}**\n\n"
+            f"📌 **Варианты:**\n\n{assoc_list}",
             parse_mode="Markdown",
-            reply_markup=get_associations_keyboard(associations, group_id)
+            reply_markup=associations_keyboard(associations, group_id)
         )
-        logger.info(f"User {message.from_user.id} searched '{text}' -> category '{display_name}'")
     else:
-        # Ничего не найдено
         await message.answer(
-            f"❌ **Ничего не найдено**\n\n"
-            f"'{text}' - нет в базе данных.\n\n"
-            f"💡 Попробуйте: ноут, машина, питон, кофе, пицца",
-            parse_mode="Markdown"
+            f"❌ Ничего не найдено\n\nПопробуйте другое слово",
+            reply_markup=back_to_main_keyboard()
         )
 
-# ========== ОБРАБОТЧИКИ ИНЛАЙН-КНОПОК ==========
+# ========== ОБРАБОТЧИКИ КНОПОК ==========
 
 @dp.callback_query(lambda c: c.data.startswith('assoc_'))
 async def process_association(callback: CallbackQuery):
-    """Показывает детальную информацию по выбранной ассоциации"""
     association = callback.data.replace('assoc_', '')
     user_id = callback.from_user.id
     
-    # Получаем последнюю группу пользователя
-    last_group = db.get_user_last_group(user_id)
-    
-    # Получаем детали
+    last_group = db.get_last_group(user_id)
     details = db.get_details(association)
     
-    if details:
-        # Если есть последняя группа, добавляем кнопку "Назад"
-        if last_group:
-            await callback.message.edit_text(
-                f"📖 **{association}**\n\n{details}",
-                parse_mode="Markdown",
-                reply_markup=get_back_keyboard(last_group)
-            )
-        else:
-            await callback.message.edit_text(
-                f"📖 **{association}**\n\n{details}",
-                parse_mode="Markdown"
-            )
-    else:
-        # Если деталей нет
-        if last_group:
-            await callback.message.edit_text(
-                f"⚠️ Подробная информация для '{association}' не найдена\n\n"
-                f"Но вы можете посмотреть другие варианты!",
-                parse_mode="Markdown",
-                reply_markup=get_back_keyboard(last_group)
-            )
-        else:
-            await callback.message.edit_text(
-                f"⚠️ Подробная информация для '{association}' не найдена\n\n"
-                f"Но вы можете посмотреть другие варианты!",
-                parse_mode="Markdown"
-            )
+    text = f"📖 **{association}**\n\n" + (details if details else "Нет подробной информации")
+    reply = back_to_list_keyboard(last_group) if last_group else back_to_main_keyboard()
     
+    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=reply)
     await callback.answer()
 
-@dp.callback_query(lambda c: c.data.startswith('back_'))
-async def process_back(callback: CallbackQuery):
-    """Возвращает к списку ассоциаций"""
-    group_id = callback.data.replace('back_', '')
+@dp.callback_query(lambda c: c.data.startswith('back_to_list_'))
+async def process_back_to_list(callback: CallbackQuery):
+    group_id = callback.data.replace('back_to_list_', '')
+    group = db.get_group(group_id)
     
-    # Получаем данные группы
-    group_data = db.get_group_by_id(group_id)
-    
-    if group_data:
-        keys, associations = group_data
+    if group:
+        keys, associations = group
         display_name = keys[0]
-        
-        # Формируем список ассоциаций
         assoc_list = "\n".join([f"• {a}" for a in associations])
         
-        # Показываем другие синонимы
-        other_keys = [k for k in keys if k != display_name]
-        syn_msg = f"\n✨ Также можно искать: {', '.join(other_keys[:5])}" if other_keys else ""
-        
         await callback.message.edit_text(
-            f"✅ **Категория: {display_name}**{syn_msg}\n\n"
-            f"📌 **Варианты ({len(associations)} шт.):**\n\n"
-            f"{assoc_list}\n\n"
-            f"👇 **Выберите интересующий вариант:**",
+            f"✅ **{display_name}**\n\n📌 **Варианты:**\n\n{assoc_list}",
             parse_mode="Markdown",
-            reply_markup=get_associations_keyboard(associations, group_id)
+            reply_markup=associations_keyboard(associations, group_id)
         )
-    else:
-        await callback.message.edit_text(
-            "❌ Ошибка: группа не найдена.\n\n"
-            "Напишите /start для начала работы."
-        )
-    
     await callback.answer()
 
-# ========== ЗАПУСК БОТА ==========
+@dp.callback_query(lambda c: c.data == "back_to_search")
+async def process_back_to_search(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    last_query = db.get_last_query(user_id)
+    
+    text = "🔍 Введите слово для поиска"
+    if last_query:
+        text += f"\n\nПоследний запрос: '{last_query}'"
+    
+    await callback.message.edit_text(text, reply_markup=back_to_main_keyboard())
+    await callback.answer()
 
-async def delete_webhook_and_start() -> None:
-    """Удаляет вебхук и запускает polling"""
+@dp.callback_query(lambda c: c.data == "back_to_main")
+async def process_back_to_main(callback: CallbackQuery):
+    await callback.message.delete()
+    await cmd_start(callback.message)
+    await callback.answer()
+
+# ========== ЗАПУСК ==========
+
+async def delete_webhook() -> None:
     try:
-        webhook_info = await bot.get_webhook_info()
-        if webhook_info.url:
+        info = await bot.get_webhook_info()
+        if info.url:
             await bot.delete_webhook(drop_pending_updates=True)
             logger.info("✅ Webhook удален")
     except Exception as e:
-        logger.error(f"Ошибка при удалении webhook: {e}")
+        logger.error(f"Ошибка удаления webhook: {e}")
 
 async def main() -> None:
-    """Главная функция запуска"""
     logger.info("🚀 Бот запускается...")
-    
-    try:
-        bot_info = await bot.get_me()
-        logger.info(f"✅ Бот @{bot_info.username} авторизован")
-        
-        await delete_webhook_and_start()
-        
-        logger.info("🔄 Начинаем polling...")
-        await dp.start_polling(bot, skip_updates=True)
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка: {e}")
-    finally:
-        await bot.session.close()
+    await delete_webhook()
+    logger.info("🔄 Polling...")
+    await dp.start_polling(bot, skip_updates=True)
 
 if __name__ == "__main__":
     try:
