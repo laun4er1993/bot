@@ -38,11 +38,12 @@ class DataBase:
         self.multi_keys_file = os.path.join(data_dir, "multi_keys.txt")
         self.details_file = os.path.join(data_dir, "details.txt")
         
-        # Теперь ключ может вести к нескольким группам
+        # Данные
         self.key_to_groups: Dict[str, List[str]] = {}  # ключ -> список group_id
         self.groups: Dict[str, Dict] = {}  # group_id -> {keys, associations, display_name}
-        self.details: Dict[str, str] = {}
+        self.details: Dict[str, str] = {}  # ассоциация -> детали
         
+        # История пользователей
         self.user_last_group: Dict[int, str] = {}
         self.user_last_query: Dict[int, str] = {}
         
@@ -70,7 +71,7 @@ class DataBase:
                             
                             if keys and associations:
                                 group_id = f"group_{line_num}"
-                                display_name = keys[0]  # Первый ключ как название группы
+                                display_name = keys[0]
                                 
                                 # Сохраняем группу
                                 self.groups[group_id] = {
@@ -94,30 +95,23 @@ class DataBase:
             logger.error(f"❌ Ошибка загрузки: {e}")
     
     def _create_example_file(self) -> None:
-        """Создает пример файла с дублирующимися ключами"""
-        example = '''# Пример с дублирующимися ключами
-# Формат: ключ1,ключ2,ключ3|ассоциация1|ассоциация2
+        """Создает пример файла с данными"""
+        example = '''# Формат: ключ1,ключ2|ассоциация1|ассоциация2
 
 # Яблоко как фрукт
-яблоко,фрукт,apple|🍎 Красное|🍏 Зеленое|🍎 Голден
+яблоко,фрукт,apple|🍎 Красное яблоко|🍏 Зеленое яблоко
 
-# Яблоко как бренд (Apple)
-apple,айфон,iphone,mac|📱 iPhone|💻 MacBook|⌚ Watch
-
-# Яблоко в кулинарии
-яблоко,пирог,десерт|🥧 Шарлотка|🍎 Яблочный пирог|🧃 Сок
+# Яблоко как бренд
+apple,iphone,mac|📱 iPhone 15|💻 MacBook Pro
 
 # Машина как автомобиль
-машина,авто,car|🚗 Седан|🚙 Кроссовер|🏎️ Спорткар
+машина,авто,car|🚗 Toyota Camry|🚙 Kia Sportage
 
 # Машина как устройство
-машина,стиралка,technics|🧺 Стиральная|☕ Кофемашина|🪡 Швейная
-
-# Python как змея
-python,змея,snake|🐍 Королевский|🐍 Сетчатый|🐍 Анаконда
+машина,стиралка|🧺 Стиральная машина|☕ Кофемашина
 
 # Python как язык
-python,питон,programming|🐍 Основы|🌐 Веб|🤖 ML
+python,питон|🐍 Основы Python|🌐 Django
 '''
         with open(self.multi_keys_file, 'w', encoding='utf-8') as f:
             f.write(example)
@@ -151,21 +145,24 @@ python,питон,programming|🐍 Основы|🌐 Веб|🤖 ML
         
         text_lower = text.lower().strip()
         found_groups = []
+        seen_group_ids = set()
         
         # Прямое совпадение
         if text_lower in self.key_to_groups:
             for group_id in self.key_to_groups[text_lower]:
-                group = self.groups[group_id]
-                found_groups.append((group_id, group['display_name'], group['associations']))
+                if group_id not in seen_group_ids:
+                    group = self.groups[group_id]
+                    found_groups.append((group_id, group['display_name'], group['associations']))
+                    seen_group_ids.add(group_id)
         
         # Поиск по вхождению
         for key, group_ids in self.key_to_groups.items():
-            if key in text_lower and key != text_lower:  # Чтобы не дублировать прямые совпадения
+            if key in text_lower and key != text_lower:
                 for group_id in group_ids:
-                    group = self.groups[group_id]
-                    # Проверяем, не добавили ли уже эту группу
-                    if not any(g[0] == group_id for g in found_groups):
+                    if group_id not in seen_group_ids:
+                        group = self.groups[group_id]
                         found_groups.append((group_id, group['display_name'], group['associations']))
+                        seen_group_ids.add(group_id)
         
         return found_groups
     
@@ -191,24 +188,19 @@ python,питон,programming|🐍 Основы|🌐 Веб|🤖 ML
         logger.info(f"📊 Статистика:")
         logger.info(f"   • Групп: {len(self.groups)}")
         logger.info(f"   • Уникальных ключей: {len(self.key_to_groups)}")
-        
-        # Показываем ключи с дубликатами
-        duplicates = {key: groups for key, groups in self.key_to_groups.items() if len(groups) > 1}
-        if duplicates:
-            logger.info(f"   • Ключей с дубликатами: {len(duplicates)}")
-            for key, groups in list(duplicates.items())[:3]:  # Показываем первые 3
-                logger.info(f"     - '{key}' встречается в {len(groups)} группах")
 
 db = DataBase()
 
 # ========== КЛАВИАТУРЫ ==========
 
 def back_to_main_keyboard() -> InlineKeyboardMarkup:
+    """Кнопка возврата в главное меню"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🏠 В начало", callback_data="back_to_main")]
     ])
 
 def back_to_list_keyboard(group_id: str) -> InlineKeyboardMarkup:
+    """Кнопка возврата к списку ассоциаций"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔙 Назад к списку", callback_data=f"back_to_list_{group_id}")]
     ])
@@ -218,12 +210,12 @@ def groups_keyboard(groups: List[Tuple[str, str, List[str]]]) -> InlineKeyboardM
     keyboard = []
     
     for group_id, display_name, associations in groups:
-        # Показываем первые 2 ассоциации как пример
-        examples = ", ".join(associations[:2])
-        button_text = f"{display_name} ({examples}...)"
+        # Показываем первую ассоциацию как пример
+        example = associations[0] if associations else ""
+        button_text = f"{display_name} ({example})"
         keyboard.append([InlineKeyboardButton(
             text=button_text,
-            callback_data=f"group_{group_id}"
+            callback_data=f"select_group_{group_id}"
         )])
     
     keyboard.append([InlineKeyboardButton(text="🔙 Назад к поиску", callback_data="back_to_search")])
@@ -231,11 +223,12 @@ def groups_keyboard(groups: List[Tuple[str, str, List[str]]]) -> InlineKeyboardM
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 def associations_keyboard(associations: List[str], group_id: str) -> InlineKeyboardMarkup:
+    """Клавиатура со списком ассоциаций"""
     keyboard = []
     row = []
     
     for i, assoc in enumerate(associations):
-        row.append(InlineKeyboardButton(text=assoc, callback_data=f"assoc_{assoc}"))
+        row.append(InlineKeyboardButton(text=assoc, callback_data=f"show_details_{assoc}"))
         if len(row) == 2 or i == len(associations) - 1:
             keyboard.append(row)
             row = []
@@ -248,14 +241,14 @@ def associations_keyboard(associations: List[str], group_id: str) -> InlineKeybo
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message) -> None:
+    """Обработчик команды /start"""
     await message.answer(
         f"👋 Привет, {message.from_user.full_name}!\n\n"
         f"🔍 Напиши слово для поиска.\n\n"
-        f"📋 **Примеры с дубликатами:**\n"
-        f"• 'яблоко' - фрукт, бренд, кулинария\n"
-        f"• 'apple' - фрукт, бренд\n"
-        f"• 'машина' - автомобиль, устройство\n"
-        f"• 'python' - змея, язык\n\n"
+        f"📋 **Примеры:**\n"
+        f"• яблоко - фрукт и бренд\n"
+        f"• машина - автомобиль и устройство\n"
+        f"• python - язык программирования\n\n"
         f"💡 Если слово встречается в нескольких категориях, "
         f"бот предложит выбрать нужную!",
         parse_mode="Markdown",
@@ -264,34 +257,22 @@ async def cmd_start(message: types.Message) -> None:
 
 @dp.message(Command("help"))
 async def cmd_help(message: types.Message) -> None:
+    """Обработчик команды /help"""
     await message.answer(
         "🤖 **Помощь:**\n\n"
-        "• Напишите слово - бот покажет все категории\n"
-        "• Если слово в нескольких категориях - выберите нужную\n"
-        "• Затем выберите вариант\n"
-        "• Кнопки назад вернут к выбору",
+        "1️⃣ Напишите слово - бот покажет все категории\n"
+        "2️⃣ Если категорий несколько - выберите нужную\n"
+        "3️⃣ Выберите вариант из списка\n"
+        "4️⃣ Получите подробную информацию\n\n"
+        "🔙 Кнопки «Назад» возвращают к предыдущему шагу",
         parse_mode="Markdown"
     )
-
-@dp.message(Command("stats"))
-async def cmd_stats(message: types.Message) -> None:
-    """Статистика базы данных"""
-    stats = [
-        f"📊 **Статистика:**",
-        f"• Групп: {len(db.groups)}",
-        f"• Уникальных ключей: {len(db.key_to_groups)}",
-    ]
-    
-    # Считаем дубликаты
-    duplicates = sum(1 for groups in db.key_to_groups.values() if len(groups) > 1)
-    stats.append(f"• Ключей с дубликатами: {duplicates}")
-    
-    await message.answer("\n".join(stats), parse_mode="Markdown")
 
 # ========== ОБРАБОТЧИК ТЕКСТА ==========
 
 @dp.message()
 async def handle_message(message: types.Message) -> None:
+    """Обрабатывает текстовые сообщения"""
     text = message.text
     user_id = message.from_user.id
     
@@ -330,12 +311,12 @@ async def handle_message(message: types.Message) -> None:
             reply_markup=back_to_main_keyboard()
         )
 
-# ========== ОБРАБОТЧИКИ КНОПОК ==========
+# ========== ОБРАБОТЧИКИ ИНЛАЙН-КНОПОК ==========
 
-@dp.callback_query(lambda c: c.data.startswith('group_'))
+@dp.callback_query(lambda c: c.data.startswith('select_group_'))
 async def process_group_select(callback: CallbackQuery):
     """Обработка выбора группы при дубликатах"""
-    group_id = callback.data.replace('group_', '')
+    group_id = callback.data.replace('select_group_', '')
     user_id = callback.from_user.id
     
     group = db.get_group(group_id)
@@ -356,15 +337,20 @@ async def process_group_select(callback: CallbackQuery):
     
     await callback.answer()
 
-@dp.callback_query(lambda c: c.data.startswith('assoc_'))
-async def process_association(callback: CallbackQuery):
-    association = callback.data.replace('assoc_', '')
+@dp.callback_query(lambda c: c.data.startswith('show_details_'))
+async def process_show_details(callback: CallbackQuery):
+    """Показывает детальную информацию по ассоциации"""
+    association = callback.data.replace('show_details_', '')
     user_id = callback.from_user.id
     
     last_group = db.get_last_group(user_id)
     details = db.get_details(association)
     
-    text = f"📖 **{association}**\n\n" + (details if details else "Нет подробной информации")
+    if details:
+        text = f"📖 **{association}**\n\n{details}"
+    else:
+        text = f"📖 **{association}**\n\n*Нет подробного описания*"
+    
     reply = back_to_list_keyboard(last_group) if last_group else back_to_main_keyboard()
     
     await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=reply)
@@ -372,6 +358,7 @@ async def process_association(callback: CallbackQuery):
 
 @dp.callback_query(lambda c: c.data.startswith('back_to_list_'))
 async def process_back_to_list(callback: CallbackQuery):
+    """Возвращает к списку ассоциаций"""
     group_id = callback.data.replace('back_to_list_', '')
     group = db.get_group(group_id)
     
@@ -389,6 +376,7 @@ async def process_back_to_list(callback: CallbackQuery):
 
 @dp.callback_query(lambda c: c.data == "back_to_search")
 async def process_back_to_search(callback: CallbackQuery):
+    """Возвращает к поиску"""
     user_id = callback.from_user.id
     last_query = db.get_last_query(user_id)
     
@@ -401,6 +389,7 @@ async def process_back_to_search(callback: CallbackQuery):
 
 @dp.callback_query(lambda c: c.data == "back_to_main")
 async def process_back_to_main(callback: CallbackQuery):
+    """Возвращает в главное меню"""
     await callback.message.delete()
     await cmd_start(callback.message)
     await callback.answer()
@@ -408,6 +397,7 @@ async def process_back_to_main(callback: CallbackQuery):
 # ========== ЗАПУСК ==========
 
 async def delete_webhook() -> None:
+    """Удаляет вебхук если есть"""
     try:
         info = await bot.get_webhook_info()
         if info.url:
@@ -417,6 +407,7 @@ async def delete_webhook() -> None:
         logger.error(f"Ошибка удаления webhook: {e}")
 
 async def main() -> None:
+    """Главная функция"""
     logger.info("🚀 Бот запускается...")
     await delete_webhook()
     logger.info("🔄 Polling...")
