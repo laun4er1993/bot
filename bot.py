@@ -2,13 +2,12 @@ import asyncio
 import logging
 import os
 import sys
-from typing import Optional, Dict, List, Tuple, Set
+from typing import Optional, Dict, List, Tuple
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import (
-    ReplyKeyboardMarkup, 
-    KeyboardButton,
+    ReplyKeyboardRemove,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
     CallbackQuery
@@ -51,6 +50,9 @@ class MultiKeyToAssociationsDB:
         self.group_to_associations: Dict[str, List[str]] = {}  # ID группы -> список ассоциаций
         self.group_to_display: Dict[str, str] = {}  # ID группы -> отображаемое имя
         self.details: Dict[str, str] = {}            # ассоциация -> детали
+        
+        # Для хранения предыдущего состояния пользователя
+        self.user_last_group: Dict[int, str] = {}    # user_id -> последняя group_id
         
         self.load_all_data()
     
@@ -198,9 +200,23 @@ python,питон,пайтон,python3|🐍 Основы|🌐 Веб|🤖 Маш
         
         return None
     
+    def get_group_by_id(self, group_id: str) -> Optional[Tuple[List[str], List[str]]]:
+        """Возвращает группу по ID"""
+        if group_id in self.group_to_keys:
+            return self.group_to_keys[group_id], self.group_to_associations[group_id]
+        return None
+    
     def get_details(self, association: str) -> Optional[str]:
         """Возвращает детали для ассоциации"""
         return self.details.get(association)
+    
+    def set_user_last_group(self, user_id: int, group_id: str):
+        """Сохраняет последнюю группу пользователя"""
+        self.user_last_group[user_id] = group_id
+    
+    def get_user_last_group(self, user_id: int) -> Optional[str]:
+        """Возвращает последнюю группу пользователя"""
+        return self.user_last_group.get(user_id)
     
     def log_stats(self):
         """Логирует статистику базы данных"""
@@ -216,17 +232,12 @@ db = MultiKeyToAssociationsDB()
 
 # ========== КЛАВИАТУРЫ ==========
 
-def get_main_keyboard() -> ReplyKeyboardMarkup:
-    """Создает главную клавиатуру"""
+def get_back_keyboard(group_id: str) -> InlineKeyboardMarkup:
+    """Создает клавиатуру с кнопкой 'Назад'"""
     keyboard = [
-        [KeyboardButton(text="🔍 Поиск"), KeyboardButton(text="🏠 К началу")],
-        [KeyboardButton(text="❓ Помощь")]
+        [InlineKeyboardButton(text="🔙 Назад к списку", callback_data=f"back_{group_id}")]
     ]
-    return ReplyKeyboardMarkup(
-        keyboard=keyboard,
-        resize_keyboard=True,
-        input_field_placeholder="Напишите что ищете..."
-    )
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 def get_associations_keyboard(associations: List[str], group_id: str) -> InlineKeyboardMarkup:
     """Создает клавиатуру с ассоциациями"""
@@ -243,12 +254,6 @@ def get_associations_keyboard(associations: List[str], group_id: str) -> InlineK
             keyboard.append(row)
             row = []
     
-    # Добавляем кнопку "🏠 К началу" внизу
-    keyboard.append([InlineKeyboardButton(
-        text="🏠 К началу", 
-        callback_data="back_to_start"
-    )])
-    
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 # ========== ОБРАБОТЧИКИ КОМАНД ==========
@@ -259,27 +264,25 @@ async def cmd_start(message: types.Message) -> None:
     welcome_text = (
         f"👋 Привет, {message.from_user.full_name}!\n\n"
         f"🔍 **Как это работает:**\n"
-        f"1️⃣ Напиши что хочешь найти (например: ноут, машина, питон)\n"
-        f"2️⃣ Бот покажет все связанные ассоциации\n"
-        f"3️⃣ Выбери нужную ассоциацию\n"
-        f"4️⃣ Получи подробную информацию!\n\n"
+        f"Просто напиши что хочешь найти, и я покажу все варианты!\n\n"
         f"📋 **Примеры запросов:**\n"
-        f"• ноут, laptop, макбук → ноутбуки\n"
-        f"• пицца, pizza → еда\n"
-        f"• машина, car, авто → автомобили\n"
-        f"• кофе, coffee → напитки\n\n"
-        f"🏠 **Кнопка «К началу»** всегда вернёт тебя сюда!"
+        f"• ноут, laptop, макбук\n"
+        f"• пицца, pizza\n"
+        f"• машина, car, авто\n"
+        f"• кофе, coffee\n"
+        f"• питон, python\n\n"
+        f"💡 **Совет:** Можно использовать разные слова для поиска!"
     )
     
+    # Убираем все кнопки (ReplyKeyboardRemove)
     await message.answer(
         welcome_text,
         parse_mode="Markdown",
-        reply_markup=get_main_keyboard()
+        reply_markup=ReplyKeyboardRemove()
     )
     logger.info(f"User {message.from_user.id} started the bot")
 
 @dp.message(Command("help"))
-@dp.message(lambda msg: msg.text == "❓ Помощь")
 async def cmd_help(message: types.Message) -> None:
     """Обработчик команды /help"""
     help_text = (
@@ -289,14 +292,14 @@ async def cmd_help(message: types.Message) -> None:
         "• /help - Это сообщение\n\n"
         "**Как пользоваться:**\n"
         "1. Напишите любое слово (например: **ноут**)\n"
-        "2. Бот покажет все ассоциации для этой категории\n"
-        "3. Нажмите на кнопку с ассоциацией\n"
-        "4. Получите детальную информацию!\n\n"
+        "2. Бот покажет все варианты для этой категории\n"
+        "3. Нажмите на кнопку с интересующим вариантом\n"
+        "4. Получите подробную информацию!\n\n"
         "**Примеры синонимов:**\n"
         "• ноут, laptop, макбук → категория **ноутбук**\n"
         "• питон, пайтон → категория **python**\n"
         "• машина, авто, car → категория **автомобиль**\n\n"
-        "🏠 **Кнопка «К началу»** возвращает в главное меню"
+        "🔙 **Кнопка «Назад»** возвращает к списку вариантов"
     )
     
     await message.answer(help_text, parse_mode="Markdown")
@@ -311,27 +314,15 @@ async def handle_message(message: types.Message) -> None:
     if not text:
         return
     
-    # Обработка кнопки "Поиск"
-    if text == "🔍 Поиск":
-        await message.answer(
-            "🔍 **Режим поиска**\n\n"
-            "Напишите любое слово, и я покажу все связанные ассоциации!\n\n"
-            "📝 Например: ноут, машина, питон, кофе, пицца",
-            parse_mode="Markdown"
-        )
-        return
-    
-    # Обработка кнопки "🏠 К началу"
-    if text == "🏠 К началу":
-        await cmd_start(message)
-        return
-    
     # Ищем группу по ключу
     result = db.find_group_by_key(text)
     
     if result:
         group_id, keys, associations = result
         display_name = keys[0]
+        
+        # Сохраняем последнюю группу пользователя
+        db.set_user_last_group(message.from_user.id, group_id)
         
         # Формируем список ассоциаций
         assoc_list = "\n".join([f"• {a}" for a in associations])
@@ -342,7 +333,7 @@ async def handle_message(message: types.Message) -> None:
         
         await message.answer(
             f"✅ **Категория: {display_name}**{syn_msg}\n\n"
-            f"📌 **Ассоциации ({len(associations)} шт.):**\n\n"
+            f"📌 **Варианты ({len(associations)} шт.):**\n\n"
             f"{assoc_list}\n\n"
             f"👇 **Выберите интересующий вариант:**",
             parse_mode="Markdown",
@@ -354,8 +345,7 @@ async def handle_message(message: types.Message) -> None:
         await message.answer(
             f"❌ **Ничего не найдено**\n\n"
             f"'{text}' - нет в базе данных.\n\n"
-            f"💡 Попробуйте: ноут, машина, питон, кофе, пицца\n"
-            f"🏠 Нажмите «К началу» для возврата в меню",
+            f"💡 Попробуйте: ноут, машина, питон, кофе, пицца",
             parse_mode="Markdown"
         )
 
@@ -365,47 +355,77 @@ async def handle_message(message: types.Message) -> None:
 async def process_association(callback: CallbackQuery):
     """Показывает детальную информацию по выбранной ассоциации"""
     association = callback.data.replace('assoc_', '')
+    user_id = callback.from_user.id
+    
+    # Получаем последнюю группу пользователя
+    last_group = db.get_user_last_group(user_id)
     
     # Получаем детали
     details = db.get_details(association)
     
-    # Создаем клавиатуру с кнопкой "К началу"
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🏠 К началу", callback_data="back_to_start")]
-    ])
-    
     if details:
-        await callback.message.edit_text(
-            f"📖 **{association}**\n\n{details}",
-            parse_mode="Markdown",
-            reply_markup=keyboard
-        )
+        # Если есть последняя группа, добавляем кнопку "Назад"
+        if last_group:
+            await callback.message.edit_text(
+                f"📖 **{association}**\n\n{details}",
+                parse_mode="Markdown",
+                reply_markup=get_back_keyboard(last_group)
+            )
+        else:
+            await callback.message.edit_text(
+                f"📖 **{association}**\n\n{details}",
+                parse_mode="Markdown"
+            )
     else:
-        await callback.message.edit_text(
-            f"⚠️ Информация для '{association}' не найдена\n\n"
-            f"Но вы можете посмотреть другие ассоциации!",
-            parse_mode="Markdown",
-            reply_markup=keyboard
-        )
+        # Если деталей нет
+        if last_group:
+            await callback.message.edit_text(
+                f"⚠️ Подробная информация для '{association}' не найдена\n\n"
+                f"Но вы можете посмотреть другие варианты!",
+                parse_mode="Markdown",
+                reply_markup=get_back_keyboard(last_group)
+            )
+        else:
+            await callback.message.edit_text(
+                f"⚠️ Подробная информация для '{association}' не найдена\n\n"
+                f"Но вы можете посмотреть другие варианты!",
+                parse_mode="Markdown"
+            )
     
     await callback.answer()
 
-@dp.callback_query(lambda c: c.data == "back_to_start")
-async def process_back_to_start(callback: CallbackQuery):
-    """Возвращает в главное меню"""
-    await callback.message.delete()  # Удаляем текущее сообщение
+@dp.callback_query(lambda c: c.data.startswith('back_'))
+async def process_back(callback: CallbackQuery):
+    """Возвращает к списку ассоциаций"""
+    group_id = callback.data.replace('back_', '')
     
-    # Отправляем новое приветствие
-    welcome_text = (
-        f"👋 С возвращением, {callback.from_user.full_name}!\n\n"
-        f"🔍 Напишите слово для поиска или выберите действие:"
-    )
+    # Получаем данные группы
+    group_data = db.get_group_by_id(group_id)
     
-    await callback.message.answer(
-        welcome_text,
-        parse_mode="Markdown",
-        reply_markup=get_main_keyboard()
-    )
+    if group_data:
+        keys, associations = group_data
+        display_name = keys[0]
+        
+        # Формируем список ассоциаций
+        assoc_list = "\n".join([f"• {a}" for a in associations])
+        
+        # Показываем другие синонимы
+        other_keys = [k for k in keys if k != display_name]
+        syn_msg = f"\n✨ Также можно искать: {', '.join(other_keys[:5])}" if other_keys else ""
+        
+        await callback.message.edit_text(
+            f"✅ **Категория: {display_name}**{syn_msg}\n\n"
+            f"📌 **Варианты ({len(associations)} шт.):**\n\n"
+            f"{assoc_list}\n\n"
+            f"👇 **Выберите интересующий вариант:**",
+            parse_mode="Markdown",
+            reply_markup=get_associations_keyboard(associations, group_id)
+        )
+    else:
+        await callback.message.edit_text(
+            "❌ Ошибка: группа не найдена.\n\n"
+            "Напишите /start для начала работы."
+        )
     
     await callback.answer()
 
