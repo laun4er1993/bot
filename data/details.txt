@@ -38,3 +38,19 @@ Rectified by:
 
 Загрузить MBTiles: https://example.com/laptop
 Загрузить KMZ: https://example.com/laptop
+
+N56E34-237-053===🖥️ АФС Бельково
+
+2.09.1942
+Scale: 1 :19.000
+
+Keyword: Бельково
+
+Sortie:    TUGX-9 F2146 SG
+Quality:  Good
+Square:  N56E34
+Overlay: 237
+Frame:   053
+Owner:  ПО Сокол
+GM WS: 
+Rectified by:
