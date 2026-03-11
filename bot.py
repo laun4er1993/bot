@@ -98,37 +98,36 @@ class PhotosDatabase:
         except Exception as e:
             logger.error(f"❌ Ошибка загрузки multi_keys: {e}")
     
-    def load_details(self) -> None:
-        """Загружает детальную информацию о снимках из details.txt"""
-        try:
-            if os.path.exists(self.details_file):
-                with open(self.details_file, 'r', encoding='utf-8') as f:
-                    lines = f.readlines()
-                    logger.info(f"📄 Читаем файл {self.details_file}, всего строк: {len(lines)}")
+def load_details(self) -> None:
+    """Загружает детальную информацию о снимках из details.txt (многострочный формат)"""
+    try:
+        if os.path.exists(self.details_file):
+            with open(self.details_file, 'r', encoding='utf-8') as f:
+                content = f.read()
+                logger.info(f"📄 Читаем файл {self.details_file}, размер: {len(content)} байт")
+                
+                # Разделяем по маркеру ===, но сохраняем структуру
+                entries = content.split('===')
+                
+                for i in range(len(entries) - 1):
+                    # Получаем номер снимка (последняя строка перед ===)
+                    lines = entries[i].strip().split('\n')
+                    photo_num = lines[-1].strip() if lines else ""
                     
-                    for line_num, line in enumerate(lines):
-                        line = line.strip()
-                        if not line or line.startswith('#'):
-                            continue
-                        
-                        # Формат: НОМЕР_СНИМКА===ПОДРОБНОЕ_ОПИСАНИЕ
-                        if '===' in line:
-                            parts = line.split('===', 1)
-                            if len(parts) == 2:
-                                photo_num = parts[0].strip()
-                                details = parts[1].strip()
-                                
-                                if photo_num and details:
-                                    self.photo_details[photo_num] = details
-                                    logger.info(f"  Загружен снимок: {photo_num}")
+                    # Получаем описание (всё что после === до следующего === или конца файла)
+                    description = entries[i + 1].strip()
+                    
+                    if photo_num and description and not photo_num.startswith('#'):
+                        self.photo_details[photo_num] = description
+                        logger.info(f"  ✅ Загружен снимок: {photo_num} (описание: {len(description)} символов)")
                 
                 logger.info(f"✅ Загружено {len(self.photo_details)} описаний снимков из details.txt")
-            else:
-                logger.warning(f"⚠️ Файл {self.details_file} не найден")
-                
-        except Exception as e:
-            logger.error(f"❌ Ошибка загрузки details: {e}", exc_info=True)
-    
+        else:
+            logger.warning(f"⚠️ Файл {self.details_file} не найден")
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка загрузки details: {e}", exc_info=True)
+        
     def search_by_village(self, query: str) -> List[Dict]:
         """
         Ищет записи по названию деревни
