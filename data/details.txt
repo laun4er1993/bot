@@ -19,8 +19,8 @@
 🖼️ Наложение: 224
 🎞️ Кадр: 011
 🏢 Владелец: ПО Сокол
-🔗 MBTiles: https://example.com/mbtiles/N56E34-224-011.mbtiles
-🗺️ KMZ: https://example.com/kmz/N56E34-224-011.kmz
+🔗 MBTiles: https://disk.yandex.ru/d/cX7KQAlFnuZ9iA
+🗺️ KMZ: https://disk.yandex.ru/d/OwmKSpImXtgqKA
 ===N56E34-224-059===📸 **Снимок N56E34-224-059** - Волыново
 📅 Дата: 25.08.1942
 📏 Масштаб: 1:20800
@@ -52,8 +52,8 @@
 🖼️ Наложение: 242
 🎞️ Кадр: 014
 🏢 Владелец: ПО Пионер
-🔗 MBTiles: https://example.com/mbtiles/N56E34-242-014.mbtiles
-🗺️ KMZ: https://example.com/kmz/N56E34-242-014.kmz
+🔗 MBTiles: https://disk.yandex.ru/d/t5kzo5SiVHs4oA
+🗺️ KMZ: https://disk.yandex.ru/d/q7CliIvHiPw0Mg
 ===N56E34-251-018===📸 **Снимок N56E34-251-018** - Колесниково
 📅 Дата: 22.09.1942
 📏 Масштаб: 1:22000
@@ -63,8 +63,8 @@
 🖼️ Наложение: 251
 🎞️ Кадр: 018
 🏢 Владелец: ПО Сокол
-🔗 MBTiles: https://example.com/mbtiles/N56E34-251-018.mbtiles
-🗺️ KMZ: https://example.com/kmz/N56E34-251-018.kmz
+🔗 MBTiles: https://disk.yandex.ru/d/ZuElVJDCwB_KJQ
+🗺️ KMZ: https://disk.yandex.ru/d/nlbZK1jWty2FQA
 ===N56E34-256-139===📸 **Снимок N56E34-256-139** - Полунино
 📅 Дата: 30.09.1942
 📏 Масштаб: 1:24000
@@ -74,8 +74,8 @@
 🖼️ Наложение: 256
 🎞️ Кадр: 139
 🏢 Владелец: ПО Сокол
-🔗 MBTiles: https://example.com/mbtiles/N56E34-256-139.mbtiles
-🗺️ KMZ: https://example.com/kmz/N56E34-256-139.kmz
+🔗 MBTiles: https://disk.yandex.ru/d/9gtA7V5VAnmJog
+🗺️ KMZ: https://disk.yandex.ru/d/xoe4ITiTazHGAQ
 ===N56E34-271-005===📸 **Снимок N56E34-271-005** - Добрая-Горбово-Победа
 📅 Дата: 06.11.1942
 📏 Масштаб: 1:26000
@@ -85,8 +85,8 @@
 🖼️ Наложение: 271
 🎞️ Кадр: 005
 🏢 Владелец: ПО Сокол
-🔗 MBTiles: https://example.com/mbtiles/N56E34-271-005.mbtiles
-🗺️ KMZ: https://example.com/kmz/N56E34-271-005.kmz
+🔗 MBTiles: Запроси!
+🗺️ KMZ: https://disk.yandex.ru/d/CJF7zafIJ5NWyQ
 ===N56E34-377-041===📸 **Снимок N56E34-377-041** - Тархово
 📅 Дата: 05.05.1943
 📏 Масштаб: 1:48000
@@ -327,8 +327,8 @@
 🖼️ Наложение: 266
 🎞️ Кадр: 016
 🏢 Владелец: ПО Пионер
-🔗 MBTiles:
-🗺️ KMZ:
+🔗 MBTiles:https://disk.yandex.ru/d/Cr9Fhh30yeu2ug
+🗺️ KMZ:https://disk.yandex.ru/d/cgUAMtJgp-EWag
 ===N56E34-202-007===📸 Снимок N56E34-202-007 - Филькино-Бахмутово
 📅 Дата: 12.06.1942
 📏 Масштаб: 1:19000
@@ -338,8 +338,8 @@
 🖼️ Наложение: 202
 🎞️ Кадр: 007
 🏢 Владелец: ПО Пионер
-🔗 MBTiles:
-🗺️ KMZ:
+🔗 MBTiles:https://disk.yandex.ru/d/0DtZVAj3JVa4lg
+🗺️ KMZ:https://disk.yandex.ru/d/Hz_ARoGoEJn_og
 ===N56E34-223-077===📸 Снимок N56E34-223-077 - Гридино
 📅 Дата: 25.08.1942
 📏 Масштаб: 1:51000
@@ -349,8 +349,8 @@
 🖼️ Наложение: 223
 🎞️ Кадр: 077
 🏢 Владелец: ПО Пионер
-🔗 MBTiles:
-🗺️ KMZ:
+🔗 MBTiles:https://disk.yandex.ru/d/VyR7lIu3M5xpHg
+🗺️ KMZ:https://disk.yandex.ru/d/RWZnOBhi-jo8qg
 ===N56E34-224-135===📸 Снимок N56E34-224-135 - Панино
 📅 Дата: 25.08.1942
 📏 Масштаб: 1:20800
@@ -360,5 +360,5 @@
 🖼️ Наложение: 224
 🎞️ Кадр: 135
 🏢 Владелец: ПО Пионер
-🔗 MBTiles:
-🗺️ KMZ:
+🔗 MBTiles:https://disk.yandex.ru/d/cLD8tNdKoRwuSQ
+🗺️ KMZ:https://disk.yandex.ru/d/zS97FCSRDvBTsA
