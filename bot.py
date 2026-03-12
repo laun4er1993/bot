@@ -220,13 +220,23 @@ def get_main_keyboard() -> ReplyKeyboardMarkup:
     """Главное меню бота"""
     keyboard = [
         [KeyboardButton(text="🔍 ПОИСК"), KeyboardButton(text="📋 СПИСОК ДЕРЕВЕНЬ")],
-        [KeyboardButton(text="📖 ИНСТРУКЦИЯ"), KeyboardButton(text="🗺️ КАРТА РЖЕВ")]
+        [KeyboardButton(text="📖 ИНСТРУКЦИЯ"), KeyboardButton(text="🗺️ КАРТА РЖЕВ")],
+        [KeyboardButton(text="🗺️ LOCUS MAPS")]
     ]
     return ReplyKeyboardMarkup(
         keyboard=keyboard,
         resize_keyboard=True,
         input_field_placeholder="Выберите действие..."
     )
+
+def get_locus_maps_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура для раздела Locus Maps"""
+    keyboard = [
+        [InlineKeyboardButton(text="📖 Инструкция по Locus Maps", callback_data="locus_instruction")],
+        [InlineKeyboardButton(text="📥 Скачать карты для Locus", callback_data="locus_download")],
+        [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 def back_to_main_keyboard() -> InlineKeyboardMarkup:
     """Инлайн-кнопка возврата в главное меню"""
@@ -267,7 +277,8 @@ async def cmd_start(message: types.Message) -> None:
         f"• 🔍 Поиск снимков по названию деревни\n"
         f"• 📋 Просмотр всех доступных деревень\n"
         f"• 📖 Подробная инструкция по использованию\n"
-        f"• 🗺️ Скачивание карты Ржевского района\n\n"
+        f"• 🗺️ Скачивание карты Ржевского района\n"
+        f"• 🗺️ Locus Maps - инструкция и карты для приложения\n\n"
         f"👇 **Выберите действие в меню ниже:**"
     )
     
@@ -333,6 +344,9 @@ async def menu_instruction(message: types.Message):
         "🗺️ **Карта Ржев:**\n"
         "• Скачивание карты Ржевского района\n"
         "• Полезно для ориентирования\n\n"
+        "🗺️ **Locus Maps:**\n"
+        "• Инструкция по использованию приложения Locus Maps\n"
+        "• Скачивание готовых карт для приложения\n\n"
         "❓ **Дополнительно:**\n"
         "• После просмотра снимка можно вернуться к списку\n"
         "• Кнопка 🏠 В главное меню возвращает в начало\n\n"
@@ -359,6 +373,130 @@ async def menu_map(message: types.Message):
     ])
     
     await message.answer(map_text, parse_mode="Markdown", reply_markup=keyboard)
+
+@dp.message(F.text == "🗺️ LOCUS MAPS")
+async def menu_locus_maps(message: types.Message):
+    """Обработчик кнопки LOCUS MAPS"""
+    locus_text = (
+        "🗺️ **Locus Maps**\n\n"
+        "Locus Maps - это мощное приложение для работы с картами в походах и экспедициях.\n\n"
+        "Здесь вы можете:\n"
+        "• 📖 Ознакомиться с инструкцией по использованию\n"
+        "• 📥 Скачать готовые карты для загрузки в приложение\n\n"
+        "👇 **Выберите действие:**"
+    )
+    
+    await message.answer(
+        locus_text,
+        parse_mode="Markdown",
+        reply_markup=get_locus_maps_keyboard()
+    )
+
+# ========== ОБРАБОТЧИКИ ИНЛАЙН-КНОПОК LOCUS MAPS ==========
+
+@dp.callback_query(lambda c: c.data == "locus_instruction")
+async def process_locus_instruction(callback: CallbackQuery):
+    """Инструкция по Locus Maps"""
+    instruction_text = (
+        "📖 **Инструкция по использованию Locus Maps**\n\n"
+        "**Установка приложения:**\n"
+        "1. Скачайте Locus Maps из Google Play или App Store\n"
+        "2. Установите приложение на устройство\n\n"
+        "**Загрузка карт:**\n"
+        "1. Нажмите кнопку «Скачать карты для Locus»\n"
+        "2. Скачайте архив с картами\n"
+        "3. Распакуйте архив в папку Locus/maps на вашем устройстве\n\n"
+        "**Использование карт:**\n"
+        "1. Откройте Locus Maps\n"
+        "2. В меню выберите «Карты» → «Загруженные»\n"
+        "3. Выберите нужную карту\n"
+        "4. Используйте навигацию по карте\n\n"
+        "**Особенности:**\n"
+        "• Карты работают офлайн\n"
+        "• Поддерживается поиск по координатам\n"
+        "• Можно накладывать несколько слоев\n\n"
+        "🔗 **Полезные ссылки:**\n"
+        "• Официальный сайт: https://www.locusmap.eu\n"
+        "• Документация: https://docs.locusmap.eu"
+    )
+    
+    # Создаем клавиатуру с дополнительными кнопками
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📥 Скачать карты", callback_data="locus_download")],
+        [InlineKeyboardButton(text="🌐 Официальный сайт", url="https://www.locusmap.eu")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_locus")],
+        [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
+    ])
+    
+    await callback.message.edit_text(
+        instruction_text,
+        parse_mode="Markdown",
+        reply_markup=keyboard
+    )
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data == "locus_download")
+async def process_locus_download(callback: CallbackQuery):
+    """Скачивание карт для Locus Maps"""
+    download_text = (
+        "📥 **Скачать карты для Locus Maps**\n\n"
+        "Доступны следующие карты Ржевского района:\n\n"
+        "1️⃣ **Топографическая карта**\n"
+        "   • Масштаб: 1:50000\n"
+        "   • Формат: SQLiteDB\n"
+        "   • Размер: 45 МБ\n"
+        "   • Ссылка: https://example.com/locus/rzhev-topo.sqlitedb\n\n"
+        "2️⃣ **Карта высот (рельеф)**\n"
+        "   • Масштаб: 1:100000\n"
+        "   • Формат: SQLiteDB\n"
+        "   • Размер: 32 МБ\n"
+        "   • Ссылка: https://example.com/locus/rzhev-elevation.sqlitedb\n\n"
+        "3️⃣ **Спутниковые снимки 1942-1943**\n"
+        "   • Масштаб: 1:25000\n"
+        "   • Формат: MBTiles\n"
+        "   • Размер: 128 МБ\n"
+        "   • Ссылка: https://example.com/locus/rzhev-1942.mbtiles\n\n"
+        "**Инструкция по установке:**\n"
+        "1. Скачайте нужный файл\n"
+        "2. Поместите его в папку Locus/maps/\n"
+        "3. Откройте Locus Maps и выберите карту"
+    )
+    
+    # Создаем клавиатуру со ссылками на скачивание
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🗺️ Топографическая карта", url="https://example.com/locus/rzhev-topo.sqlitedb")],
+        [InlineKeyboardButton(text="⛰️ Карта высот", url="https://example.com/locus/rzhev-elevation.sqlitedb")],
+        [InlineKeyboardButton(text="🛩️ Снимки 1942-43", url="https://example.com/locus/rzhev-1942.mbtiles")],
+        [InlineKeyboardButton(text="📖 Инструкция", callback_data="locus_instruction")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_locus")],
+        [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
+    ])
+    
+    await callback.message.edit_text(
+        download_text,
+        parse_mode="Markdown",
+        reply_markup=keyboard
+    )
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data == "back_to_locus")
+async def process_back_to_locus(callback: CallbackQuery):
+    """Возврат в меню Locus Maps"""
+    locus_text = (
+        "🗺️ **Locus Maps**\n\n"
+        "Locus Maps - это мощное приложение для работы с картами в походах и экспедициях.\n\n"
+        "Здесь вы можете:\n"
+        "• 📖 Ознакомиться с инструкцией по использованию\n"
+        "• 📥 Скачать готовые карты для загрузки в приложение\n\n"
+        "👇 **Выберите действие:**"
+    )
+    
+    await callback.message.edit_text(
+        locus_text,
+        parse_mode="Markdown",
+        reply_markup=get_locus_maps_keyboard()
+    )
+    await callback.answer()
 
 # ========== ОБРАБОТЧИК ПОИСКА ==========
 
