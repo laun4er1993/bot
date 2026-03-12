@@ -2,16 +2,21 @@ import asyncio
 import logging
 import os
 import sys
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Set
 
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import (
-    ReplyKeyboardRemove,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
-    CallbackQuery
+    CallbackQuery,
+    ReplyKeyboardRemove
 )
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
 
 # Токен из переменных окружения
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -27,8 +32,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Инициализация бота и хранилища состояний
+storage = MemoryStorage()
 bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher()
+dp = Dispatcher(storage=storage)
 
 # ========== КЛАСС ДЛЯ РАБОТЫ С ДАННЫМИ ==========
 
@@ -40,13 +47,14 @@ class PhotosDatabase:
         
         # Данные из multi_keys.txt
         self.locations: List[Dict] = []
+        self.all_villages: Set[str] = set()  # Все уникальные деревни
         
         # Данные из details.txt
         self.photo_details: Dict[str, str] = {}
         
         # История пользователей
         self.user_last_photos: Dict[int, List[str]] = {}
-        self.user_last_villages: Dict[int, str] = {}  # Добавлено для хранения списка деревень
+        self.user_last_villages: Dict[int, str] = {}
         self.user_last_query: Dict[int, str] = {}
         
         self.load_all_data()
@@ -77,6 +85,10 @@ class PhotosDatabase:
                             photos = [p.strip() for p in parts[2:] if p.strip()]
                             villages = [v.strip() for v in villages_str.split(',') if v.strip()]
                             
+                            # Добавляем деревни в общий список
+                            for village in villages:
+                                self.all_villages.add(village)
+                            
                             record = {
                                 'id': idx,
                                 'villages': villages,
@@ -88,6 +100,7 @@ class PhotosDatabase:
                             logger.info(f"  Строка {idx}: {len(villages)} деревень, {len(photos)} снимков")
                 
                 logger.info(f"✅ Загружено {len(self.locations)} записей из multi_keys.txt")
+                logger.info(f"✅ Всего уникальных деревень: {len(self.all_villages)}")
             else:
                 logger.warning(f"⚠️ Файл {self.multi_keys_file} не найден")
                 
@@ -159,13 +172,16 @@ class PhotosDatabase:
         for record in records:
             all_villages.extend(record['villages'])
         
-        # Убираем дубликаты и сортируем
         unique_villages = sorted(list(set(all_villages)))
         return unique_villages
     
     def get_photo_details(self, photo_num: str) -> Optional[str]:
         """Возвращает детальное описание снимка"""
         return self.photo_details.get(photo_num)
+    
+    def get_all_villages_list(self) -> List[str]:
+        """Возвращает отсортированный список всех деревень"""
+        return sorted(list(self.all_villages))
     
     def set_last_photos(self, user_id: int, photos: List[str]):
         self.user_last_photos[user_id] = photos
@@ -188,18 +204,38 @@ class PhotosDatabase:
     def log_stats(self):
         logger.info(f"📊 Статистика:")
         logger.info(f"   • Записей в multi_keys.txt: {len(self.locations)}")
+        logger.info(f"   • Уникальных деревень: {len(self.all_villages)}")
         logger.info(f"   • Описаний в details.txt: {len(self.photo_details)}")
 
 db = PhotosDatabase()
 
+# ========== СОСТОЯНИЯ ДЛЯ FSM ==========
+
+class SearchStates(StatesGroup):
+    waiting_for_village = State()
+
 # ========== КЛАВИАТУРЫ ==========
 
+def get_main_keyboard() -> ReplyKeyboardMarkup:
+    """Главное меню бота"""
+    keyboard = [
+        [KeyboardButton(text="🔍 ПОИСК"), KeyboardButton(text="📋 СПИСОК ДЕРЕВЕНЬ")],
+        [KeyboardButton(text="📖 ИНСТРУКЦИЯ"), KeyboardButton(text="🗺️ КАРТА РЖЕВ")]
+    ]
+    return ReplyKeyboardMarkup(
+        keyboard=keyboard,
+        resize_keyboard=True,
+        input_field_placeholder="Выберите действие..."
+    )
+
 def back_to_main_keyboard() -> InlineKeyboardMarkup:
+    """Инлайн-кнопка возврата в главное меню"""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🏠 В начало", callback_data="back_to_main")]
+        [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
     ])
 
 def back_to_photos_keyboard() -> InlineKeyboardMarkup:
+    """Инлайн-кнопка возврата к списку снимков"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔙 Назад к списку", callback_data="back_to_photos")]
     ])
@@ -215,7 +251,7 @@ def photos_keyboard(photos: List[str]) -> InlineKeyboardMarkup:
             keyboard.append(row)
             row = []
     
-    keyboard.append([InlineKeyboardButton(text="🔙 Новый поиск", callback_data="back_to_search")])
+    keyboard.append([InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")])
     
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
@@ -223,37 +259,121 @@ def photos_keyboard(photos: List[str]) -> InlineKeyboardMarkup:
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message) -> None:
+    """Обработчик команды /start"""
+    welcome_text = (
+        f"👋 Добро пожаловать, {message.from_user.full_name}!\n\n"
+        f"🛩️ **Бот для поиска информации об аэрофотоснимках Ржевского района**\n\n"
+        f"📌 **Возможности бота:**\n"
+        f"• 🔍 Поиск снимков по названию деревни\n"
+        f"• 📋 Просмотр всех доступных деревень\n"
+        f"• 📖 Подробная инструкция по использованию\n"
+        f"• 🗺️ Скачивание карты Ржевского района\n\n"
+        f"👇 **Выберите действие в меню ниже:**"
+    )
+    
     await message.answer(
-        f"👋 Привет, {message.from_user.full_name}!\n\n"
-        f"🛩️ **Поиск информации об аэрофотоснимках**\n\n"
-        f"🔍 Введите название деревни:\n\n"
-        f"📋 **Примеры:**\n"
-        f"• Горбово\n• Полунино\n• Дураково",
+        welcome_text,
         parse_mode="Markdown",
-        reply_markup=ReplyKeyboardRemove()
+        reply_markup=get_main_keyboard()
     )
 
-@dp.message(Command("help"))
-async def cmd_help(message: types.Message) -> None:
+# ========== ОБРАБОТЧИКИ КНОПОК МЕНЮ ==========
+
+@dp.message(F.text == "🔍 ПОИСК")
+async def menu_search(message: types.Message, state: FSMContext):
+    """Обработчик кнопки ПОИСК"""
     await message.answer(
-        "🛩️ **Помощь:**\n\n"
-        "1️⃣ Введите название деревни\n"
-        "2️⃣ Бот покажет список снимков\n"
-        "3️⃣ Нажмите на номер снимка\n"
-        "4️⃣ Получите информацию:\n"
-        "   • Дата съемки\n   • Масштаб\n   • Вылет\n   • Качество\n   • Квадрат\n   • Владелец",
+        "🔍 **Режим поиска**\n\n"
+        "Введите название деревни, и я найду все связанные с ней снимки.\n\n"
+        "📝 Например: Горбово, Полунино, Дураково",
         parse_mode="Markdown"
     )
+    await state.set_state(SearchStates.waiting_for_village)
 
-# ========== ОБРАБОТЧИК ТЕКСТА ==========
+@dp.message(F.text == "📋 СПИСОК ДЕРЕВЕНЬ")
+async def menu_villages_list(message: types.Message):
+    """Обработчик кнопки СПИСОК ДЕРЕВЕНЬ"""
+    all_villages = db.get_all_villages_list()
+    
+    if not all_villages:
+        await message.answer("📭 Список деревень пуст")
+        return
+    
+    # Разбиваем на части для удобного отображения
+    chunks = [all_villages[i:i+20] for i in range(0, len(all_villages), 20)]
+    
+    for i, chunk in enumerate(chunks):
+        if i == 0:
+            text = f"📋 **Все деревни в базе данных ({len(all_villages)} шт.):**\n\n"
+        else:
+            text = ""
+        
+        text += "\n".join([f"• {village}" for village in chunk])
+        
+        await message.answer(text, parse_mode="Markdown")
+    
+    await message.answer(
+        "💡 Чтобы найти снимки по деревне, нажмите 🔍 ПОИСК",
+        reply_markup=back_to_main_keyboard()
+    )
 
-@dp.message()
-async def handle_message(message: types.Message) -> None:
+@dp.message(F.text == "📖 ИНСТРУКЦИЯ")
+async def menu_instruction(message: types.Message):
+    """Обработчик кнопки ИНСТРУКЦИЯ"""
+    instruction_text = (
+        "📖 **Инструкция по использованию бота**\n\n"
+        "🔍 **Поиск снимков:**\n"
+        "1. Нажмите кнопку 🔍 ПОИСК\n"
+        "2. Введите название деревни\n"
+        "3. Бот покажет все снимки, где встречается эта деревня\n"
+        "4. Нажмите на номер снимка для просмотра детальной информации\n\n"
+        "📋 **Список деревень:**\n"
+        "• Просмотр всех доступных для поиска деревень\n"
+        "• Удобно, если не знаете точное название\n\n"
+        "🗺️ **Карта Ржев:**\n"
+        "• Скачивание карты Ржевского района\n"
+        "• Полезно для ориентирования\n\n"
+        "❓ **Дополнительно:**\n"
+        "• После просмотра снимка можно вернуться к списку\n"
+        "• Кнопка 🏠 В главное меню возвращает в начало\n\n"
+        "🛩️ **Удачного поиска!**"
+    )
+    
+    await message.answer(instruction_text, parse_mode="Markdown")
+
+@dp.message(F.text == "🗺️ КАРТА РЖЕВ")
+async def menu_map(message: types.Message):
+    """Обработчик кнопки КАРТА РЖЕВ"""
+    map_text = (
+        "🗺️ **Карта Ржевского района**\n\n"
+        "Ссылка для скачивания:\n"
+        "https://example.com/rzhev-map.pdf\n\n"
+        "Формат: PDF, 5.2 МБ\n\n"
+        "На карте отмечены основные населенные пункты и районы съемки."
+    )
+    
+    # Создаем инлайн-кнопку для скачивания
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📥 Скачать карту", url="https://example.com/rzhev-map.pdf")],
+        [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
+    ])
+    
+    await message.answer(map_text, parse_mode="Markdown", reply_markup=keyboard)
+
+# ========== ОБРАБОТЧИК ПОИСКА ==========
+
+@dp.message(SearchStates.waiting_for_village)
+async def process_village_search(message: types.Message, state: FSMContext):
+    """Обработчик ввода названия деревни"""
     text = message.text
     user_id = message.from_user.id
     
     if not text:
+        await message.answer("❌ Пожалуйста, введите текст")
         return
+    
+    # Выходим из состояния поиска
+    await state.clear()
     
     db.set_last_query(user_id, text)
     results = db.search_by_village(text)
@@ -282,15 +402,25 @@ async def handle_message(message: types.Message) -> None:
             reply_markup=photos_keyboard(all_photos)
         )
     else:
+        # Создаем клавиатуру с предложением попробовать еще раз
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔍 Попробовать снова", callback_data="try_again")],
+            [InlineKeyboardButton(text="📋 Посмотреть список деревень", callback_data="show_villages")],
+            [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
+        ])
+        
         await message.answer(
-            f"❌ Ничего не найдено для '{text}'",
-            reply_markup=back_to_main_keyboard()
+            f"❌ Ничего не найдено для '{text}'\n\n"
+            f"Попробуйте другое название или посмотрите список доступных деревень.",
+            parse_mode="Markdown",
+            reply_markup=keyboard
         )
 
-# ========== ОБРАБОТЧИКИ КНОПОК ==========
+# ========== ОБРАБОТЧИКИ ИНЛАЙН-КНОПОК ==========
 
 @dp.callback_query(lambda c: c.data.startswith('photo_'))
 async def process_photo_select(callback: CallbackQuery):
+    """Показывает детальную информацию по снимку"""
     photo = callback.data.replace('photo_', '')
     details = db.get_photo_details(photo)
     
@@ -308,6 +438,7 @@ async def process_photo_select(callback: CallbackQuery):
 
 @dp.callback_query(lambda c: c.data == "back_to_photos")
 async def process_back_to_photos(callback: CallbackQuery):
+    """Возвращает к списку снимков"""
     user_id = callback.from_user.id
     last_photos = db.get_last_photos(user_id)
     last_villages = db.get_last_villages(user_id)
@@ -330,16 +461,48 @@ async def process_back_to_photos(callback: CallbackQuery):
         )
     await callback.answer()
 
-@dp.callback_query(lambda c: c.data == "back_to_search")
-async def process_back_to_search(callback: CallbackQuery):
-    await callback.message.edit_text(
-        "🔍 Введите название деревни",
+@dp.callback_query(lambda c: c.data == "try_again")
+async def process_try_again(callback: CallbackQuery, state: FSMContext):
+    """Повторная попытка поиска"""
+    await callback.message.delete()
+    await callback.message.answer(
+        "🔍 Введите название деревни:",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    await state.set_state(SearchStates.waiting_for_village)
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data == "show_villages")
+async def process_show_villages(callback: CallbackQuery):
+    """Показывает список деревень"""
+    await callback.message.delete()
+    all_villages = db.get_all_villages_list()
+    
+    if not all_villages:
+        await callback.message.answer("📭 Список деревень пуст")
+        return
+    
+    chunks = [all_villages[i:i+20] for i in range(0, len(all_villages), 20)]
+    
+    for i, chunk in enumerate(chunks):
+        if i == 0:
+            text = f"📋 **Все деревни в базе данных ({len(all_villages)} шт.):**\n\n"
+        else:
+            text = ""
+        
+        text += "\n".join([f"• {village}" for village in chunk])
+        await callback.message.answer(text, parse_mode="Markdown")
+    
+    await callback.message.answer(
+        "💡 Чтобы найти снимки по деревне, нажмите 🔍 ПОИСК",
         reply_markup=back_to_main_keyboard()
     )
     await callback.answer()
 
 @dp.callback_query(lambda c: c.data == "back_to_main")
-async def process_back_to_main(callback: CallbackQuery):
+async def process_back_to_main(callback: CallbackQuery, state: FSMContext):
+    """Возвращает в главное меню"""
+    await state.clear()
     await callback.message.delete()
     await cmd_start(callback.message)
     await callback.answer()
@@ -356,9 +519,10 @@ async def delete_webhook() -> None:
         logger.error(f"Ошибка удаления webhook: {e}")
 
 async def main() -> None:
-    logger.info("🛩️ Бот запускается...")
+    logger.info("🛩️ Бот с меню запускается...")
     logger.info(f"📊 Загружено локаций: {len(db.locations)}")
-    logger.info(f"📊 Загружено описаний: {len(db.photo_details)}")
+    logger.info(f"📊 Уникальных деревень: {len(db.all_villages)}")
+    logger.info(f"📊 Описаний снимков: {len(db.photo_details)}")
     
     await delete_webhook()
     await dp.start_polling(bot, skip_updates=True)
