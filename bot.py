@@ -215,10 +215,20 @@ def photos_keyboard(photos: List[str]) -> InlineKeyboardMarkup:
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message) -> None:
+    welcome_text = (
+        f"👋 **Добро пожаловать, {message.from_user.full_name}!**\n\n"
+        f"🛩️ **Бот для поиска аэрофотоснимков Ржевского района**\n\n"
+        f"📌 **Что я умею:**\n"
+        f"• 🔍 **Поиск снимков** — введите название деревни, и я покажу все связанные с ней аэрофотоснимки\n"
+        f"• 📋 **Список деревень** — покажу все деревни, которые есть в базе данных\n"
+        f"• 📖 **Инструкция** — подробное описание всех функций бота\n"
+        f"• 🗺️ **Карта Ржев** — скачать карту Ржевского района\n"
+        f"• 🗺️ **Locus Maps** — инструкция и карты для приложения Locus Maps\n\n"
+        f"👇 **Выберите действие в меню ниже:**"
+    )
+    
     await message.answer(
-        f"👋 Привет, {message.from_user.full_name}!\n\n"
-        f"🛩️ **Поиск аэрофотоснимков Ржевского района**\n\n"
-        f"🔍 Введите название деревни или выберите действие в меню:",
+        welcome_text,
         parse_mode="Markdown",
         reply_markup=get_main_keyboard()
     )
@@ -227,36 +237,63 @@ async def cmd_start(message: types.Message) -> None:
 
 @dp.message(F.text == "🔍 ПОИСК")
 async def menu_search(message: types.Message, state: FSMContext):
-    await message.answer("🔍 Введите название деревни:")
+    await message.answer(
+        "🔍 **Режим поиска**\n\n"
+        "Введите название деревни, и я найду все связанные с ней снимки.\n\n"
+        "📝 **Примеры:** Горбово, Полунино, Дураково, Бельково",
+        parse_mode="Markdown"
+    )
     await state.set_state(SearchStates.waiting_for_village)
 
 @dp.message(F.text == "📋 СПИСОК ДЕРЕВЕНЬ")
 async def menu_villages(message: types.Message):
     villages = db.get_all_villages_list()
     if not villages:
-        await message.answer("📭 Список пуст")
+        await message.answer("📭 Список деревень пуст")
         return
     
     chunks = [villages[i:i+20] for i in range(0, len(villages), 20)]
     for i, chunk in enumerate(chunks):
-        text = f"📋 **Деревни ({len(villages)}):**\n\n" if i == 0 else ""
+        text = f"📋 **Все деревни в базе данных ({len(villages)} шт.):**\n\n" if i == 0 else ""
         text += "\n".join([f"• {v}" for v in chunk])
         await message.answer(text, parse_mode="Markdown")
-    await message.answer("💡 Нажмите 🔍 ПОИСК для поиска", reply_markup=back_keyboard())
+    await message.answer(
+        "💡 Чтобы найти снимки по деревне, нажмите 🔍 ПОИСК",
+        reply_markup=back_keyboard()
+    )
 
 @dp.message(F.text == "📖 ИНСТРУКЦИЯ")
 async def menu_instruction(message: types.Message):
-    await message.answer(
-        "📖 **Инструкция:**\n\n"
-        "1. Нажмите 🔍 ПОИСК\n"
-        "2. Введите название деревни\n"
-        "3. Выберите снимок\n"
-        "4. Получите информацию\n\n"
-        "📋 СПИСОК ДЕРЕВЕНЬ - все доступные деревни\n"
-        "🗺️ КАРТА РЖЕВ - скачать карту\n"
-        "🗺️ LOCUS MAPS - карты для приложения",
-        parse_mode="Markdown"
+    instruction_text = (
+        "📖 **ПОДРОБНАЯ ИНСТРУКЦИЯ ПО ИСПОЛЬЗОВАНИЮ БОТА**\n\n"
+        
+        "🔍 **1. ПОИСК СНИМКОВ**\n"
+        "• Нажмите кнопку «🔍 ПОИСК» в главном меню\n"
+        "• Введите название деревни (например: Горбово, Полунино)\n"
+        "• Бот покажет все снимки, где встречается эта деревня\n"
+        "• Нажмите на номер снимка для просмотра детальной информации\n\n"
+        
+        "📋 **2. СПИСОК ДЕРЕВЕНЬ**\n"
+        "• Просмотр всех деревень, которые есть в базе данных\n"
+        "• Удобно, если вы не знаете точное название\n\n"
+        
+        "🗺️ **3. КАРТА РЖЕВСКОГО РАЙОНА**\n"
+        "• Скачивание карты Ржевского района в формате PDF\n"
+        "• На карте отмечены основные населенные пункты\n\n"
+        
+        "🗺️ **4. LOCUS MAPS**\n"
+        "• Раздел для работы с приложением Locus Maps\n"
+        "• **Инструкция** — ссылка на руководство от ПО Сокол\n"
+        "• **Скачать карты** — прямые ссылки на карты для загрузки\n\n"
+        
+        "🔄 **5. НАВИГАЦИЯ**\n"
+        "• После просмотра снимка можно вернуться к списку кнопкой «🔙 Назад к списку»\n"
+        "• Кнопка «🏠 В главное меню» доступна на всех этапах\n\n"
+        
+        "🛩️ **ПРИЯТНОГО ИСПОЛЬЗОВАНИЯ!**"
     )
+    
+    await message.answer(instruction_text, parse_mode="Markdown")
 
 @dp.message(F.text == "🗺️ КАРТА РЖЕВ")
 async def menu_map(message: types.Message):
@@ -266,7 +303,8 @@ async def menu_map(message: types.Message):
     ])
     await message.answer(
         "🗺️ **Карта Ржевского района**\n\n"
-        "Ссылка: https://posokol.net/maps/rzhev-map.pdf",
+        "Ссылка для скачивания:\n"
+        "https://posokol.net/maps/rzhev-map.pdf",
         parse_mode="Markdown",
         reply_markup=keyboard
     )
@@ -290,7 +328,7 @@ async def locus_instruction(callback: CallbackQuery):
         [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
     ])
     await callback.message.edit_text(
-        "📖 **Инструкция Locus Maps**\n\n"
+        "📖 **Инструкция по Locus Maps**\n\n"
         "Ссылка от ПО Сокол:\n"
         "https://posokol.net/manuals/locus-maps-guide",
         parse_mode="Markdown",
@@ -310,7 +348,7 @@ async def locus_download(callback: CallbackQuery):
         [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
     ])
     await callback.message.edit_text(
-        "📥 **Карты для Locus Maps**\n\n"
+        "📥 **Скачать карты для Locus Maps**\n\n"
         "Ссылки от ПО Сокол:\n\n"
         "1. Топографическая: https://posokol.net/maps/rzhev-topo.sqlitedb\n"
         "2. Карта высот: https://posokol.net/maps/rzhev-elevation.sqlitedb\n"
@@ -324,7 +362,8 @@ async def locus_download(callback: CallbackQuery):
 @dp.callback_query(lambda c: c.data == "back_to_locus")
 async def back_to_locus(callback: CallbackQuery):
     await callback.message.edit_text(
-        "🗺️ **Locus Maps**\n\nВыберите действие:",
+        "🗺️ **Locus Maps**\n\n"
+        "Выберите действие:",
         reply_markup=get_locus_keyboard()
     )
     await callback.answer()
@@ -355,14 +394,14 @@ async def process_search(message: types.Message, state: FSMContext):
         
         await message.answer(
             f"✅ **Найдено по запросу '{text}':**\n\n"
-            f"📍 Деревни: {villages_text}\n\n"
-            f"📸 Снимки ({len(photos)}):\n{photos_list}",
+            f"📍 **Деревни в этом районе:** {villages_text}\n\n"
+            f"📸 **Снимки ({len(photos)} шт.):**\n{photos_list}",
             parse_mode="Markdown",
             reply_markup=photos_keyboard(photos)
         )
     else:
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔍 Снова", callback_data="try_again")],
+            [InlineKeyboardButton(text="🔍 Попробовать снова", callback_data="try_again")],
             [InlineKeyboardButton(text="📋 Список деревень", callback_data="show_villages")],
             [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
         ])
@@ -377,8 +416,14 @@ async def process_search(message: types.Message, state: FSMContext):
 async def process_photo(callback: CallbackQuery):
     photo = callback.data.replace('photo_', '')
     details = db.get_photo_details(photo)
+    
+    if details:
+        text = details
+    else:
+        text = f"📸 **Снимок {photo}**\n\n❌ Информация отсутствует"
+    
     await callback.message.edit_text(
-        details or f"📸 **{photo}**\n\n❌ Нет описания",
+        text,
         parse_mode="Markdown",
         reply_markup=back_to_photos_keyboard()
     )
@@ -395,8 +440,8 @@ async def back_to_photos(callback: CallbackQuery):
         photos_list = "\n".join([f"• {p}" for p in photos])
         await callback.message.edit_text(
             f"✅ **Найдено по запросу '{query}':**\n\n"
-            f"📍 Деревни: {villages}\n\n"
-            f"📸 Снимки ({len(photos)}):\n{photos_list}",
+            f"📍 **Деревни в этом районе:** {villages}\n\n"
+            f"📸 **Снимки ({len(photos)} шт.):**\n{photos_list}",
             parse_mode="Markdown",
             reply_markup=photos_keyboard(photos)
         )
@@ -415,10 +460,10 @@ async def show_villages(callback: CallbackQuery):
     villages = db.get_all_villages_list()
     chunks = [villages[i:i+20] for i in range(0, len(villages), 20)]
     for i, chunk in enumerate(chunks):
-        text = f"📋 **Деревни ({len(villages)}):**\n\n" if i == 0 else ""
+        text = f"📋 **Все деревни в базе данных ({len(villages)} шт.):**\n\n" if i == 0 else ""
         text += "\n".join([f"• {v}" for v in chunk])
         await callback.message.answer(text, parse_mode="Markdown")
-    await callback.message.answer("💡 Нажмите 🔍 ПОИСК", reply_markup=back_keyboard())
+    await callback.message.answer("💡 Нажмите 🔍 ПОИСК для поиска", reply_markup=back_keyboard())
     await callback.answer()
 
 @dp.callback_query(lambda c: c.data == "back_to_main")
