@@ -141,81 +141,18 @@ class YandexDiskClient:
         
         return None
     
-    def find_all_mbtiles_files(self) -> List[Dict]:
-        """
-        Ищет .mbtiles файлы в папке CatalogSokol и всех её подпапках
-        """
-        logger.info("=" * 60)
-        logger.info("🔍 ПОИСК .MBTILES ФАЙЛОВ В CatalogSokol И ПОДПАПКАХ")
-        logger.info("=" * 60)
-        
-        all_files = []
-        
-        # Проверяем корневую папку CatalogSokol
-        logger.info(f"\n📁 Проверка папки: CatalogSokol")
-        items = self.get_files_in_folder("CatalogSokol")
-        
-        if items:
-            for item in items:
-                name = item.get('name', '')
-                item_path = item.get('path', '')
-                item_type = item.get('type', '')
-                
-                # Если это файл .mbtiles в корне
-                if item_type == 'file' and name.lower().endswith('.mbtiles'):
-                    all_files.append({
-                        'name': name,
-                        'path': item_path,
-                        'size': item.get('size', 0),
-                        'created': item.get('created', '')
-                    })
-                    logger.info(f"  ✅ НАЙДЕН В КОРНЕ: {name}")
-                    logger.info(f"     Путь: {item_path}")
-                
-                # Если это папка - проверяем её содержимое
-                elif item_type == 'dir':
-                    folder_name = item.get('name', '')
-                    folder_path = f"CatalogSokol/{folder_name}"
-                    logger.info(f"  📁 Проверка папки: {folder_path}")
-                    
-                    subitems = self.get_files_in_folder(folder_path)
-                    if subitems:
-                        for subitem in subitems:
-                            subname = subitem.get('name', '')
-                            if subitem.get('type') == 'file' and subname.lower().endswith('.mbtiles'):
-                                all_files.append({
-                                    'name': subname,
-                                    'path': subitem.get('path', ''),
-                                    'size': subitem.get('size', 0),
-                                    'created': subitem.get('created', '')
-                                })
-                                logger.info(f"    ✅ НАЙДЕН: {subname}")
-                                logger.info(f"       Путь: {subitem.get('path', '')}")
-        
-        logger.info("=" * 60)
-        logger.info(f"📊 ИТОГ: Найдено .mbtiles файлов: {len(all_files)}")
-        
-        if all_files:
-            logger.info("📋 Список всех найденных файлов:")
-            for i, file in enumerate(all_files, 1):
-                logger.info(f"  {i}. {file['name']}")
-                logger.info(f"     Путь: {file['path']}")
-        else:
-            logger.warning("❌ .MBTILES ФАЙЛЫ НЕ НАЙДЕНЫ!")
-        
-        logger.info("=" * 60)
-        return all_files
-    
     def find_mbtiles_file(self, square: str, overlay: str, frame: str) -> Optional[Dict]:
         try:
-            # Формируем базовые части
-            base_folder = f"CatalogSokol"
+            # Формируем базовые части - ИСПРАВЛЕННЫЙ ПУТЬ
+            base_folder = f"CatalogSokol/АФС/КаталогПОСокол"
+            square_folder = f"{base_folder}/{square}"
+            overlay_folder = f"{square_folder}/{square}-{overlay}"
             full_name = f"{square}-{overlay}-{frame}"
             
             logger.info(f"\n🔍 Поиск файла для {full_name}:")
             
-            # ВАРИАНТ 1: Проверяем путь с подпапкой
-            subfolder_path = f"{base_folder}/{full_name}"
+            # ВАРИАНТ 1: Проверяем путь с подпапкой полного имени
+            subfolder_path = f"{overlay_folder}/{full_name}"
             logger.info(f"  Вариант 1 (с подпапкой): /{subfolder_path}")
             
             if self.folder_exists(subfolder_path):
@@ -238,17 +175,17 @@ class YandexDiskClient:
                                 'download_link': download_link
                             }
             
-            # ВАРИАНТ 2: Проверяем корневую папку
-            logger.info(f"  Вариант 2 (в корне CatalogSokol): /{base_folder}")
-            files = self.get_files_in_folder(base_folder)
+            # ВАРИАНТ 2: Проверяем путь без подпапки
+            logger.info(f"  Вариант 2 (без подпапки): /{overlay_folder}")
+            files = self.get_files_in_folder(overlay_folder)
             if files:
                 mbtiles_files = self._filter_mbtiles_files(files, full_name)
                 if mbtiles_files:
-                    logger.info(f"  ✅ Найдены файлы в корне: {len(mbtiles_files)} шт.")
+                    logger.info(f"  ✅ Найдены файлы в папке наложения: {len(mbtiles_files)} шт.")
                     mbtiles_files.sort(key=lambda x: x['version'], reverse=True)
                     selected = mbtiles_files[0]
                     
-                    file_path = f"{base_folder}/{selected['name']}"
+                    file_path = f"{overlay_folder}/{selected['name']}"
                     download_link = self.get_file_download_link(file_path)
                     
                     if download_link:
@@ -318,10 +255,6 @@ class PhotosDatabase:
         
         # Проверяем доступ к Яндекс.Диску перед загрузкой ссылок
         if yd_client.check_root_access():
-            # Ищем .mbtiles файлы в CatalogSokol и подпапках
-            all_mbtiles = yd_client.find_all_mbtiles_files()
-            logger.info(f"📊 Всего .mbtiles файлов найдено: {len(all_mbtiles)}")
-            
             self.load_photo_links()
         else:
             logger.error("❌ Нет доступа к Яндекс.Диску, пропускаем загрузку ссылок")
