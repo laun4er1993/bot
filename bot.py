@@ -167,8 +167,8 @@ class YandexDiskClient:
     def find_map_files(self, square: str, overlay: str, frame: str) -> Dict[str, List[Dict]]:
         """Ищет MBTILES и KMZ файлы для снимка, возвращает все версии"""
         try:
-            # Формируем базовые части
-            base_folder = f"CatalogSokol/АФС/КаталогПОСокол"
+            # Формируем базовые части с новым путем
+            base_folder = f"Компьютер DESKTOP-JMVJ4CL/АФС/КаталогПОСокол"
             square_folder = f"{base_folder}/{square}"
             overlay_folder = f"{square_folder}/{square}-{overlay}"
             full_name = f"{square}-{overlay}-{frame}"
