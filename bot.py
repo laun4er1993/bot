@@ -354,11 +354,20 @@ class PhotosDatabase:
         for photo in all_photos:
             logger.info(f"  🔍 Обработка снимка: {photo}")
             parts = photo.split('-')
-            if len(parts) >= 4:
+            
+            # Проверяем количество частей
+            if len(parts) == 3:
+                # Формат: N56E34-256-139 (квадрат, наложение, кадр)
+                square = f"{parts[0]}-{parts[1]}"  # N56E34
+                overlay = parts[2]                  # 256
+                frame = parts[2]                     # 139 (для 3 частей кадр и наложение совпадают?)
+                logger.info(f"    Формат 3 части: square={square}, overlay={overlay}, frame={frame}")
+            elif len(parts) >= 4:
+                # Формат: N56E34-256-139-1 (с версией)
                 square = f"{parts[0]}-{parts[1]}"
                 overlay = parts[2]
                 frame = parts[3]
-                logger.info(f"    square={square}, overlay={overlay}, frame={frame}")
+                logger.info(f"    Формат 4+ части: square={square}, overlay={overlay}, frame={frame}")
             else:
                 logger.warning(f"    ❌ Неправильный формат: {photo}")
                 continue
