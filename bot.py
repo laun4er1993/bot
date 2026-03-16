@@ -145,53 +145,166 @@ class YandexDiskClient:
     def find_all_mbtiles_files(self) -> List[Dict]:
         """
         Ищет ВСЕ .mbtiles файлы на всем диске
-        Возвращает список информации о найденных файлах
+        Использует несколько подходов для гарантированного поиска
         """
-        logger.info("🔍 Поиск всех .mbtiles файлов на диске...")
+        logger.info("=" * 60)
+        logger.info("🔍 ПОИСК ВСЕХ .MBTILES ФАЙЛОВ НА ДИСКЕ")
+        logger.info("=" * 60)
         
         all_files = []
-        offset = 0
-        limit = 100
         
-        while True:
-            try:
-                url = f"{self.base_url}/resources/files"
-                params = {
-                    "limit": limit,
-                    "offset": offset,
-                    "media_type": "data,compressed"  # Ищем среди этих типов
-                }
-                
-                data = self._make_request(url, params)
-                if not data or "items" not in data:
-                    break
-                
-                items = data["items"]
-                if not items:
-                    break
-                
-                # Фильтруем только .mbtiles файлы
-                for item in items:
-                    if item['name'].endswith('.mbtiles'):
-                        all_files.append({
-                            'name': item['name'],
-                            'path': item['path'],
-                            'size': item.get('size', 0),
-                            'created': item.get('created', ''),
-                            'mime_type': item.get('mime_type', '')
-                        })
-                        logger.info(f"  Найден .mbtiles файл: {item['name']} по пути {item['path']}")
-                
-                offset += limit
-                if len(items) < limit:
-                    break
+        # ПОДХОД 1: Поиск через resources/files с разными media_type
+        media_types = [
+            None,  # Без фильтрации
+            "data",
+            "compressed",
+            "document",
+            "archive",
+            "unknown"
+        ]
+        
+        for media_type in media_types:
+            offset = 0
+            limit = 100
+            found_in_this_pass = 0
+            
+            logger.info(f"\n📁 Поиск с media_type={media_type if media_type else 'ВСЕ'}:")
+            
+            while True:
+                try:
+                    url = f"{self.base_url}/resources/files"
+                    params = {
+                        "limit": limit,
+                        "offset": offset,
+                        "preview_size": "S"
+                    }
                     
-            except Exception as e:
-                logger.error(f"Ошибка при поиске файлов: {e}")
-                break
+                    if media_type:
+                        params["media_type"] = media_type
+                    
+                    logger.info(f"  Запрос: offset={offset}, limit={limit}")
+                    data = self._make_request(url, params)
+                    
+                    if not data or "items" not in data:
+                        logger.info(f"  Нет данных или items")
+                        break
+                    
+                    items = data["items"]
+                    if not items:
+                        logger.info(f"  Пустой список items")
+                        break
+                    
+                    logger.info(f"  Получено {len(items)} файлов")
+                    
+                    for item in items:
+                        name = item.get('name', '')
+                        if name.lower().endswith('.mbtiles'):
+                            all_files.append({
+                                'name': name,
+                                'path': item.get('path', ''),
+                                'size': item.get('size', 0),
+                                'created': item.get('created', ''),
+                                'mime_type': item.get('mime_type', ''),
+                                'media_type': item.get('media_type', ''),
+                                'found_by': f"media_type={media_type if media_type else 'all'}"
+                            })
+                            logger.info(f"  ✅ НАЙДЕН: {name}")
+                            logger.info(f"     Путь: {item.get('path', '')}")
+                            logger.info(f"     media_type: {item.get('media_type', 'unknown')}")
+                            found_in_this_pass += 1
+                    
+                    offset += limit
+                    if len(items) < limit:
+                        logger.info(f"  Достигнут конец списка")
+                        break
+                        
+                except Exception as e:
+                    logger.error(f"  ❌ Ошибка при поиске: {e}")
+                    break
+            
+            if found_in_this_pass > 0:
+                logger.info(f"  ✅ Найдено в этом проходе: {found_in_this_pass}")
         
-        logger.info(f"✅ Всего найдено .mbtiles файлов: {len(all_files)}")
-        return all_files
+        # ПОДХОД 2: Поиск по известным путям (если структура известна)
+        logger.info("\n📁 Поиск по известным путям...")
+        
+        known_paths = [
+            "CatalogSokol",
+            "CatalogSokol/АФС",
+            "CatalogSokol/АФС/Каталог ПО Сокол",
+            "CatalogSokol/АФС/Каталог ПО Сокол/N56E34"
+        ]
+        
+        for path in known_paths:
+            try:
+                logger.info(f"  Проверка пути: {path}")
+                items = self.get_files_in_folder(path)
+                if items:
+                    # Рекурсивно обходим папки
+                    self._search_mbtiles_recursive(items, path, all_files, 0, 3)
+            except Exception as e:
+                logger.error(f"  Ошибка при проверке {path}: {e}")
+        
+        # Удаляем дубликаты по пути
+        unique_files = []
+        seen_paths = set()
+        
+        for file in all_files:
+            if file['path'] not in seen_paths:
+                seen_paths.add(file['path'])
+                unique_files.append(file)
+        
+        logger.info("=" * 60)
+        logger.info(f"📊 ИТОГ: Найдено уникальных .mbtiles файлов: {len(unique_files)}")
+        
+        if unique_files:
+            logger.info("📋 Список всех найденных файлов:")
+            for i, file in enumerate(unique_files, 1):
+                logger.info(f"  {i}. {file['name']}")
+                logger.info(f"     Путь: {file['path']}")
+                logger.info(f"     media_type: {file.get('media_type', 'unknown')}")
+                logger.info(f"     найдено через: {file.get('found_by', 'unknown')}")
+        else:
+            logger.warning("❌ .MBTILES ФАЙЛЫ НЕ НАЙДЕНЫ НА ДИСКЕ!")
+            logger.warning("Возможные причины:")
+            logger.warning("1. Файлы действительно отсутствуют на диске")
+            logger.warning("2. Токен не имеет прав на просмотр этих файлов")
+            logger.warning("3. Файлы находятся в другом месте")
+            logger.warning("4. API Яндекс.Диска не индексирует .mbtiles как поддерживаемый формат")
+        
+        logger.info("=" * 60)
+        return unique_files
+
+    def _search_mbtiles_recursive(self, items: List[Dict], current_path: str, all_files: List[Dict], depth: int = 0, max_depth: int = 3):
+        """Рекурсивный поиск .mbtiles файлов в папках"""
+        if depth >= max_depth:
+            return
+        
+        indent = "  " * depth
+        for item in items:
+            name = item.get('name', '')
+            item_path = item.get('path', '')
+            item_type = item.get('type', '')
+            
+            if item_type == 'file' and name.lower().endswith('.mbtiles'):
+                all_files.append({
+                    'name': name,
+                    'path': item_path,
+                    'size': item.get('size', 0),
+                    'created': item.get('created', ''),
+                    'mime_type': item.get('mime_type', ''),
+                    'media_type': item.get('media_type', ''),
+                    'found_by': 'recursive_scan'
+                })
+                logger.info(f"{indent}✅ РЕКУРСИВНО НАЙДЕН: {name}")
+            
+            elif item_type == 'dir' and depth < max_depth - 1:
+                logger.info(f"{indent}📁 Рекурсивный вход в {name}")
+                # Убираем 'disk:/' из пути для следующего запроса
+                clean_path = item_path.replace('disk:/', '')
+                subitems = self.get_files_in_folder(clean_path)
+                if subitems:
+                    self._search_mbtiles_recursive(subitems, item_path, all_files, depth + 1, max_depth)
     
     def find_mbtiles_file(self, square: str, overlay: str, frame: str) -> Optional[Dict]:
         try:
