@@ -144,7 +144,7 @@ class YandexDiskClient:
     def find_mbtiles_file(self, square: str, overlay: str, frame: str) -> Optional[Dict]:
         try:
             # Формируем базовые части (без "Компьютер DESKTOP-JMVJ4CL")
-            base_folder = f"АФС/Каталог ПО Сокол"
+            base_folder = f"CatalogSokol/АФС/Каталог ПО Сокол"
             square_folder = f"{base_folder}/{square}"
             overlay_folder = f"{square_folder}/{square}-{overlay}"
             full_name = f"{square}-{overlay}-{frame}"
