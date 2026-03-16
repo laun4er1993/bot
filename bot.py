@@ -3,6 +3,8 @@ import logging
 import os
 import sys
 from typing import Optional, Dict, List, Set
+import requests
+import io
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
@@ -12,7 +14,8 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     InlineKeyboardButton,
     CallbackQuery,
-    ReplyKeyboardRemove
+    ReplyKeyboardRemove,
+    FSInputFile
 )
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -20,9 +23,14 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 # Токен из переменных окружения
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+YANDEX_DISK_TOKEN = os.getenv("YANDEX_DISK_TOKEN")  # Токен для Яндекс.Диска
 
 if not BOT_TOKEN:
     logging.critical("❌ ОШИБКА: BOT_TOKEN не найден!")
+    sys.exit(1)
+
+if not YANDEX_DISK_TOKEN:
+    logging.critical("❌ ОШИБКА: YANDEX_DISK_TOKEN не найден!")
     sys.exit(1)
 
 # Настройка логирования
@@ -36,6 +44,69 @@ logger = logging.getLogger(__name__)
 storage = MemoryStorage()
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=storage)
+
+# ========== КЛАСС ДЛЯ РАБОТЫ С ЯНДЕКС.ДИСКОМ ==========
+
+class YandexDiskClient:
+    def __init__(self, token: str):
+        self.token = token
+        self.base_url = "https://cloud-api.yandex.net/v1/disk"
+        self.headers = {
+            "Authorization": f"OAuth {token}",
+            "Content-Type": "application/json"
+        }
+    
+    def get_public_files(self, public_key: str) -> Optional[List[Dict]]:
+        """Получает список файлов по публичной ссылке"""
+        try:
+            url = f"{self.base_url}/public/resources"
+            params = {
+                "public_key": public_key,
+                "limit": 100
+            }
+            response = requests.get(url, headers=self.headers, params=params)
+            if response.status_code == 200:
+                data = response.json()
+                if "_embedded" in data and "items" in data["_embedded"]:
+                    return data["_embedded"]["items"]
+            logger.error(f"Ошибка получения файлов: {response.status_code}")
+            return None
+        except Exception as e:
+            logger.error(f"Ошибка при запросе к Яндекс.Диску: {e}")
+            return None
+    
+    def get_file_download_link(self, public_key: str, file_path: str) -> Optional[str]:
+        """Получает ссылку на скачивание файла"""
+        try:
+            url = f"{self.base_url}/public/resources/download"
+            params = {
+                "public_key": public_key,
+                "path": file_path
+            }
+            response = requests.get(url, headers=self.headers, params=params)
+            if response.status_code == 200:
+                data = response.json()
+                return data.get("href")
+            return None
+        except Exception as e:
+            logger.error(f"Ошибка получения ссылки на скачивание: {e}")
+            return None
+    
+    def download_file(self, public_key: str, file_path: str) -> Optional[bytes]:
+        """Скачивает файл с Яндекс.Диска"""
+        try:
+            download_link = self.get_file_download_link(public_key, file_path)
+            if download_link:
+                response = requests.get(download_link)
+                if response.status_code == 200:
+                    return response.content
+            return None
+        except Exception as e:
+            logger.error(f"Ошибка скачивания файла: {e}")
+            return None
+
+# Инициализация клиента Яндекс.Диска
+yd_client = YandexDiskClient(YANDEX_DISK_TOKEN)
 
 # ========== КЛАСС ДЛЯ РАБОТЫ С ДАННЫМИ ==========
 
@@ -303,13 +374,12 @@ async def menu_instruction(message: types.Message):
 @dp.message(F.text == "🗺️ КАРТА РЖЕВ")
 async def menu_map(message: types.Message):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📥 Скачать карту для Locus", url="https://disk.yandex.ru/d/mrxZWJqLuAtnNA")],
+        [InlineKeyboardButton(text="📥 Скачать карту для Locus", callback_data="download_map")],
         [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
     ])
     await message.answer(
         "🗺️ **Карта Ржевского района для Locus Maps**\n\n"
-        "Ссылка для скачивания:\n"
-        "https://disk.yandex.ru/d/mrxZWJqLuAtnNA\n\n"
+        "Нажмите кнопку ниже для скачивания карты с Яндекс.Диска.\n\n"
         "📌 Карта с привязкой для приложения Locus Maps.",
         parse_mode="Markdown",
         reply_markup=keyboard
@@ -328,15 +398,14 @@ async def menu_locus(message: types.Message):
 @dp.callback_query(lambda c: c.data == "locus_instruction")
 async def locus_instruction(callback: CallbackQuery):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📖 Открыть инструкцию", url="https://disk.yandex.ru/i/sE2Jy99in7MCxw")],
+        [InlineKeyboardButton(text="📖 Скачать инструкцию", callback_data="download_locus_instruction")],
         [InlineKeyboardButton(text="📥 Скачать Locus Maps", callback_data="locus_download_app")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_locus")],
         [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
     ])
     await callback.message.edit_text(
         "📖 **Инструкция по Locus Maps**\n\n"
-        "Ссылка на инструкцию от ПО Сокол:\n"
-        "https://disk.yandex.ru/i/sE2Jy99in7MCxw",
+        "Нажмите кнопку ниже для скачивания инструкции от ПО Сокол с Яндекс.Диска.",
         parse_mode="Markdown",
         reply_markup=keyboard
     )
@@ -345,15 +414,14 @@ async def locus_instruction(callback: CallbackQuery):
 @dp.callback_query(lambda c: c.data == "locus_download_app")
 async def locus_download_app(callback: CallbackQuery):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📥 Скачать Locus Maps", url="https://disk.yandex.ru/d/uUgVGkMoq3WITw")],
+        [InlineKeyboardButton(text="📥 Скачать Locus Maps", callback_data="download_locus_app")],
         [InlineKeyboardButton(text="📖 Инструкция", callback_data="locus_instruction")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_locus")],
         [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
     ])
     await callback.message.edit_text(
         "📥 **Скачать Locus Maps**\n\n"
-        "Ссылка на скачивание приложения Locus Maps:\n"
-        "https://disk.yandex.ru/d/uUgVGkMoq3WITw\n\n"
+        "Нажмите кнопку ниже для скачивания приложения Locus Maps с Яндекс.Диска.\n\n"
         "После установки приложения вы можете скачать карту Ржевского района "
         "в разделе «🗺️ КАРТА РЖЕВ».",
         parse_mode="Markdown",
@@ -367,6 +435,81 @@ async def back_to_locus(callback: CallbackQuery):
         "🗺️ **Locus Maps**\n\n"
         "Выберите действие:",
         reply_markup=get_locus_keyboard()
+    )
+    await callback.answer()
+
+# ========== ОБРАБОТЧИКИ СКАЧИВАНИЯ С ЯНДЕКС.ДИСКА ==========
+
+@dp.callback_query(lambda c: c.data == "download_map")
+async def download_map(callback: CallbackQuery):
+    await callback.message.edit_text(
+        "⏳ **Загрузка...**\n\n"
+        "Идет подготовка файла карты для скачивания...",
+        parse_mode="Markdown"
+    )
+    
+    # Здесь будет логика скачивания карты с Яндекс.Диска
+    # Пока используем прямую ссылку
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📥 Скачать карту", url="https://disk.yandex.ru/d/mrxZWJqLuAtnNA")],
+        [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
+    ])
+    
+    await callback.message.edit_text(
+        "🗺️ **Карта Ржевского района для Locus Maps**\n\n"
+        "Файл готов к скачиванию:\n"
+        "https://disk.yandex.ru/d/mrxZWJqLuAtnNA\n\n"
+        "📌 Нажмите кнопку ниже для скачивания.",
+        parse_mode="Markdown",
+        reply_markup=keyboard
+    )
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data == "download_locus_instruction")
+async def download_locus_instruction(callback: CallbackQuery):
+    await callback.message.edit_text(
+        "⏳ **Загрузка...**\n\n"
+        "Идет подготовка инструкции для скачивания...",
+        parse_mode="Markdown"
+    )
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📖 Скачать инструкцию", url="https://disk.yandex.ru/i/sE2Jy99in7MCxw")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="locus_instruction")],
+        [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
+    ])
+    
+    await callback.message.edit_text(
+        "📖 **Инструкция по Locus Maps**\n\n"
+        "Файл готов к скачиванию:\n"
+        "https://disk.yandex.ru/i/sE2Jy99in7MCxw\n\n"
+        "📌 Нажмите кнопку ниже для скачивания.",
+        parse_mode="Markdown",
+        reply_markup=keyboard
+    )
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data == "download_locus_app")
+async def download_locus_app(callback: CallbackQuery):
+    await callback.message.edit_text(
+        "⏳ **Загрузка...**\n\n"
+        "Идет подготовка приложения для скачивания...",
+        parse_mode="Markdown"
+    )
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📥 Скачать Locus Maps", url="https://disk.yandex.ru/d/uUgVGkMoq3WITw")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="locus_download_app")],
+        [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
+    ])
+    
+    await callback.message.edit_text(
+        "📥 **Скачать Locus Maps**\n\n"
+        "Файл готов к скачиванию:\n"
+        "https://disk.yandex.ru/d/uUgVGkMoq3WITw\n\n"
+        "📌 Нажмите кнопку ниже для скачивания.",
+        parse_mode="Markdown",
+        reply_markup=keyboard
     )
     await callback.answer()
 
@@ -486,8 +629,9 @@ async def delete_webhook() -> None:
         logger.error(f"Ошибка удаления webhook: {e}")
 
 async def main() -> None:
-    logger.info("🚀 Бот запускается...")
+    logger.info("🚀 Бот с поддержкой Яндекс.Диска запускается...")
     db.log_stats()
+    logger.info(f"✅ Яндекс.Диск токен загружен")
     await delete_webhook()
     await dp.start_polling(bot, skip_updates=True)
 
