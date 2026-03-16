@@ -428,10 +428,10 @@ class PhotosDatabase:
         
         if details:
             if download_link:
-                details += f"\n\n📥 **Скачать MBTiles:**\n{download_link}"
+                details += f"\n\n📥 <b>Скачать MBTiles:</b>\n{download_link}"
                 logger.info(f"  ✅ Ссылка есть: {download_link[:50]}...")
             else:
-                details += f"\n\n❌ **Файл MBTiles не найден на Яндекс.Диске**"
+                details += f"\n\n❌ <b>Файл MBTiles не найден на Яндекс.Диске</b>"
                 logger.info(f"  ❌ Ссылки нет")
         else:
             logger.warning(f"  ❌ Нет описания для {photo_num}")
@@ -513,20 +513,20 @@ def photos_keyboard(photos: List[str]) -> InlineKeyboardMarkup:
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message) -> None:
     welcome_text = (
-        f"👋 **Добро пожаловать, {message.from_user.full_name}!**\n\n"
-        f"🛩️ **Бот для поиска аэрофотоснимков Ржевского района**\n\n"
-        f"📌 **Что я умею:**\n"
-        f"• 🔍 **Поиск снимков** — введите название деревни, и я покажу все связанные с ней аэрофотоснимки\n"
-        f"• 📋 **Список деревень** — покажу все деревни, которые есть в базе данных\n"
-        f"• 📖 **Инструкция** — подробное описание всех функций бота\n"
-        f"• 🗺️ **Карта Ржев** — скачать карту Ржевского района с привязкой к Locus Maps\n"
-        f"• 🗺️ **Locus Maps** — инструкция и скачивание приложения\n\n"
-        f"👇 **Выберите действие в меню ниже:**"
+        f"👋 <b>Добро пожаловать, {message.from_user.full_name}!</b>\n\n"
+        f"🛩️ <b>Бот для поиска аэрофотоснимков Ржевского района</b>\n\n"
+        f"📌 <b>Что я умею:</b>\n"
+        f"• 🔍 <b>Поиск снимков</b> — введите название деревни, и я покажу все связанные с ней аэрофотоснимки\n"
+        f"• 📋 <b>Список деревень</b> — покажу все деревни, которые есть в базе данных\n"
+        f"• 📖 <b>Инструкция</b> — подробное описание всех функций бота\n"
+        f"• 🗺️ <b>Карта Ржев</b> — скачать карту Ржевского района с привязкой к Locus Maps\n"
+        f"• 🗺️ <b>Locus Maps</b> — инструкция и скачивание приложения\n\n"
+        f"👇 <b>Выберите действие в меню ниже:</b>"
     )
     
     await message.answer(
         welcome_text,
-        parse_mode="Markdown",
+        parse_mode="HTML",
         reply_markup=get_main_keyboard()
     )
 
@@ -535,10 +535,10 @@ async def cmd_start(message: types.Message) -> None:
 @dp.message(F.text == "🔍 ПОИСК")
 async def menu_search(message: types.Message, state: FSMContext):
     await message.answer(
-        "🔍 **Режим поиска**\n\n"
+        "🔍 <b>Режим поиска</b>\n\n"
         "Введите название деревни, и я найду все связанные с ней снимки.\n\n"
-        "📝 **Примеры:** Горбово, Полунино, Дураково, Бельково",
-        parse_mode="Markdown"
+        "📝 <b>Примеры:</b> Горбово, Полунино, Дураково, Бельково",
+        parse_mode="HTML"
     )
     await state.set_state(SearchStates.waiting_for_village)
 
@@ -551,9 +551,9 @@ async def menu_villages(message: types.Message):
     
     chunks = [villages[i:i+20] for i in range(0, len(villages), 20)]
     for i, chunk in enumerate(chunks):
-        text = f"📋 **Все деревни в базе данных ({len(villages)} шт.):**\n\n" if i == 0 else ""
+        text = f"📋 <b>Все деревни в базе данных ({len(villages)} шт.):</b>\n\n" if i == 0 else ""
         text += "\n".join([f"• {v}" for v in chunk])
-        await message.answer(text, parse_mode="Markdown")
+        await message.answer(text, parse_mode="HTML")
     await message.answer(
         "💡 Чтобы найти снимки по деревне, нажмите 🔍 ПОИСК",
         reply_markup=back_keyboard()
@@ -562,40 +562,40 @@ async def menu_villages(message: types.Message):
 @dp.message(F.text == "📖 ИНСТРУКЦИЯ")
 async def menu_instruction(message: types.Message):
     instruction_text = (
-        "📖 **ПОДРОБНАЯ ИНСТРУКЦИЯ ПО ИСПОЛЬЗОВАНИЮ БОТА**\n\n"
+        "📖 <b>ПОДРОБНАЯ ИНСТРУКЦИЯ ПО ИСПОЛЬЗОВАНИЮ БОТА</b>\n\n"
         
-        "🔍 **1. ПОИСК СНИМКОВ**\n"
+        "🔍 <b>1. ПОИСК СНИМКОВ</b>\n"
         "• Нажмите кнопку «🔍 ПОИСК» в главном меню\n"
         "• Введите название деревни (например: Горбово, Полунино)\n"
         "• Бот покажет все снимки, где встречается эта деревня\n"
         "• Нажмите на номер снимка для просмотра детальной информации\n"
         "• В деталях снимка будет ссылка на скачивание MBTiles с Яндекс.Диска\n\n"
         
-        "📋 **2. СПИСОК ДЕРЕВЕНЬ**\n"
+        "📋 <b>2. СПИСОК ДЕРЕВЕНЬ</b>\n"
         "• Просмотр всех деревень, которые есть в базе данных\n"
         "• Удобно, если вы не знаете точное название\n\n"
         
-        "🗺️ **3. КАРТА РЖЕВСКОГО РАЙОНА**\n"
+        "🗺️ <b>3. КАРТА РЖЕВСКОГО РАЙОНА</b>\n"
         "• Скачивание карты Ржевского района с привязкой к Locus Maps\n"
         "• На карте отмечены основные населенные пункты\n\n"
         
-        "🗺️ **4. LOCUS MAPS**\n"
+        "🗺️ <b>4. LOCUS MAPS</b>\n"
         "• Раздел для работы с приложением Locus Maps\n"
-        "• **Инструкция** — ссылка на руководство от ПО Сокол\n"
-        "• **Скачать Locus Maps** — ссылка на скачивание приложения\n\n"
+        "• <b>Инструкция</b> — ссылка на руководство от ПО Сокол\n"
+        "• <b>Скачать Locus Maps</b> — ссылка на скачивание приложения\n\n"
         
-        "🔄 **5. НАВИГАЦИЯ**\n"
+        "🔄 <b>5. НАВИГАЦИЯ</b>\n"
         "• После просмотра снимка можно вернуться к списку кнопкой «🔙 Назад к списку»\n"
         "• Кнопка «🏠 В главное меню» доступна на всех этапах\n\n"
         
-        "🛩️ **ПРИЯТНОГО ИСПОЛЬЗОВАНИЯ!**"
+        "🛩️ <b>ПРИЯТНОГО ИСПОЛЬЗОВАНИЯ!</b>"
     )
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
     ])
     
-    await message.answer(instruction_text, parse_mode="Markdown", reply_markup=keyboard)
+    await message.answer(instruction_text, parse_mode="HTML", reply_markup=keyboard)
 
 @dp.message(F.text == "🗺️ КАРТА РЖЕВ")
 async def menu_map(message: types.Message):
@@ -604,17 +604,17 @@ async def menu_map(message: types.Message):
         [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
     ])
     await message.answer(
-        "🗺️ **Карта Ржевского района для Locus Maps**\n\n"
+        "🗺️ <b>Карта Ржевского района для Locus Maps</b>\n\n"
         "Нажмите кнопку ниже для скачивания карты с Яндекс.Диска.\n\n"
         "📌 Карта с привязкой для приложения Locus Maps.",
-        parse_mode="Markdown",
+        parse_mode="HTML",
         reply_markup=keyboard
     )
 
 @dp.message(F.text == "🗺️ LOCUS MAPS")
 async def menu_locus(message: types.Message):
     await message.answer(
-        "🗺️ **Locus Maps**\n\n"
+        "🗺️ <b>Locus Maps</b>\n\n"
         "Выберите действие:",
         reply_markup=get_locus_keyboard()
     )
@@ -630,9 +630,9 @@ async def locus_instruction(callback: CallbackQuery):
         [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
     ])
     await callback.message.edit_text(
-        "📖 **Инструкция по Locus Maps**\n\n"
+        "📖 <b>Инструкция по Locus Maps</b>\n\n"
         "Нажмите кнопку ниже для скачивания инструкции от ПО Сокол с Яндекс.Диска.",
-        parse_mode="Markdown",
+        parse_mode="HTML",
         reply_markup=keyboard
     )
     await callback.answer()
@@ -646,11 +646,11 @@ async def locus_download_app(callback: CallbackQuery):
         [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
     ])
     await callback.message.edit_text(
-        "📥 **Скачать Locus Maps**\n\n"
+        "📥 <b>Скачать Locus Maps</b>\n\n"
         "Нажмите кнопку ниже для скачивания приложения Locus Maps с Яндекс.Диска.\n\n"
         "После установки приложения вы можете скачать карту Ржевского района "
         "в разделе «🗺️ КАРТА РЖЕВ».",
-        parse_mode="Markdown",
+        parse_mode="HTML",
         reply_markup=keyboard
     )
     await callback.answer()
@@ -658,7 +658,7 @@ async def locus_download_app(callback: CallbackQuery):
 @dp.callback_query(lambda c: c.data == "back_to_locus")
 async def back_to_locus(callback: CallbackQuery):
     await callback.message.edit_text(
-        "🗺️ **Locus Maps**\n\n"
+        "🗺️ <b>Locus Maps</b>\n\n"
         "Выберите действие:",
         reply_markup=get_locus_keyboard()
     )
@@ -669,9 +669,9 @@ async def back_to_locus(callback: CallbackQuery):
 @dp.callback_query(lambda c: c.data == "download_map")
 async def download_map(callback: CallbackQuery):
     await callback.message.edit_text(
-        "⏳ **Загрузка...**\n\n"
+        "⏳ <b>Загрузка...</b>\n\n"
         "Идет подготовка файла карты для скачивания...",
-        parse_mode="Markdown"
+        parse_mode="HTML"
     )
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -680,11 +680,11 @@ async def download_map(callback: CallbackQuery):
     ])
     
     await callback.message.edit_text(
-        "🗺️ **Карта Ржевского района для Locus Maps**\n\n"
+        "🗺️ <b>Карта Ржевского района для Locus Maps</b>\n\n"
         "Файл готов к скачиванию:\n"
         "https://disk.yandex.ru/d/mrxZWJqLuAtnNA\n\n"
         "📌 Нажмите кнопку ниже для скачивания.",
-        parse_mode="Markdown",
+        parse_mode="HTML",
         reply_markup=keyboard
     )
     await callback.answer()
@@ -692,9 +692,9 @@ async def download_map(callback: CallbackQuery):
 @dp.callback_query(lambda c: c.data == "download_locus_instruction")
 async def download_locus_instruction(callback: CallbackQuery):
     await callback.message.edit_text(
-        "⏳ **Загрузка...**\n\n"
+        "⏳ <b>Загрузка...</b>\n\n"
         "Идет подготовка инструкции для скачивания...",
-        parse_mode="Markdown"
+        parse_mode="HTML"
     )
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -704,11 +704,11 @@ async def download_locus_instruction(callback: CallbackQuery):
     ])
     
     await callback.message.edit_text(
-        "📖 **Инструкция по Locus Maps**\n\n"
+        "📖 <b>Инструкция по Locus Maps</b>\n\n"
         "Файл готов к скачиванию:\n"
         "https://disk.yandex.ru/i/sE2Jy99in7MCxw\n\n"
         "📌 Нажмите кнопку ниже для скачивания.",
-        parse_mode="Markdown",
+        parse_mode="HTML",
         reply_markup=keyboard
     )
     await callback.answer()
@@ -716,9 +716,9 @@ async def download_locus_instruction(callback: CallbackQuery):
 @dp.callback_query(lambda c: c.data == "download_locus_app")
 async def download_locus_app(callback: CallbackQuery):
     await callback.message.edit_text(
-        "⏳ **Загрузка...**\n\n"
+        "⏳ <b>Загрузка...</b>\n\n"
         "Идет подготовка приложения для скачивания...",
-        parse_mode="Markdown"
+        parse_mode="HTML"
     )
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -728,11 +728,11 @@ async def download_locus_app(callback: CallbackQuery):
     ])
     
     await callback.message.edit_text(
-        "📥 **Скачать Locus Maps**\n\n"
+        "📥 <b>Скачать Locus Maps</b>\n\n"
         "Файл готов к скачиванию:\n"
         "https://disk.yandex.ru/d/uUgVGkMoq3WITw\n\n"
         "📌 Нажмите кнопку ниже для скачивания.",
-        parse_mode="Markdown",
+        parse_mode="HTML",
         reply_markup=keyboard
     )
     await callback.answer()
@@ -762,10 +762,10 @@ async def process_search(message: types.Message, state: FSMContext):
         photos_list = "\n".join([f"• {p}" for p in photos])
         
         await message.answer(
-            f"✅ **Найдено по запросу '{text}':**\n\n"
-            f"📍 **Деревни в этом районе:** {villages_text}\n\n"
-            f"📸 **Снимки ({len(photos)} шт.):**\n{photos_list}",
-            parse_mode="Markdown",
+            f"✅ <b>Найдено по запросу '{text}':</b>\n\n"
+            f"📍 <b>Деревни в этом районе:</b> {villages_text}\n\n"
+            f"📸 <b>Снимки ({len(photos)} шт.):</b>\n{photos_list}",
+            parse_mode="HTML",
             reply_markup=photos_keyboard(photos)
         )
     else:
@@ -789,11 +789,11 @@ async def process_photo(callback: CallbackQuery):
     if details:
         text = details
     else:
-        text = f"📸 **Снимок {photo}**\n\n❌ Информация отсутствует"
+        text = f"📸 <b>Снимок {photo}</b>\n\n❌ Информация отсутствует"
     
     await callback.message.edit_text(
         text,
-        parse_mode="Markdown",
+        parse_mode="HTML",
         reply_markup=back_to_photos_keyboard()
     )
     await callback.answer()
@@ -808,10 +808,10 @@ async def back_to_photos(callback: CallbackQuery):
     if photos:
         photos_list = "\n".join([f"• {p}" for p in photos])
         await callback.message.edit_text(
-            f"✅ **Найдено по запросу '{query}':**\n\n"
-            f"📍 **Деревни в этом районе:** {villages}\n\n"
-            f"📸 **Снимки ({len(photos)} шт.):**\n{photos_list}",
-            parse_mode="Markdown",
+            f"✅ <b>Найдено по запросу '{query}':</b>\n\n"
+            f"📍 <b>Деревни в этом районе:</b> {villages}\n\n"
+            f"📸 <b>Снимки ({len(photos)} шт.):</b>\n{photos_list}",
+            parse_mode="HTML",
             reply_markup=photos_keyboard(photos)
         )
     await callback.answer()
@@ -829,9 +829,9 @@ async def show_villages(callback: CallbackQuery):
     villages = db.get_all_villages_list()
     chunks = [villages[i:i+20] for i in range(0, len(villages), 20)]
     for i, chunk in enumerate(chunks):
-        text = f"📋 **Все деревни в базе данных ({len(villages)} шт.):**\n\n" if i == 0 else ""
+        text = f"📋 <b>Все деревни в базе данных ({len(villages)} шт.):</b>\n\n" if i == 0 else ""
         text += "\n".join([f"• {v}" for v in chunk])
-        await callback.message.answer(text, parse_mode="Markdown")
+        await callback.message.answer(text, parse_mode="HTML")
     await callback.message.answer("💡 Нажмите 🔍 ПОИСК для поиска", reply_markup=back_keyboard())
     await callback.answer()
 
