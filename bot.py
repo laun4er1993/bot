@@ -98,10 +98,11 @@ class YandexDiskClient:
         url = f"{self.base_url}/resources"
         params = {
             "path": f"/{folder_path}",  # Добавляем ведущий слеш
-            "limit": 100
+            "limit": 100,
+            "media_type": "data,compressed"  # Добавлено для показа .mbtiles файлов
         }
         
-        logger.info(f"  Запрос папки: /{folder_path}")
+        logger.info(f"  Запрос папки: /{folder_path} с media_type=data,compressed")
         data = self._make_request(url, params)
         
         if data and "_embedded" in data and "items" in data["_embedded"]:
@@ -806,4 +807,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("👋 Бот остановленн")
+        logger.info("👋 Бот остановлен")
