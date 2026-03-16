@@ -142,6 +142,57 @@ class YandexDiskClient:
         
         return None
     
+    def find_all_mbtiles_files(self) -> List[Dict]:
+        """
+        Ищет ВСЕ .mbtiles файлы на всем диске
+        Возвращает список информации о найденных файлах
+        """
+        logger.info("🔍 Поиск всех .mbtiles файлов на диске...")
+        
+        all_files = []
+        offset = 0
+        limit = 100
+        
+        while True:
+            try:
+                url = f"{self.base_url}/resources/files"
+                params = {
+                    "limit": limit,
+                    "offset": offset,
+                    "media_type": "data,compressed"  # Ищем среди этих типов
+                }
+                
+                data = self._make_request(url, params)
+                if not data or "items" not in data:
+                    break
+                
+                items = data["items"]
+                if not items:
+                    break
+                
+                # Фильтруем только .mbtiles файлы
+                for item in items:
+                    if item['name'].endswith('.mbtiles'):
+                        all_files.append({
+                            'name': item['name'],
+                            'path': item['path'],
+                            'size': item.get('size', 0),
+                            'created': item.get('created', ''),
+                            'mime_type': item.get('mime_type', '')
+                        })
+                        logger.info(f"  Найден .mbtiles файл: {item['name']} по пути {item['path']}")
+                
+                offset += limit
+                if len(items) < limit:
+                    break
+                    
+            except Exception as e:
+                logger.error(f"Ошибка при поиске файлов: {e}")
+                break
+        
+        logger.info(f"✅ Всего найдено .mbtiles файлов: {len(all_files)}")
+        return all_files
+    
     def find_mbtiles_file(self, square: str, overlay: str, frame: str) -> Optional[Dict]:
         try:
             # Формируем базовые части - ИСПРАВЛЕННЫЙ ПУТЬ
@@ -256,6 +307,10 @@ class PhotosDatabase:
         
         # Проверяем доступ к Яндекс.Диску перед загрузкой ссылок
         if yd_client.check_root_access():
+            # Для отладки найдем все .mbtiles файлы на диске
+            all_mbtiles = yd_client.find_all_mbtiles_files()
+            logger.info(f"📊 Всего .mbtiles файлов на диске: {len(all_mbtiles)}")
+            
             self.load_photo_links()
         else:
             logger.error("❌ Нет доступа к Яндекс.Диску, пропускаем загрузку ссылок")
