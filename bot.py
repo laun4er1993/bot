@@ -150,12 +150,17 @@ class YandexDiskClient:
             full_name = f"{square}-{overlay}-{frame}"
             
             logger.info(f"\n🔍 Поиск файла для {full_name}:")
+            logger.info(f"  base_folder: {base_folder}")
+            logger.info(f"  square_folder: {square_folder}")
+            logger.info(f"  overlay_folder: {overlay_folder}")
+            logger.info(f"  full_name: {full_name}")
             
             # ВАРИАНТ 1: Путь с подпапкой наложения и подпапкой полного имени
             subfolder_path = f"{overlay_folder}/{full_name}"
             logger.info(f"  Вариант 1 (с подпапкой наложения + подпапка): /{subfolder_path}")
             
             if self.folder_exists(subfolder_path):
+                logger.info(f"  ✅ Вариант 1: папка существует")
                 files = self.get_files_in_folder(subfolder_path)
                 if files:
                     mbtiles_files = self._filter_mbtiles_files(files, full_name)
@@ -174,6 +179,8 @@ class YandexDiskClient:
                                 'version': selected['version'],
                                 'download_link': download_link
                             }
+            else:
+                logger.info(f"  ❌ Вариант 1: папка не существует")
             
             # ВАРИАНТ 2: Путь без подпапки полного имени (файлы прямо в папке наложения)
             logger.info(f"  Вариант 2 (в папке наложения): /{overlay_folder}")
@@ -195,12 +202,15 @@ class YandexDiskClient:
                             'version': selected['version'],
                             'download_link': download_link
                         }
+            else:
+                logger.info(f"  ❌ Вариант 2: папка не существует или нет файлов")
             
             # ВАРИАНТ 3: Путь с полным именем прямо в квадрате
             full_folder_path = f"{square_folder}/{full_name}"
             logger.info(f"  Вариант 3 (полное имя в квадрате): /{full_folder_path}")
             
             if self.folder_exists(full_folder_path):
+                logger.info(f"  ✅ Вариант 3: папка существует")
                 files = self.get_files_in_folder(full_folder_path)
                 if files:
                     mbtiles_files = self._filter_mbtiles_files(files, full_name)
@@ -219,6 +229,8 @@ class YandexDiskClient:
                                 'version': selected['version'],
                                 'download_link': download_link
                             }
+            else:
+                logger.info(f"  ❌ Вариант 3: папка не существует")
             
             logger.warning(f"  ❌ Файл не найден для {full_name}")
             return None
@@ -340,12 +352,15 @@ class PhotosDatabase:
         logger.info(f"Найдено {len(all_photos)} уникальных снимков для поиска")
         
         for photo in all_photos:
+            logger.info(f"  🔍 Обработка снимка: {photo}")
             parts = photo.split('-')
             if len(parts) >= 4:
                 square = f"{parts[0]}-{parts[1]}"
                 overlay = parts[2]
                 frame = parts[3]
+                logger.info(f"    square={square}, overlay={overlay}, frame={frame}")
             else:
+                logger.warning(f"    ❌ Неправильный формат: {photo}")
                 continue
             
             file_info = yd_client.find_mbtiles_file(
@@ -356,9 +371,9 @@ class PhotosDatabase:
             
             if file_info:
                 self.photo_links[photo] = file_info['download_link']
-                logger.info(f"✅ Найден файл для {photo}: {file_info['name']} (версия {file_info['version']})")
+                logger.info(f"  ✅ Найден файл для {photo}: {file_info['name']} (версия {file_info['version']})")
             else:
-                logger.warning(f"❌ Файл не найден для {photo}")
+                logger.warning(f"  ❌ Файл не найден для {photo}")
     
     def search_by_village(self, query: str) -> List[Dict]:
         if not query:
@@ -394,14 +409,22 @@ class PhotosDatabase:
         return sorted(list(set(villages)))
     
     def get_photo_details(self, photo_num: str) -> Optional[str]:
+        logger.info(f"📸 ЗАПРОШЕН СНИМОК: {photo_num}")
+        logger.info(f"  Есть в photo_details: {photo_num in self.photo_details}")
+        logger.info(f"  Есть в photo_links: {photo_num in self.photo_links}")
+        
         details = self.photo_details.get(photo_num)
         download_link = self.photo_links.get(photo_num)
         
         if details:
             if download_link:
                 details += f"\n\n📥 **Скачать MBTiles:**\n{download_link}"
+                logger.info(f"  ✅ Ссылка есть: {download_link[:50]}...")
             else:
                 details += f"\n\n❌ **Файл MBTiles не найден на Яндекс.Диске**"
+                logger.info(f"  ❌ Ссылки нет")
+        else:
+            logger.warning(f"  ❌ Нет описания для {photo_num}")
         
         return details
     
