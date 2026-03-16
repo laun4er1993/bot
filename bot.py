@@ -143,7 +143,7 @@ class YandexDiskClient:
     
     def find_mbtiles_file(self, square: str, overlay: str, frame: str) -> Optional[Dict]:
         try:
-            # Формируем базовые части (без "Компьютер DESKTOP-JMVJ4CL")
+            # Формируем базовые части - ИСПРАВЛЕННЫЙ ПУТЬ
             base_folder = f"CatalogSokol/АФС/Каталог ПО Сокол"
             square_folder = f"{base_folder}/{square}"
             overlay_folder = f"{square_folder}/{square}-{overlay}"
@@ -778,32 +778,4 @@ async def show_villages(callback: CallbackQuery):
     await callback.message.answer("💡 Нажмите 🔍 ПОИСК для поиска", reply_markup=back_keyboard())
     await callback.answer()
 
-@dp.callback_query(lambda c: c.data == "back_to_main")
-async def back_to_main(callback: CallbackQuery, state: FSMContext):
-    await state.clear()
-    await callback.message.delete()
-    await cmd_start(callback.message)
-    await callback.answer()
-
-# ========== ЗАПУСК ==========
-
-async def delete_webhook() -> None:
-    try:
-        info = await bot.get_webhook_info()
-        if info.url:
-            await bot.delete_webhook(drop_pending_updates=True)
-    except Exception as e:
-        logger.error(f"Ошибка удаления webhook: {e}")
-
-async def main() -> None:
-    logger.info("🚀 Бот с поддержкой Яндекс.Диска запускается...")
-    db.log_stats()
-    logger.info(f"✅ Яндекс.Диск токен загружен")
-    await delete_webhook()
-    await dp.start_polling(bot, skip_updates=True)
-
-if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("👋 Бот остановлен")
+@dp.callback_query(lambda c: c.data
