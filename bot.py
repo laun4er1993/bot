@@ -56,10 +56,9 @@ class YandexDiskClient:
             "Authorization": f"OAuth {token}",
             "Content-Type": "application/json"
         }
-        self.file_cache: Dict[str, str] = {}  # Кэш для хранения ссылок на файлы
+        self.file_cache: Dict[str, str] = {}
         
     def get_files_in_folder(self, folder_path: str) -> Optional[List[Dict]]:
-        """Получает список файлов в папке"""
         try:
             url = f"{self.base_url}/resources"
             params = {
@@ -77,10 +76,17 @@ class YandexDiskClient:
             logger.error(f"Ошибка при запросе к Яндекс.Диску: {e}")
             return None
     
-    def get_file_download_link(self, file_path: str) -> Optional[str]:
-        """Получает ссылку на скачивание файла"""
+    def folder_exists(self, folder_path: str) -> bool:
         try:
-            # Проверяем кэш
+            url = f"{self.base_url}/resources"
+            params = {"path": folder_path}
+            response = requests.get(url, headers=self.headers, params=params)
+            return response.status_code == 200
+        except Exception:
+            return False
+    
+    def get_file_download_link(self, file_path: str) -> Optional[str]:
+        try:
             if file_path in self.file_cache:
                 return self.file_cache[file_path]
             
@@ -98,61 +104,86 @@ class YandexDiskClient:
             logger.error(f"Ошибка получения ссылки на скачивание для {file_path}: {e}")
             return None
     
-    def find_mbtiles_file(self, base_path: str, square: str, overlay: str, frame: str) -> Optional[Dict]:
-        """
-        Ищет файл .mbtiles по заданным параметрам
-        Формат пути: АФС/Каталог ПО Сокол/{square}/{square}-{overlay}-{frame}/{square}-{overlay}-{frame}[-version].mbtiles
-        """
+    def find_mbtiles_file(self, square: str, overlay: str, frame: str) -> Optional[Dict]:
         try:
-            # Формируем базовую часть имени файла
-            base_name = f"{square}-{overlay}-{frame}"
-            folder_name = f"{square}-{overlay}-{frame}"
+            base_folder = f"АФС/Каталог ПО Сокол"
+            square_folder = f"{base_folder}/{square}"
+            overlay_folder = f"{square_folder}/{square}-{overlay}"
+            full_name = f"{square}-{overlay}-{frame}"
             
-            # Полный путь к папке со снимком
-            folder_path = f"АФС/Каталог ПО Сокол/{square}/{folder_name}"
+            # ВАРИАНТ 1: Проверяем путь с подпапкой полного имени
+            subfolder_path = f"{overlay_folder}/{full_name}"
+            logger.info(f"  Проверяем путь с подпапкой: {subfolder_path}")
             
-            # Получаем список файлов в папке
-            files = self.get_files_in_folder(folder_path)
-            if not files:
-                logger.warning(f"Папка не найдена: {folder_path}")
-                return None
+            if self.folder_exists(subfolder_path):
+                files = self.get_files_in_folder(subfolder_path)
+                if files:
+                    mbtiles_files = self._filter_mbtiles_files(files, full_name)
+                    if mbtiles_files:
+                        logger.info(f"  ✅ Найдены файлы в подпапке: {len(mbtiles_files)} шт.")
+                        mbtiles_files.sort(key=lambda x: x['version'], reverse=True)
+                        selected = mbtiles_files[0]
+                        
+                        file_path = f"{subfolder_path}/{selected['name']}"
+                        download_link = self.get_file_download_link(file_path)
+                        
+                        if download_link:
+                            return {
+                                'name': selected['name'],
+                                'path': file_path,
+                                'version': selected['version'],
+                                'download_link': download_link
+                            }
             
-            # Ищем файл .mbtiles
-            mbtiles_files = []
-            for file in files:
-                if file['name'].endswith('.mbtiles') and file['name'].startswith(base_name):
-                    # Извлекаем версию, если есть
-                    version_match = re.search(r'-(\d+)\.mbtiles$', file['name'])
-                    version = int(version_match.group(1)) if version_match else 0
-                    mbtiles_files.append({
-                        'name': file['name'],
-                        'path': file['path'],
-                        'version': version
-                    })
+            # ВАРИАНТ 2: Проверяем путь без подпапки
+            logger.info(f"  Проверяем путь без подпапки: {overlay_folder}")
+            files = self.get_files_in_folder(overlay_folder)
+            if files:
+                mbtiles_files = self._filter_mbtiles_files(files, full_name)
+                if mbtiles_files:
+                    logger.info(f"  ✅ Найдены файлы в папке наложения: {len(mbtiles_files)} шт.")
+                    mbtiles_files.sort(key=lambda x: x['version'], reverse=True)
+                    selected = mbtiles_files[0]
+                    
+                    file_path = f"{overlay_folder}/{selected['name']}"
+                    download_link = self.get_file_download_link(file_path)
+                    
+                    if download_link:
+                        return {
+                            'name': selected['name'],
+                            'path': file_path,
+                            'version': selected['version'],
+                            'download_link': download_link
+                        }
             
-            if not mbtiles_files:
-                logger.warning(f"Файл .mbtiles не найден в {folder_path}")
-                return None
-            
-            # Сортируем по версии и берем последнюю
-            mbtiles_files.sort(key=lambda x: x['version'], reverse=True)
-            selected_file = mbtiles_files[0]
-            
-            # Получаем ссылку на скачивание
-            download_link = self.get_file_download_link(selected_file['path'])
-            if download_link:
-                return {
-                    'name': selected_file['name'],
-                    'path': selected_file['path'],
-                    'version': selected_file['version'],
-                    'download_link': download_link
-                }
-            
+            logger.warning(f"❌ Файл не найден для {full_name}")
             return None
             
         except Exception as e:
             logger.error(f"Ошибка поиска файла для {square}-{overlay}-{frame}: {e}")
             return None
+    
+    def _filter_mbtiles_files(self, files: List[Dict], base_name: str) -> List[Dict]:
+        mbtiles_files = []
+        
+        for file in files:
+            name = file['name']
+            if not name.endswith('.mbtiles') or not name.startswith(base_name):
+                continue
+            
+            version = 0
+            version_match = re.search(rf'{re.escape(base_name)}-(\d+)\.mbtiles$', name)
+            if version_match:
+                version = int(version_match.group(1))
+            elif name == f"{base_name}.mbtiles":
+                version = 0
+            
+            mbtiles_files.append({
+                'name': name,
+                'version': version
+            })
+        
+        return mbtiles_files
 
 # Инициализация клиента Яндекс.Диска
 yd_client = YandexDiskClient(YANDEX_DISK_TOKEN)
@@ -168,7 +199,7 @@ class PhotosDatabase:
         self.locations: List[Dict] = []
         self.all_villages: Set[str] = set()
         self.photo_details: Dict[str, str] = {}
-        self.photo_links: Dict[str, str] = {}  # Кэш для ссылок на скачивание
+        self.photo_links: Dict[str, str] = {}
         
         self.user_last_photos: Dict[int, List[str]] = {}
         self.user_last_villages: Dict[int, str] = {}
@@ -180,7 +211,7 @@ class PhotosDatabase:
         os.makedirs(self.data_dir, exist_ok=True)
         self.load_multi_keys()
         self.load_details()
-        self.load_photo_links()  # Загружаем ссылки на файлы
+        self.load_photo_links()
         self.log_stats()
     
     def load_multi_keys(self) -> None:
@@ -228,10 +259,8 @@ class PhotosDatabase:
             logger.error(f"Ошибка загрузки details: {e}")
     
     def load_photo_links(self) -> None:
-        """Загружает ссылки на скачивание для всех снимков"""
         logger.info("🔍 Поиск файлов на Яндекс.Диске...")
         
-        # Собираем все уникальные снимки из всех записей
         all_photos = set()
         for record in self.locations:
             for photo in record['photos']:
@@ -240,19 +269,15 @@ class PhotosDatabase:
         logger.info(f"Найдено {len(all_photos)} уникальных снимков для поиска")
         
         for photo in all_photos:
-            # Парсим номер снимка
-            # Формат: N56E34-XXX-YYY или N56E34-XXX-YYY-Z
             parts = photo.split('-')
             if len(parts) >= 4:
-                square = f"{parts[0]}-{parts[1]}"  # N56E34
-                overlay = parts[2]                   # XXX
-                frame = parts[3]                     # YYY
+                square = f"{parts[0]}-{parts[1]}"
+                overlay = parts[2]
+                frame = parts[3]
             else:
                 continue
             
-            # Ищем файл на Яндекс.Диске
             file_info = yd_client.find_mbtiles_file(
-                base_path="АФС/Каталог ПО Сокол",
                 square=square,
                 overlay=overlay,
                 frame=frame
@@ -298,13 +323,11 @@ class PhotosDatabase:
         return sorted(list(set(villages)))
     
     def get_photo_details(self, photo_num: str) -> Optional[str]:
-        """Возвращает детальное описание снимка со ссылкой на скачивание"""
         details = self.photo_details.get(photo_num)
         download_link = self.photo_links.get(photo_num)
         
         if details:
             if download_link:
-                # Добавляем ссылку на скачивание в конец описания
                 details += f"\n\n📥 **Скачать MBTiles:**\n{download_link}"
             else:
                 details += f"\n\n❌ **Файл MBTiles не найден на Яндекс.Диске**"
@@ -464,7 +487,6 @@ async def menu_instruction(message: types.Message):
         "🛩️ **ПРИЯТНОГО ИСПОЛЬЗОВАНИЯ!**"
     )
     
-    # Создаем клавиатуру с кнопкой возврата
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
     ])
