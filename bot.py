@@ -143,7 +143,7 @@ class YandexDiskClient:
     
     def find_mbtiles_file(self, square: str, overlay: str, frame: str) -> Optional[Dict]:
         try:
-            # Формируем базовые части - ИСПРАВЛЕННЫЙ ПУТЬ
+            # Формируем базовые части
             base_folder = f"CatalogSokol/АФС/КаталогПОСокол"
             square_folder = f"{base_folder}/{square}"
             overlay_folder = f"{square_folder}/{square}-{overlay}"
@@ -151,16 +151,16 @@ class YandexDiskClient:
             
             logger.info(f"\n🔍 Поиск файла для {full_name}:")
             
-            # ВАРИАНТ 1: Проверяем путь с подпапкой полного имени
+            # ВАРИАНТ 1: Путь с подпапкой наложения и подпапкой полного имени
             subfolder_path = f"{overlay_folder}/{full_name}"
-            logger.info(f"  Вариант 1 (с подпапкой): /{subfolder_path}")
+            logger.info(f"  Вариант 1 (с подпапкой наложения + подпапка): /{subfolder_path}")
             
             if self.folder_exists(subfolder_path):
                 files = self.get_files_in_folder(subfolder_path)
                 if files:
                     mbtiles_files = self._filter_mbtiles_files(files, full_name)
                     if mbtiles_files:
-                        logger.info(f"  ✅ Найдены файлы в подпапке: {len(mbtiles_files)} шт.")
+                        logger.info(f"  ✅ Найдены файлы в варианте 1: {len(mbtiles_files)} шт.")
                         mbtiles_files.sort(key=lambda x: x['version'], reverse=True)
                         selected = mbtiles_files[0]
                         
@@ -175,13 +175,13 @@ class YandexDiskClient:
                                 'download_link': download_link
                             }
             
-            # ВАРИАНТ 2: Проверяем путь без подпапки
-            logger.info(f"  Вариант 2 (без подпапки): /{overlay_folder}")
+            # ВАРИАНТ 2: Путь без подпапки полного имени (файлы прямо в папке наложения)
+            logger.info(f"  Вариант 2 (в папке наложения): /{overlay_folder}")
             files = self.get_files_in_folder(overlay_folder)
             if files:
                 mbtiles_files = self._filter_mbtiles_files(files, full_name)
                 if mbtiles_files:
-                    logger.info(f"  ✅ Найдены файлы в папке наложения: {len(mbtiles_files)} шт.")
+                    logger.info(f"  ✅ Найдены файлы в варианте 2: {len(mbtiles_files)} шт.")
                     mbtiles_files.sort(key=lambda x: x['version'], reverse=True)
                     selected = mbtiles_files[0]
                     
@@ -195,6 +195,30 @@ class YandexDiskClient:
                             'version': selected['version'],
                             'download_link': download_link
                         }
+            
+            # ВАРИАНТ 3: Путь с полным именем прямо в квадрате
+            full_folder_path = f"{square_folder}/{full_name}"
+            logger.info(f"  Вариант 3 (полное имя в квадрате): /{full_folder_path}")
+            
+            if self.folder_exists(full_folder_path):
+                files = self.get_files_in_folder(full_folder_path)
+                if files:
+                    mbtiles_files = self._filter_mbtiles_files(files, full_name)
+                    if mbtiles_files:
+                        logger.info(f"  ✅ Найдены файлы в варианте 3: {len(mbtiles_files)} шт.")
+                        mbtiles_files.sort(key=lambda x: x['version'], reverse=True)
+                        selected = mbtiles_files[0]
+                        
+                        file_path = f"{full_folder_path}/{selected['name']}"
+                        download_link = self.get_file_download_link(file_path)
+                        
+                        if download_link:
+                            return {
+                                'name': selected['name'],
+                                'path': file_path,
+                                'version': selected['version'],
+                                'download_link': download_link
+                            }
             
             logger.warning(f"  ❌ Файл не найден для {full_name}")
             return None
@@ -796,10 +820,13 @@ async def delete_webhook() -> None:
         logger.error(f"Ошибка удаления webhook: {e}")
 
 async def main() -> None:
-    logger.info("🚀 Бот с поддержкой Яндекс.Диска запускается...")
-    db.log_stats()
+    logger.info("🚀 Бот для поиска аэрофотоснимков запускается...")
+    logger.info(f"📊 Загружено локаций: {len(db.locations)}")
+    logger.info(f"📊 Уникальных деревень: {len(db.all_villages)}")
+    logger.info(f"📊 Описаний снимков: {len(db.photo_details)}")
     logger.info(f"✅ Яндекс.Диск токен загружен")
     await delete_webhook()
+    logger.info("🔄 Polling...")
     await dp.start_polling(bot, skip_updates=True)
 
 if __name__ == "__main__":
