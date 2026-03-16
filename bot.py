@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import sys
+import re
 from typing import Optional, Dict, List, Set
 import requests
 import io
@@ -23,7 +24,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 # Токен из переменных окружения
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-YANDEX_DISK_TOKEN = os.getenv("YANDEX_DISK_TOKEN")  # Токен для Яндекс.Диска
+YANDEX_DISK_TOKEN = os.getenv("YANDEX_DISK_TOKEN")
 
 if not BOT_TOKEN:
     logging.critical("❌ ОШИБКА: BOT_TOKEN не найден!")
@@ -55,13 +56,14 @@ class YandexDiskClient:
             "Authorization": f"OAuth {token}",
             "Content-Type": "application/json"
         }
-    
-    def get_public_files(self, public_key: str) -> Optional[List[Dict]]:
-        """Получает список файлов по публичной ссылке"""
+        self.file_cache: Dict[str, str] = {}  # Кэш для хранения ссылок на файлы
+        
+    def get_files_in_folder(self, folder_path: str) -> Optional[List[Dict]]:
+        """Получает список файлов в папке"""
         try:
-            url = f"{self.base_url}/public/resources"
+            url = f"{self.base_url}/resources"
             params = {
-                "public_key": public_key,
+                "path": folder_path,
                 "limit": 100
             }
             response = requests.get(url, headers=self.headers, params=params)
@@ -69,40 +71,87 @@ class YandexDiskClient:
                 data = response.json()
                 if "_embedded" in data and "items" in data["_embedded"]:
                     return data["_embedded"]["items"]
-            logger.error(f"Ошибка получения файлов: {response.status_code}")
+            logger.error(f"Ошибка получения файлов из {folder_path}: {response.status_code}")
             return None
         except Exception as e:
             logger.error(f"Ошибка при запросе к Яндекс.Диску: {e}")
             return None
     
-    def get_file_download_link(self, public_key: str, file_path: str) -> Optional[str]:
+    def get_file_download_link(self, file_path: str) -> Optional[str]:
         """Получает ссылку на скачивание файла"""
         try:
-            url = f"{self.base_url}/public/resources/download"
-            params = {
-                "public_key": public_key,
-                "path": file_path
-            }
+            # Проверяем кэш
+            if file_path in self.file_cache:
+                return self.file_cache[file_path]
+            
+            url = f"{self.base_url}/resources/download"
+            params = {"path": file_path}
             response = requests.get(url, headers=self.headers, params=params)
             if response.status_code == 200:
                 data = response.json()
-                return data.get("href")
+                download_link = data.get("href")
+                if download_link:
+                    self.file_cache[file_path] = download_link
+                    return download_link
             return None
         except Exception as e:
-            logger.error(f"Ошибка получения ссылки на скачивание: {e}")
+            logger.error(f"Ошибка получения ссылки на скачивание для {file_path}: {e}")
             return None
     
-    def download_file(self, public_key: str, file_path: str) -> Optional[bytes]:
-        """Скачивает файл с Яндекс.Диска"""
+    def find_mbtiles_file(self, base_path: str, square: str, overlay: str, frame: str) -> Optional[Dict]:
+        """
+        Ищет файл .mbtiles по заданным параметрам
+        Формат пути: АФС/Каталог ПО Сокол/{square}/{square}-{overlay}-{frame}/{square}-{overlay}-{frame}[-version].mbtiles
+        """
         try:
-            download_link = self.get_file_download_link(public_key, file_path)
+            # Формируем базовую часть имени файла
+            base_name = f"{square}-{overlay}-{frame}"
+            folder_name = f"{square}-{overlay}-{frame}"
+            
+            # Полный путь к папке со снимком
+            folder_path = f"АФС/Каталог ПО Сокол/{square}/{folder_name}"
+            
+            # Получаем список файлов в папке
+            files = self.get_files_in_folder(folder_path)
+            if not files:
+                logger.warning(f"Папка не найдена: {folder_path}")
+                return None
+            
+            # Ищем файл .mbtiles
+            mbtiles_files = []
+            for file in files:
+                if file['name'].endswith('.mbtiles') and file['name'].startswith(base_name):
+                    # Извлекаем версию, если есть
+                    version_match = re.search(r'-(\d+)\.mbtiles$', file['name'])
+                    version = int(version_match.group(1)) if version_match else 0
+                    mbtiles_files.append({
+                        'name': file['name'],
+                        'path': file['path'],
+                        'version': version
+                    })
+            
+            if not mbtiles_files:
+                logger.warning(f"Файл .mbtiles не найден в {folder_path}")
+                return None
+            
+            # Сортируем по версии и берем последнюю
+            mbtiles_files.sort(key=lambda x: x['version'], reverse=True)
+            selected_file = mbtiles_files[0]
+            
+            # Получаем ссылку на скачивание
+            download_link = self.get_file_download_link(selected_file['path'])
             if download_link:
-                response = requests.get(download_link)
-                if response.status_code == 200:
-                    return response.content
+                return {
+                    'name': selected_file['name'],
+                    'path': selected_file['path'],
+                    'version': selected_file['version'],
+                    'download_link': download_link
+                }
+            
             return None
+            
         except Exception as e:
-            logger.error(f"Ошибка скачивания файла: {e}")
+            logger.error(f"Ошибка поиска файла для {square}-{overlay}-{frame}: {e}")
             return None
 
 # Инициализация клиента Яндекс.Диска
@@ -119,6 +168,7 @@ class PhotosDatabase:
         self.locations: List[Dict] = []
         self.all_villages: Set[str] = set()
         self.photo_details: Dict[str, str] = {}
+        self.photo_links: Dict[str, str] = {}  # Кэш для ссылок на скачивание
         
         self.user_last_photos: Dict[int, List[str]] = {}
         self.user_last_villages: Dict[int, str] = {}
@@ -130,6 +180,7 @@ class PhotosDatabase:
         os.makedirs(self.data_dir, exist_ok=True)
         self.load_multi_keys()
         self.load_details()
+        self.load_photo_links()  # Загружаем ссылки на файлы
         self.log_stats()
     
     def load_multi_keys(self) -> None:
@@ -176,6 +227,43 @@ class PhotosDatabase:
         except Exception as e:
             logger.error(f"Ошибка загрузки details: {e}")
     
+    def load_photo_links(self) -> None:
+        """Загружает ссылки на скачивание для всех снимков"""
+        logger.info("🔍 Поиск файлов на Яндекс.Диске...")
+        
+        # Собираем все уникальные снимки из всех записей
+        all_photos = set()
+        for record in self.locations:
+            for photo in record['photos']:
+                all_photos.add(photo)
+        
+        logger.info(f"Найдено {len(all_photos)} уникальных снимков для поиска")
+        
+        for photo in all_photos:
+            # Парсим номер снимка
+            # Формат: N56E34-XXX-YYY или N56E34-XXX-YYY-Z
+            parts = photo.split('-')
+            if len(parts) >= 4:
+                square = f"{parts[0]}-{parts[1]}"  # N56E34
+                overlay = parts[2]                   # XXX
+                frame = parts[3]                     # YYY
+            else:
+                continue
+            
+            # Ищем файл на Яндекс.Диске
+            file_info = yd_client.find_mbtiles_file(
+                base_path="АФС/Каталог ПО Сокол",
+                square=square,
+                overlay=overlay,
+                frame=frame
+            )
+            
+            if file_info:
+                self.photo_links[photo] = file_info['download_link']
+                logger.info(f"✅ Найден файл для {photo}: {file_info['name']} (версия {file_info['version']})")
+            else:
+                logger.warning(f"❌ Файл не найден для {photo}")
+    
     def search_by_village(self, query: str) -> List[Dict]:
         if not query:
             return []
@@ -210,7 +298,18 @@ class PhotosDatabase:
         return sorted(list(set(villages)))
     
     def get_photo_details(self, photo_num: str) -> Optional[str]:
-        return self.photo_details.get(photo_num)
+        """Возвращает детальное описание снимка со ссылкой на скачивание"""
+        details = self.photo_details.get(photo_num)
+        download_link = self.photo_links.get(photo_num)
+        
+        if details:
+            if download_link:
+                # Добавляем ссылку на скачивание в конец описания
+                details += f"\n\n📥 **Скачать MBTiles:**\n{download_link}"
+            else:
+                details += f"\n\n❌ **Файл MBTiles не найден на Яндекс.Диске**"
+        
+        return details
     
     def get_all_villages_list(self) -> List[str]:
         return sorted(list(self.all_villages))
@@ -234,7 +333,7 @@ class PhotosDatabase:
         return self.user_last_query.get(user_id)
     
     def log_stats(self):
-        logger.info(f"📊 Статистика: {len(self.locations)} записей, {len(self.all_villages)} деревень, {len(self.photo_details)} описаний")
+        logger.info(f"📊 Статистика: {len(self.locations)} записей, {len(self.all_villages)} деревень, {len(self.photo_details)} описаний, {len(self.photo_links)} ссылок")
 
 db = PhotosDatabase()
 
@@ -342,7 +441,8 @@ async def menu_instruction(message: types.Message):
         "• Нажмите кнопку «🔍 ПОИСК» в главном меню\n"
         "• Введите название деревни (например: Горбово, Полунино)\n"
         "• Бот покажет все снимки, где встречается эта деревня\n"
-        "• Нажмите на номер снимка для просмотра детальной информации\n\n"
+        "• Нажмите на номер снимка для просмотра детальной информации\n"
+        "• В деталях снимка будет ссылка на скачивание MBTiles с Яндекс.Диска\n\n"
         
         "📋 **2. СПИСОК ДЕРЕВЕНЬ**\n"
         "• Просмотр всех деревень, которые есть в базе данных\n"
@@ -448,8 +548,6 @@ async def download_map(callback: CallbackQuery):
         parse_mode="Markdown"
     )
     
-    # Здесь будет логика скачивания карты с Яндекс.Диска
-    # Пока используем прямую ссылку
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📥 Скачать карту", url="https://disk.yandex.ru/d/mrxZWJqLuAtnNA")],
         [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
