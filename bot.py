@@ -98,11 +98,11 @@ class YandexDiskClient:
         url = f"{self.base_url}/resources"
         params = {
             "path": f"/{folder_path}",  # Добавляем ведущий слеш
-            "limit": 100,
-            "media_type": "data,compressed"  # Добавлено для показа .mbtiles файлов
+            "limit": 100
+            # Параметр media_type удален - получаем ВСЕ файлы
         }
         
-        logger.info(f"  Запрос папки: /{folder_path} с media_type=data,compressed")
+        logger.info(f"  Запрос папки: /{folder_path} (без фильтрации по типу)")
         data = self._make_request(url, params)
         
         if data and "_embedded" in data and "items" in data["_embedded"]:
