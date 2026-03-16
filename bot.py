@@ -3,6 +3,7 @@ import logging
 import os
 import sys
 import re
+import urllib.parse
 from typing import Optional, Dict, List, Set
 import requests
 import io
@@ -58,62 +59,101 @@ class YandexDiskClient:
         }
         self.file_cache: Dict[str, str] = {}
         
-    def get_files_in_folder(self, folder_path: str) -> Optional[List[Dict]]:
+    def _make_request(self, url: str, params: dict = None) -> Optional[Dict]:
+        """Выполняет запрос к API с обработкой ошибок"""
         try:
-            url = f"{self.base_url}/resources"
-            params = {
-                "path": folder_path,
-                "limit": 100
-            }
             response = requests.get(url, headers=self.headers, params=params)
+            
+            # Логируем информацию о запросе для отладки
+            logger.info(f"  API Запрос: {response.request.url}")
+            logger.info(f"  Статус ответа: {response.status_code}")
+            
             if response.status_code == 200:
-                data = response.json()
-                if "_embedded" in data and "items" in data["_embedded"]:
-                    return data["_embedded"]["items"]
-            logger.error(f"Ошибка получения файлов из {folder_path}: {response.status_code}")
+                return response.json()
+            elif response.status_code == 401:
+                logger.error("  ❌ Ошибка 401: Неверный токен или нет прав доступа")
+            elif response.status_code == 404:
+                logger.error("  ❌ Ошибка 404: Путь не найден")
+            else:
+                logger.error(f"  ❌ Ошибка {response.status_code}: {response.text}")
+            
             return None
         except Exception as e:
-            logger.error(f"Ошибка при запросе к Яндекс.Диску: {e}")
+            logger.error(f"  ❌ Исключение при запросе: {e}")
             return None
+    
+    def check_root_access(self) -> bool:
+        """Проверяет доступ к корню диска"""
+        logger.info("🔍 Проверка доступа к Яндекс.Диску...")
+        data = self._make_request(f"{self.base_url}/")
+        if data:
+            logger.info("✅ Доступ к диску получен")
+            return True
+        return False
+    
+    def get_files_in_folder(self, folder_path: str) -> Optional[List[Dict]]:
+        """Получает список файлов в папке"""
+        # Кодируем путь для URL
+        encoded_path = urllib.parse.quote(folder_path)
+        url = f"{self.base_url}/resources"
+        params = {
+            "path": f"/{folder_path}",  # Добавляем ведущий слеш
+            "limit": 100
+        }
+        
+        logger.info(f"  Запрос папки: /{folder_path}")
+        data = self._make_request(url, params)
+        
+        if data and "_embedded" in data and "items" in data["_embedded"]:
+            items = data["_embedded"]["items"]
+            logger.info(f"  ✅ Найдено {len(items)} элементов в папке")
+            return items
+        
+        return None
     
     def folder_exists(self, folder_path: str) -> bool:
-        try:
-            url = f"{self.base_url}/resources"
-            params = {"path": folder_path}
-            response = requests.get(url, headers=self.headers, params=params)
-            return response.status_code == 200
-        except Exception:
-            return False
+        """Проверяет существование папки"""
+        encoded_path = urllib.parse.quote(folder_path)
+        url = f"{self.base_url}/resources"
+        params = {"path": f"/{folder_path}"}
+        
+        data = self._make_request(url, params)
+        exists = data is not None and data.get("type") == "dir"
+        logger.info(f"  Папка {'существует' if exists else 'не существует'}: /{folder_path}")
+        return exists
     
     def get_file_download_link(self, file_path: str) -> Optional[str]:
-        try:
-            if file_path in self.file_cache:
-                return self.file_cache[file_path]
-            
-            url = f"{self.base_url}/resources/download"
-            params = {"path": file_path}
-            response = requests.get(url, headers=self.headers, params=params)
-            if response.status_code == 200:
-                data = response.json()
-                download_link = data.get("href")
-                if download_link:
-                    self.file_cache[file_path] = download_link
-                    return download_link
-            return None
-        except Exception as e:
-            logger.error(f"Ошибка получения ссылки на скачивание для {file_path}: {e}")
-            return None
+        """Получает ссылку на скачивание файла"""
+        if file_path in self.file_cache:
+            logger.info(f"  ✅ Ссылка взята из кэша для {file_path}")
+            return self.file_cache[file_path]
+        
+        encoded_path = urllib.parse.quote(file_path)
+        url = f"{self.base_url}/resources/download"
+        params = {"path": f"/{file_path}"}
+        
+        data = self._make_request(url, params)
+        if data and "href" in data:
+            download_link = data["href"]
+            self.file_cache[file_path] = download_link
+            logger.info(f"  ✅ Получена ссылка на скачивание для {file_path}")
+            return download_link
+        
+        return None
     
     def find_mbtiles_file(self, square: str, overlay: str, frame: str) -> Optional[Dict]:
         try:
+            # Формируем базовые части (без "Компьютер DESKTOP-JMVJ4CL")
             base_folder = f"АФС/Каталог ПО Сокол"
             square_folder = f"{base_folder}/{square}"
             overlay_folder = f"{square_folder}/{square}-{overlay}"
             full_name = f"{square}-{overlay}-{frame}"
             
+            logger.info(f"\n🔍 Поиск файла для {full_name}:")
+            
             # ВАРИАНТ 1: Проверяем путь с подпапкой полного имени
             subfolder_path = f"{overlay_folder}/{full_name}"
-            logger.info(f"  Проверяем путь с подпапкой: {subfolder_path}")
+            logger.info(f"  Вариант 1 (с подпапкой): /{subfolder_path}")
             
             if self.folder_exists(subfolder_path):
                 files = self.get_files_in_folder(subfolder_path)
@@ -136,7 +176,7 @@ class YandexDiskClient:
                             }
             
             # ВАРИАНТ 2: Проверяем путь без подпапки
-            logger.info(f"  Проверяем путь без подпапки: {overlay_folder}")
+            logger.info(f"  Вариант 2 (без подпапки): /{overlay_folder}")
             files = self.get_files_in_folder(overlay_folder)
             if files:
                 mbtiles_files = self._filter_mbtiles_files(files, full_name)
@@ -156,11 +196,11 @@ class YandexDiskClient:
                             'download_link': download_link
                         }
             
-            logger.warning(f"❌ Файл не найден для {full_name}")
+            logger.warning(f"  ❌ Файл не найден для {full_name}")
             return None
             
         except Exception as e:
-            logger.error(f"Ошибка поиска файла для {square}-{overlay}-{frame}: {e}")
+            logger.error(f"  ❌ Ошибка поиска файла для {square}-{overlay}-{frame}: {e}")
             return None
     
     def _filter_mbtiles_files(self, files: List[Dict], base_name: str) -> List[Dict]:
@@ -182,6 +222,7 @@ class YandexDiskClient:
                 'name': name,
                 'version': version
             })
+            logger.info(f"    Найден файл: {name} (версия {version})")
         
         return mbtiles_files
 
@@ -211,7 +252,13 @@ class PhotosDatabase:
         os.makedirs(self.data_dir, exist_ok=True)
         self.load_multi_keys()
         self.load_details()
-        self.load_photo_links()
+        
+        # Проверяем доступ к Яндекс.Диску перед загрузкой ссылок
+        if yd_client.check_root_access():
+            self.load_photo_links()
+        else:
+            logger.error("❌ Нет доступа к Яндекс.Диску, пропускаем загрузку ссылок")
+        
         self.log_stats()
     
     def load_multi_keys(self) -> None:
