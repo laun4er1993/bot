@@ -13,44 +13,40 @@ class APISourceManager:
     
     def __init__(self):
         self.session = None
-        # Все API настроены правильно
+        # Только проверенные рабочие API
         self.sources = {
-            # OpenStreetMap Nominatim - работает с правильным User-Agent
-            'osm': {
-                'url': 'https://nominatim.openstreetmap.org/search',
+            # GeoNames.org - работает без ключа (демо-аккаунт)
+            'geonames': {
+                'url': 'http://api.geonames.org/searchJSON',
                 'method': 'GET',
                 'params': {
-                    'q': 'Ржевский район, Тверская область',
-                    'format': 'json',
-                    'addressdetails': 1,
+                    'q': 'Ржевский район',
+                    'country': 'RU',
+                    'maxRows': 200,
+                    'username': 'demo',  # публичный демо-аккаунт
+                    'lang': 'ru',
+                    'featureClass': 'P'  # населенные пункты
+                },
+                'headers': {
+                    'User-Agent': 'WW2AerialPhotoBot/1.0'
+                },
+                'parser': self._parse_geonames_response
+            },
+            # Photon (OpenStreetMap) - быстрый и стабильный
+            'photon': {
+                'url': 'https://photon.komoot.io/api',
+                'method': 'GET',
+                'params': {
+                    'q': 'Ржевский район',
                     'limit': 100,
-                    'accept-language': 'ru'
+                    'lang': 'ru'
                 },
                 'headers': {
-                    'User-Agent': 'WW2AerialPhotoBot/1.0 (research project; mailto:your_email@example.com)'
+                    'User-Agent': 'WW2AerialPhotoBot/1.0'
                 },
-                'parser': self._parse_osm_response
+                'parser': self._parse_photon_response
             },
-            # Wikidata Query Service - работает через POST с правильными заголовками 
-            'wikidata': {
-                'url': 'https://query.wikidata.org/sparql',
-                'method': 'POST',
-                'headers': {
-                    'User-Agent': 'WW2AerialPhotoBot/1.0',
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'Accept': 'application/json'
-                },
-                'data': 'query=' + urllib.parse.quote('''
-                    SELECT DISTINCT ?item ?itemLabel ?coord ?altLabel WHERE {
-                      ?item wdt:P131 wd:Q2381776.  # Ржевский район
-                      OPTIONAL { ?item wdt:P625 ?coord. }
-                      OPTIONAL { ?item skos:altLabel ?altLabel. FILTER(LANG(?altLabel) = "ru") }
-                      SERVICE wikibase:label { bd:serviceParam wikibase:language "ru,en". }
-                    } LIMIT 500
-                '''),
-                'parser': self._parse_wikidata_response
-            },
-            # Overpass API - работает с оптимизированным запросом и таймаутами 
+            # Overpass API - оптимизированный запрос
             'overpass': {
                 'url': 'https://overpass-api.de/api/interpreter',
                 'method': 'POST',
@@ -59,29 +55,12 @@ class APISourceManager:
                     'Content-Type': 'application/x-www-form-urlencoded'
                 },
                 'data': 'data=' + urllib.parse.quote('''
-                    [out:json][timeout:25][maxsize:1073741824];
-                    area["name"="Ржевский район"]["admin_level"="6"]->.a;
-                    (
-                      node["place"](area.a);
-                      way["place"](area.a);
-                    );
-                    out body center;
+                    [out:json][timeout:10][maxsize:16777216];
+                    area["name"="Ржевский район"]->.a;
+                    node["place"](area.a);
+                    out body;
                 '''),
                 'parser': self._parse_overpass_response
-            },
-            # EtoMesto - используем альтернативный API 
-            'etomesto': {
-                'url': 'https://boxpis.ru/api/v1/etomesto',
-                'method': 'GET',
-                'params': {
-                    'region': 'rzhev',
-                    'type': 'historical',
-                    'format': 'json'
-                },
-                'headers': {
-                    'User-Agent': 'WW2AerialPhotoBot/1.0'
-                },
-                'parser': self._parse_etomesto_response
             }
         }
     
@@ -111,7 +90,7 @@ class APISourceManager:
             
             if method == 'POST':
                 data = source.get('data', '')
-                async with session.post(source['url'], data=data, headers=headers, timeout=25) as response:
+                async with session.post(source['url'], data=data, headers=headers, timeout=10) as response:
                     if response.status == 200:
                         try:
                             data = await response.json()
@@ -124,7 +103,7 @@ class APISourceManager:
                         logger.error(f"Ошибка {source_name}: HTTP {response.status}")
                         return []
             else:
-                async with session.get(source['url'], params=source.get('params', {}), headers=headers, timeout=15) as response:
+                async with session.get(source['url'], params=source.get('params', {}), headers=headers, timeout=10) as response:
                     if response.status == 200:
                         data = await response.json()
                         return source['parser'](data)
@@ -138,61 +117,84 @@ class APISourceManager:
             logger.error(f"Ошибка при загрузке {source_name}: {e}")
             return []
     
-    def _parse_osm_response(self, data: List) -> List[Dict]:
-        """Парсит ответ OpenStreetMap Nominatim"""
+    def _parse_geonames_response(self, data: Dict) -> List[Dict]:
+        """Парсит ответ GeoNames.org """
         villages = []
-        for item in data:
-            if item.get('type') in ['village', 'hamlet', 'locality', 'town']:
-                display_name = item.get('display_name', '')
-                name_parts = display_name.split(',')
-                name = name_parts[0].strip() if name_parts else display_name
+        try:
+            for item in data.get('geonames', []):
+                name = item.get('name', '')
+                if not name:
+                    continue
+                
+                # Определяем тип населенного пункта
+                fcode = item.get('fcode', '')
+                fcode_name = item.get('fcodeName', '')
+                
+                obj_type = 'деревня'
+                if 'PPL' in fcode:
+                    obj_type = 'деревня'
+                elif 'PPLA' in fcode:
+                    obj_type = 'город'
+                elif 'PPLX' in fcode:
+                    obj_type = 'часть города'
                 
                 villages.append({
                     'name': name,
-                    'type': item.get('type', 'деревня'),
+                    'type': obj_type,
                     'lat': item.get('lat', ''),
-                    'lon': item.get('lon', ''),
-                    'source': 'osm',
+                    'lon': item.get('lng', ''),
+                    'source': 'geonames',
+                    'district': 'Ржевский',
+                    'status': 'существует',
+                    'notes': fcode_name
+                })
+            logger.info(f"  GeoNames: найдено {len(villages)} записей")
+        except Exception as e:
+            logger.error(f"Ошибка парсинга GeoNames: {e}")
+        return villages
+    
+    def _parse_photon_response(self, data: Dict) -> List[Dict]:
+        """Парсит ответ Photon API """
+        villages = []
+        try:
+            for item in data.get('features', []):
+                props = item.get('properties', {})
+                coords = item.get('geometry', {}).get('coordinates', [])
+                
+                name = props.get('name', '')
+                if not name:
+                    continue
+                
+                # Определяем тип
+                osm_type = props.get('osm_type', '')
+                osm_key = props.get('osm_key', '')
+                
+                obj_type = 'деревня'
+                if osm_key == 'place':
+                    if osm_type == 'city':
+                        obj_type = 'город'
+                    elif osm_type == 'town':
+                        obj_type = 'поселок'
+                    elif osm_type == 'village':
+                        obj_type = 'деревня'
+                    elif osm_type == 'hamlet':
+                        obj_type = 'деревня'
+                    elif osm_type == 'locality':
+                        obj_type = 'урочище'
+                
+                villages.append({
+                    'name': name,
+                    'type': obj_type,
+                    'lat': str(coords[1]) if len(coords) > 1 else '',
+                    'lon': str(coords[0]) if coords else '',
+                    'source': 'photon',
                     'district': 'Ржевский',
                     'status': 'существует',
                     'notes': ''
                 })
-        return villages
-    
-    def _parse_wikidata_response(self, data: Dict) -> List[Dict]:
-        """Парсит ответ Wikidata Query Service """
-        villages = []
-        try:
-            bindings = data.get('results', {}).get('bindings', [])
-            for item in bindings:
-                name = item.get('itemLabel', {}).get('value', '')
-                if not name:
-                    continue
-                
-                # Парсим координаты из формата "Point(lon lat)"
-                coord = item.get('coord', {}).get('value', '')
-                lat = ''
-                lon = ''
-                if coord and coord.startswith('Point('):
-                    parts = coord[6:-1].split()
-                    if len(parts) == 2:
-                        lon, lat = parts[0], parts[1]
-                
-                # Альтернативные названия (исторические)
-                alt_name = item.get('altLabel', {}).get('value', '')
-                
-                villages.append({
-                    'name': name,
-                    'type': 'деревня',
-                    'lat': lat,
-                    'lon': lon,
-                    'source': 'wikidata',
-                    'district': 'Ржевский',
-                    'status': 'неизвестно',
-                    'notes': f"Альт. названия: {alt_name}" if alt_name else ''
-                })
+            logger.info(f"  Photon: найдено {len(villages)} записей")
         except Exception as e:
-            logger.error(f"Ошибка парсинга Wikidata: {e}")
+            logger.error(f"Ошибка парсинга Photon: {e}")
         return villages
     
     def _parse_overpass_response(self, data: Dict) -> List[Dict]:
@@ -212,20 +214,14 @@ class APISourceManager:
                     place_type = 'деревня'
                 elif place_type == 'locality':
                     place_type = 'урочище'
-                
-                # Определяем статус
-                status = 'существует'
-                if tags.get('abandoned') == 'yes':
-                    status = 'уничтожена'
-                elif tags.get('ruins') == 'yes':
-                    status = 'разрушена'
+                elif place_type == 'town':
+                    place_type = 'поселок'
+                elif place_type == 'city':
+                    place_type = 'город'
                 
                 # Координаты
                 lat = elem.get('lat', '')
                 lon = elem.get('lon', '')
-                if not lat and 'center' in elem:
-                    lat = elem['center'].get('lat', '')
-                    lon = elem['center'].get('lon', '')
                 
                 villages.append({
                     'name': name,
@@ -234,48 +230,12 @@ class APISourceManager:
                     'lon': str(lon),
                     'source': 'overpass',
                     'district': 'Ржевский',
-                    'status': status,
-                    'notes': tags.get('description', '')
+                    'status': 'существует',
+                    'notes': ''
                 })
+            logger.info(f"  Overpass: найдено {len(villages)} записей")
         except Exception as e:
             logger.error(f"Ошибка парсинга Overpass: {e}")
-        return villages
-    
-    def _parse_etomesto_response(self, data: List) -> List[Dict]:
-        """Парсит ответ альтернативного API для исторических карт """
-        villages = []
-        try:
-            for item in data:
-                name = item.get('name', '')
-                if not name:
-                    continue
-                
-                obj_type = item.get('type', 'деревня')
-                if obj_type == 'village':
-                    obj_type = 'деревня'
-                elif obj_type == 'manor':
-                    obj_type = 'усадьба'
-                elif obj_type == 'church':
-                    obj_type = 'церковь'
-                elif obj_type == 'memorial':
-                    obj_type = 'мемориал'
-                
-                lat = item.get('lat', '')
-                lon = item.get('lon', '')
-                period = item.get('period', '')
-                
-                villages.append({
-                    'name': name,
-                    'type': obj_type,
-                    'lat': str(lat),
-                    'lon': str(lon),
-                    'source': 'etomesto',
-                    'district': 'Ржевский',
-                    'status': period or 'историческое',
-                    'notes': item.get('description', '')
-                })
-        except Exception as e:
-            logger.error(f"Ошибка парсинга EtoMesto: {e}")
         return villages
     
     async def fetch_all_sources(self) -> List[Dict]:
@@ -284,7 +244,7 @@ class APISourceManager:
         for source_name in self.sources.keys():
             tasks.append(asyncio.create_task(self.fetch_source(source_name)))
         
-        # Ждем все задачи, но не больше 25 секунд
+        # Ждем все задачи, но не больше 12 секунд
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
         all_villages = []
@@ -294,7 +254,6 @@ class APISourceManager:
             source_name = list(self.sources.keys())[i]
             if isinstance(source_data, list):
                 all_villages.extend(source_data)
-                logger.info(f"{source_name}: загружено {len(source_data)} записей")
                 source_stats[source_name] = len(source_data)
             else:
                 logger.error(f"{source_name}: ошибка - {source_data}")
