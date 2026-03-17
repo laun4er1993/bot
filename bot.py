@@ -8,9 +8,10 @@ import zipfile
 import tempfile
 import json
 import time
+import csv
+import io
 from typing import Optional, Dict, List, Set, Tuple, Any, Union
 import requests
-import io
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
@@ -334,18 +335,211 @@ class YandexDiskClient:
 # Инициализация клиента Яндекс.Диска
 yd_client = YandexDiskClient(YANDEX_DISK_TOKEN)
 
+# ========== КЛАСС ДЛЯ РАБОТЫ С БАЗОЙ НАСЕЛЕННЫХ ПУНКТОВ ==========
+
+class VillageDatabase:
+    def __init__(self, csv_path: str = "data/villages.csv"):
+        self.csv_path = csv_path
+        self.villages: List[Dict] = []
+        self.villages_by_name: Dict[str, List[Dict]] = {}
+        self.stats = {
+            'total': 0,
+            'with_coords': 0,
+            'last_update': None,
+            'source_file': None
+        }
+        self.load_data()
+    
+    def load_data(self):
+        """Загружает данные из CSV файла"""
+        if os.path.exists(self.csv_path):
+            try:
+                with open(self.csv_path, 'r', encoding='utf-8') as f:
+                    reader = csv.DictReader(f)
+                    self.villages = list(reader)
+                
+                # Строим индекс для быстрого поиска
+                self.villages_by_name.clear()
+                with_coords = 0
+                
+                for v in self.villages:
+                    name_lower = v['name'].lower()
+                    if name_lower not in self.villages_by_name:
+                        self.villages_by_name[name_lower] = []
+                    self.villages_by_name[name_lower].append(v)
+                    
+                    # Считаем записи с координатами
+                    if v.get('lat') and v.get('lon') and v['lat'].strip() and v['lon'].strip():
+                        with_coords += 1
+                
+                self.stats['total'] = len(self.villages)
+                self.stats['with_coords'] = with_coords
+                
+                logger.info(f"✅ Загружено {self.stats['total']} населенных пунктов из каталога")
+                logger.info(f"   • С координатами: {self.stats['with_coords']}")
+                
+            except Exception as e:
+                logger.error(f"❌ Ошибка загрузки каталога: {e}")
+                self._create_empty_db()
+        else:
+            logger.warning(f"⚠️ Файл каталога {self.csv_path} не найден")
+            self._create_empty_db()
+    
+    def _create_empty_db(self):
+        """Создает пустой файл каталога"""
+        os.makedirs(os.path.dirname(self.csv_path), exist_ok=True)
+        with open(self.csv_path, 'w', encoding='utf-8') as f:
+            f.write("name,type,lat,lon,source,district\n")
+        self.villages = []
+        self.villages_by_name = {}
+        self.stats = {'total': 0, 'with_coords': 0, 'last_update': None, 'source_file': None}
+    
+    def search_villages(self, query: str) -> List[Dict]:
+        """
+        Ищет населенные пункты по названию
+        :param query: текст запроса
+        :return: список найденных НП
+        """
+        if not query:
+            return []
+        
+        query_lower = query.lower().strip()
+        results = []
+        seen = set()
+        
+        # Точное совпадение
+        if query_lower in self.villages_by_name:
+            for v in self.villages_by_name[query_lower]:
+                if v['name'] not in seen:
+                    results.append(v)
+                    seen.add(v['name'])
+        
+        # Частичное совпадение
+        for name, villages in self.villages_by_name.items():
+            if query_lower in name and name != query_lower:
+                for v in villages:
+                    if v['name'] not in seen:
+                        results.append(v)
+                        seen.add(v['name'])
+        
+        return results
+    
+    def get_villages_in_bbox(self, bbox: Tuple[float, float, float, float]) -> List[Dict]:
+        """
+        Ищет населенные пункты внутри bounding box
+        :param bbox: (min_lat, max_lat, min_lon, max_lon)
+        :return: список НП
+        """
+        min_lat, max_lat, min_lon, max_lon = bbox
+        results = []
+        
+        for v in self.villages:
+            try:
+                if not v.get('lat') or not v.get('lon'):
+                    continue
+                    
+                lat = float(v['lat']) if v['lat'].strip() else None
+                lon = float(v['lon']) if v['lon'].strip() else None
+                
+                if lat and lon:
+                    if min_lat <= lat <= max_lat and min_lon <= lon <= max_lon:
+                        results.append(v)
+            except (ValueError, TypeError):
+                continue
+        
+        return results
+    
+    def replace_with_catalog(self, csv_content: str, source_filename: str) -> Dict:
+        """
+        ПОЛНОСТЬЮ ЗАМЕНЯЕТ текущую базу новым каталогом
+        :param csv_content: содержимое CSV файла
+        :param source_filename: имя исходного файла
+        :return: статистика загрузки
+        """
+        stats = {
+            'loaded': 0,
+            'with_coords': 0,
+            'errors': 0
+        }
+        
+        try:
+            # Читаем новый CSV
+            new_villages = []
+            reader = csv.DictReader(io.StringIO(csv_content))
+            
+            # Проверяем наличие обязательных полей
+            required_fields = ['name', 'type', 'lat', 'lon', 'source', 'district']
+            if not all(field in reader.fieldnames for field in required_fields):
+                missing = [f for f in required_fields if f not in reader.fieldnames]
+                raise ValueError(f"Отсутствуют обязательные поля: {', '.join(missing)}")
+            
+            for row in reader:
+                if row['name'].strip():
+                    # Валидация координат
+                    if row['lat'].strip() and row['lon'].strip():
+                        try:
+                            float(row['lat'])
+                            float(row['lon'])
+                            stats['with_coords'] += 1
+                        except ValueError:
+                            stats['errors'] += 1
+                            continue
+                    
+                    new_villages.append(row)
+                    stats['loaded'] += 1
+            
+            # ПОЛНОСТЬЮ заменяем текущую базу
+            self.villages = new_villages
+            
+            # Сохраняем в файл
+            self._save_to_csv()
+            
+            # Обновляем индексы
+            self.villages_by_name.clear()
+            for v in self.villages:
+                name_lower = v['name'].lower()
+                if name_lower not in self.villages_by_name:
+                    self.villages_by_name[name_lower] = []
+                self.villages_by_name[name_lower].append(v)
+            
+            self.stats['total'] = len(self.villages)
+            self.stats['with_coords'] = stats['with_coords']
+            self.stats['last_update'] = time.strftime('%Y-%m-%d %H:%M:%S')
+            self.stats['source_file'] = source_filename
+            
+            return stats
+            
+        except Exception as e:
+            logger.error(f"Ошибка загрузки каталога: {e}")
+            raise
+    
+    def _save_to_csv(self):
+        """Сохраняет данные в CSV файл"""
+        if not self.villages:
+            return
+        
+        fieldnames = ['name', 'type', 'lat', 'lon', 'source', 'district']
+        
+        with open(self.csv_path, 'w', encoding='utf-8', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(self.villages)
+    
+    def get_stats(self) -> Dict:
+        """Возвращает статистику базы данных"""
+        return self.stats.copy()
+
+# Инициализация базы данных НП
+village_db = VillageDatabase()
+
 # ========== КЛАСС ДЛЯ ОБРАБОТКИ KML ФАЙЛОВ ==========
 
 class KMLProcessor:
     def __init__(self, nominatim_endpoint: str = "https://nominatim.openstreetmap.org/search"):
         """
         Инициализация процессора KML файлов
-        :param nominatim_endpoint: API endpoint для Nominatim
+        :param nominatim_endpoint: API endpoint для Nominatim (больше не используется, оставлено для совместимости)
         """
-        self.nominatim_endpoint = nominatim_endpoint
-        self.user_agent = "WW2AerialPhotoBot/1.0 (your_email@example.com)"
-        self.results_file = "data/kml_processed_results.json"
-        self.villages_file = "data/photo_villages.json"
         self.log_file = "data/kml_processor.log"
         
         # Настройка отдельного логгера для KML процессора
@@ -355,45 +549,9 @@ class KMLProcessor:
         # Создаем обработчик для файла
         fh = logging.FileHandler(self.log_file, encoding='utf-8')
         fh.setLevel(logging.INFO)
-        
-        # Создаем форматтер
         formatter = logging.Formatter('[%(asctime)s] [%(levelname)s] %(message)s')
         fh.setFormatter(formatter)
-        
-        # Добавляем обработчик к логгеру
         self.logger.addHandler(fh)
-        
-        # Загружаем существующие данные
-        self.load_results()
-        self.load_villages_data()
-        
-    def load_results(self):
-        """Загружает результаты предыдущих обработок"""
-        if os.path.exists(self.results_file):
-            with open(self.results_file, 'r', encoding='utf-8') as f:
-                self.results = json.load(f)
-        else:
-            self.results = {"metadata": {"total_processed": 0}, "photos": []}
-    
-    def save_results(self):
-        """Сохраняет результаты"""
-        os.makedirs(os.path.dirname(self.results_file), exist_ok=True)
-        with open(self.results_file, 'w', encoding='utf-8') as f:
-            json.dump(self.results, f, ensure_ascii=False, indent=2)
-    
-    def load_villages_data(self):
-        """Загружает данные о связях снимков и НП"""
-        if os.path.exists(self.villages_file):
-            with open(self.villages_file, 'r', encoding='utf-8') as f:
-                self.villages_data = json.load(f)
-        else:
-            self.villages_data = {}
-    
-    def save_villages_data(self):
-        """Сохраняет данные о связях снимков и НП"""
-        os.makedirs(os.path.dirname(self.villages_file), exist_ok=True)
-        with open(self.villages_file, 'w', encoding='utf-8') as f:
-            json.dump(self.villages_data, f, ensure_ascii=False, indent=2)
     
     def parse_kml_file(self, kml_path: str) -> List[Dict]:
         """
@@ -411,7 +569,6 @@ class KMLProcessor:
         
         results = []
         for placemark in placemarks:
-            # Извлекаем название
             name_elem = placemark.find('name')
             if not name_elem:
                 continue
@@ -484,64 +641,37 @@ class KMLProcessor:
         return (min(lats) - margin_deg, max(lats) + margin_deg,
                 min(lons) - margin_deg, max(lons) + margin_deg)
     
-    def search_nominatim(self, bbox: Tuple[float, float, float, float]) -> List[Dict]:
+    def search_villages_in_bbox(self, bbox: Tuple[float, float, float, float]) -> List[Dict]:
         """
-        Ищет населенные пункты через Nominatim API
+        Ищет населенные пункты в bounding box из локальной базы
         :param bbox: (min_lat, max_lat, min_lon, max_lon)
-        :return: список найденных населенных пунктов
+        :return: список НП
         """
-        params = {
-            'q': '',
-            'format': 'json',
-            'bounded': 1,
-            'viewbox': f"{bbox[2]},{bbox[1]},{bbox[3]},{bbox[0]}",
-            'addressdetails': 1,
-            'limit': 50,
-            'accept-language': 'ru'
-        }
+        min_lat, max_lat, min_lon, max_lon = bbox
+        results = []
         
-        try:
-            response = requests.get(
-                self.nominatim_endpoint, 
-                params=params, 
-                headers={'User-Agent': self.user_agent},
-                timeout=10
-            )
-            if response.status_code == 200:
-                data = response.json()
-                # Фильтруем только населенные пункты
-                villages = []
-                for item in data:
-                    if self._is_valid_place_type(item):
-                        villages.append({
-                            'name': item.get('display_name', '').split(',')[0],
-                            'lat': float(item['lat']),
-                            'lon': float(item['lon']),
-                            'type': item.get('type', '')
+        for v in village_db.villages:
+            try:
+                if not v.get('lat') or not v.get('lon'):
+                    continue
+                    
+                lat = float(v['lat']) if v['lat'].strip() else None
+                lon = float(v['lon']) if v['lon'].strip() else None
+                
+                if lat and lon:
+                    if min_lat <= lat <= max_lat and min_lon <= lon <= max_lon:
+                        results.append({
+                            'name': v['name'],
+                            'type': v.get('type', 'НП'),
+                            'lat': lat,
+                            'lon': lon,
+                            'source': v.get('source', 'unknown')
                         })
-                return villages
-            return []
-        except Exception as e:
-            self.logger.error(f"Ошибка Nominatim: {e}")
-            return []
-    
-    def _is_valid_place_type(self, item: Dict) -> bool:
-        """
-        Проверяет, относится ли объект к нужным типам населенных пунктов
-        :param item: объект из Nominatim
-        :return: True если подходит
-        """
-        place_type = item.get('type', '')
-        class_type = item.get('class', '')
+            except (ValueError, TypeError):
+                continue
         
-        # Исключаем нежелательные типы
-        if place_type in ['suburb', 'neighbourhood']:
-            return False
-        
-        # Разрешенные типы
-        allowed_types = ['city', 'town', 'village', 'hamlet', 'isolated_dwelling', 'locality', 'farm']
-        
-        return class_type == 'place' or place_type in allowed_types
+        self.logger.info(f"    Найдено в локальной БД: {len(results)} кандидатов")
+        return results
     
     def point_in_polygon(self, point: Tuple[float, float], polygon_coords: List[Tuple[float, float]], margin_m: float = 100.0) -> bool:
         """
@@ -551,17 +681,62 @@ class KMLProcessor:
         :param margin_m: запас в метрах
         :return: True если попадает
         """
-        polygon = Polygon(polygon_coords)
-        point_obj = Point(point[0], point[1])
+        polygon = Polygon([(lon, lat) for lat, lon in polygon_coords])
+        point_obj = Point(point[1], point[0])  # Shapely ожидает (x,y) = (lon,lat)
         margin_deg = margin_m / 111000
         return polygon.buffer(margin_deg).contains(point_obj)
     
-    def process_kml_file(self, kml_path: str, margin_m: float = 100.0) -> Dict:
+    def process_single_polygon(self, photo_data: Dict, margin_m: float = 100.0) -> Dict:
+        """
+        Обрабатывает один полигон и находит попадающие в него НП
+        :param photo_data: данные о снимке
+        :param margin_m: запас в метрах
+        :return: обогащенные данные о снимке
+        """
+        try:
+            # Создаем полигон из координат
+            polygon = Polygon([(lon, lat) for lat, lon in photo_data['coordinates']])
+            
+            # Конвертируем запас в градусы (приблизительно)
+            margin_deg = margin_m / 111000
+            
+            # Вычисляем bounding box с запасом
+            lats = [c[0] for c in photo_data['coordinates']]
+            lons = [c[1] for c in photo_data['coordinates']]
+            bbox = (min(lats) - margin_deg, max(lats) + margin_deg,
+                    min(lons) - margin_deg, max(lons) + margin_deg)
+            
+            # Ищем НП в этом районе из локальной базы
+            candidates = self.search_villages_in_bbox(bbox)
+            self.logger.info(f"    Найдено кандидатов: {len(candidates)}")
+            
+            # Фильтруем НП, попадающие в полигон (с учетом запаса)
+            villages_in_photo = []
+            for village in candidates:
+                point = Point(village['lon'], village['lat'])
+                buffered_polygon = polygon.buffer(margin_deg)
+                if buffered_polygon.contains(point):
+                    villages_in_photo.append(village['name'])
+                    self.logger.info(f"      ✅ Попадает: {village['name']}")
+            
+            photo_data['villages'] = list(set(villages_in_photo))
+            photo_data['village_count'] = len(photo_data['villages'])
+            
+            self.logger.info(f"  ✅ Снимок {photo_data['photo_num']}: найдено {photo_data['village_count']} НП")
+            return photo_data
+            
+        except Exception as e:
+            self.logger.error(f"❌ Ошибка обработки полигона {photo_data.get('photo_num')}: {e}")
+            photo_data['villages'] = []
+            photo_data['village_count'] = 0
+            return photo_data
+    
+    def process_kml_file(self, kml_path: str, margin_m: float = 100.0) -> List[Dict]:
         """
         Основной метод: обрабатывает KML файл и находит НП для каждого снимка
         :param kml_path: путь к KML файлу
         :param margin_m: запас в метрах
-        :return: словарь с результатами обработки
+        :return: список обработанных снимков
         """
         self.logger.info(f"🚀 Начало обработки KML файла: {kml_path}")
         
@@ -570,79 +745,18 @@ class KMLProcessor:
         
         if not photos:
             self.logger.warning("❌ В файле не найдено снимков")
-            return {"metadata": {"total_photos": 0}, "photos": []}
+            return []
         
         # Обрабатываем каждый снимок
         results = []
-        new_villages_data = {}
         
         for i, photo in enumerate(photos):
             self.logger.info(f"🔄 Обработка {i+1}/{len(photos)}: {photo['photo_num']}")
-            
-            # Вычисляем область поиска
-            bbox = self.calculate_bounding_box(photo['coordinates'], margin_m)
-            
-            # Ищем НП в этом районе
-            candidates = self.search_nominatim(bbox)
-            self.logger.info(f"    Найдено кандидатов: {len(candidates)}")
-            
-            # Проверяем каждый кандидат
-            villages_in_photo = []
-            for village in candidates:
-                if self.point_in_polygon(
-                    (village['lat'], village['lon']), 
-                    photo['coordinates'], 
-                    margin_m
-                ):
-                    villages_in_photo.append(village['name'])
-                    self.logger.info(f"      ✅ Попадает: {village['name']}")
-            
-            # Сохраняем результаты
-            photo['villages'] = list(set(villages_in_photo))
-            photo['village_count'] = len(photo['villages'])
-            results.append(photo)
-            
-            # Обновляем словарь для быстрого доступа
-            new_villages_data[photo['photo_num']] = photo['villages']
-            
-            self.logger.info(f"  ✅ Найдено {photo['village_count']} НП")
-            
-            # Задержка для соблюдения лимитов API
-            if i < len(photos) - 1:
-                time.sleep(1)
+            processed = self.process_single_polygon(photo, margin_m)
+            results.append(processed)
         
-        # Сохраняем результаты
-        self.results = {
-            'metadata': {
-                'source_file': os.path.basename(kml_path),
-                'processing_date': time.strftime('%Y-%m-%d %H:%M:%S'),
-                'total_photos': len(results),
-                'photos_with_villages': sum(1 for p in results if p['village_count'] > 0),
-                'total_villages_found': sum(p['village_count'] for p in results)
-            },
-            'photos': results
-        }
-        self.save_results()
-        
-        # Обновляем данные в памяти и сохраняем в файл
-        self.villages_data.update(new_villages_data)
-        self.save_villages_data()
-        
-        self.logger.info(f"✅ Обработка завершена. Результаты сохранены")
-        return self.results
-    
-    def get_photo_villages(self, photo_num: Optional[str] = None) -> Union[List[str], Dict]:
-        """
-        Возвращает НП для конкретного снимка или весь словарь
-        :param photo_num: номер снимка (если None, возвращает весь словарь)
-        :return: 
-            - если photo_num указан: список НП для конкретного снимка
-            - если photo_num не указан: весь словарь {photo_num: [villages]}
-        """
-        self.load_villages_data()  # Перезагружаем на всякий случай
-        if photo_num:
-            return self.villages_data.get(photo_num, [])
-        return self.villages_data
+        self.logger.info(f"✅ Обработка завершена. Обработано {len(results)} снимков")
+        return results
 
 # Инициализация KML процессора
 kml_processor = KMLProcessor()
@@ -772,22 +886,21 @@ class PhotosDatabase:
         found = []
         seen = set()
         
-        # Получаем данные из KML (теперь работает без аргумента)
-        kml_villages_dict = kml_processor.get_photo_villages()  # без аргумента - возвращает словарь
+        # Ищем в локальной базе НП
+        villages = village_db.search_villages(query)
         
-        # Сначала ищем в данных из KML
-        if isinstance(kml_villages_dict, dict):
-            for photo_num, villages in kml_villages_dict.items():
-                if villages:  # если есть населенные пункты
-                    for village in villages:
-                        if query_lower in village.lower():
-                            # Находим запись в locations
-                            for record in self.locations:
-                                if photo_num in record['photos'] and record['id'] not in seen:
-                                    found.append(record)
-                                    seen.add(record['id'])
-                                    logger.info(f"✅ Найден снимок {photo_num} по KML для '{village}'")
-                                    break
+        if villages:
+            logger.info(f"🔍 Найдено {len(villages)} населенных пунктов в каталоге")
+            # Для каждого найденного НП ищем связанные снимки
+            for village in villages:
+                for record in self.locations:
+                    for v in record['villages']:
+                        if query_lower in v.lower():
+                            if record['id'] not in seen:
+                                found.append(record)
+                                seen.add(record['id'])
+                                logger.info(f"✅ Найден снимок по каталогу для '{v}'")
+                                break
         
         # Затем ищем в исходных данных из multi_keys
         for record in self.locations:
@@ -817,12 +930,6 @@ class PhotosDatabase:
         for r in records:
             villages.extend(r['villages'])
         
-        # Добавляем населенные пункты из KML для этих снимков
-        for photo in self.get_all_photos(records):
-            kml_villages = kml_processor.get_photo_villages(photo)  # с аргументом - возвращает список
-            if kml_villages:
-                villages.extend(kml_villages)
-        
         return sorted(list(set(villages)))
     
     def get_photo_details(self, photo_num: str) -> Optional[str]:
@@ -836,14 +943,8 @@ class PhotosDatabase:
         if details:
             download_links = []
             
-            # Добавляем информацию о населенных пунктах из KML
-            kml_villages = kml_processor.get_photo_villages(photo_num)  # с аргументом - возвращает список
-            if kml_villages:
-                village_text = f"\n📍 <b>Населенные пункты в кадре:</b>\n" + "\n".join([f"• {v}" for v in kml_villages[:10]])
-                if len(kml_villages) > 10:
-                    village_text += f"\n  и ещё {len(kml_villages)-10}"
-                details += village_text
-                logger.info(f"  ✅ Добавлены НП из KML: {len(kml_villages)}")
+            # Добавляем информацию о населенных пунктах из KML (если есть)
+            # Здесь можно добавить логику для отображения НП из обработанного KML
             
             # Добавляем MBTILES версии
             if files.get('mbtiles'):
@@ -877,14 +978,12 @@ class PhotosDatabase:
         return details
     
     def get_all_villages_list(self) -> List[str]:
-        # Объединяем деревни из multi_keys и из KML
+        # Объединяем деревни из multi_keys и из каталога
         all_villages = set(self.all_villages)
         
-        # Получаем данные из KML (без аргумента - возвращает словарь)
-        kml_villages_dict = kml_processor.get_photo_villages()
-        if isinstance(kml_villages_dict, dict):
-            for villages in kml_villages_dict.values():
-                all_villages.update(villages)
+        # Добавляем названия из каталога
+        for v in village_db.villages:
+            all_villages.add(v['name'])
         
         return sorted(list(all_villages))
     
@@ -912,6 +1011,7 @@ class PhotosDatabase:
         logger.info(f"   • Деревень в multi_keys: {len(self.all_villages)}")
         logger.info(f"   • Описаний снимков: {len(self.photo_details)}")
         logger.info(f"   • Файловых записей: {len(self.photo_files)}")
+        logger.info(f"   • Населенных пунктов в каталоге: {village_db.stats['total']}")
 
 db = PhotosDatabase()
 
@@ -920,7 +1020,7 @@ db = PhotosDatabase()
 class SearchStates(StatesGroup):
     waiting_for_village = State()
     waiting_for_kml = State()
-    waiting_for_file_download = State()
+    waiting_for_csv_upload = State()
 
 # ========== КЛАВИАТУРЫ ==========
 
@@ -928,7 +1028,8 @@ def get_main_keyboard() -> ReplyKeyboardMarkup:
     keyboard = [
         [KeyboardButton(text="🔍 ПОИСК"), KeyboardButton(text="📋 СПИСОК ДЕРЕВЕНЬ")],
         [KeyboardButton(text="📖 ИНСТРУКЦИЯ"), KeyboardButton(text="🗺️ КАРТА РЖЕВ")],
-        [KeyboardButton(text="🗺️ LOCUS MAPS"), KeyboardButton(text="🔄 ОБРАБОТАТЬ KML")]
+        [KeyboardButton(text="🗺️ LOCUS MAPS"), KeyboardButton(text="🔄 ОБРАБОТАТЬ KML")],
+        [KeyboardButton(text="⚙️ НАСТРОЙКИ")]
     ]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
@@ -936,6 +1037,14 @@ def get_locus_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📖 Инструкция", callback_data="locus_instruction")],
         [InlineKeyboardButton(text="📥 Скачать Locus Maps", callback_data="locus_download_app")],
+        [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
+    ])
+
+def get_settings_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📥 Загрузить новый каталог", callback_data="update_villages")],
+        [InlineKeyboardButton(text="📊 Статистика каталога", callback_data="village_stats")],
+        [InlineKeyboardButton(text="📤 Скачать текущий каталог", callback_data="download_villages")],
         [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
     ])
 
@@ -961,14 +1070,6 @@ def photos_keyboard(photos: List[str]) -> InlineKeyboardMarkup:
     keyboard.append([InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")])
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
-def get_download_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📥 Скачать photo_villages.json", callback_data="download_photo_villages")],
-        [InlineKeyboardButton(text="📥 Скачать kml_processed_results.json", callback_data="download_kml_results")],
-        [InlineKeyboardButton(text="📥 Скачать kml_processor.log", callback_data="download_kml_log")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main")]
-    ])
-
 # ========== ОБРАБОТЧИКИ КОМАНД ==========
 
 @dp.message(Command("start"))
@@ -977,13 +1078,14 @@ async def cmd_start(message: types.Message) -> None:
         f"👋 <b>Добро пожаловать, {message.from_user.full_name}!</b>\n\n"
         f"🛩️ <b>Бот для поиска аэрофотоснимков Ржевского района</b>\n\n"
         f"📌 <b>Что я умею:</b>\n"
-        f"• 🔍 <b>Поиск снимков</b> — введите название деревни, и я покажу все связанные с ней аэрофотоснимки\n"
-        f"• 📋 <b>Список деревень</b> — покажу все деревни, которые есть в базе данных\n"
-        f"• 📖 <b>Инструкция</b> — подробное описание всех функций бота\n"
-        f"• 🗺️ <b>Карта Ржев</b> — скачать карту Ржевского района с привязкой к Locus Maps\n"
-        f"• 🗺️ <b>Locus Maps</b> — инструкция и скачивание приложения\n"
-        f"• 🔄 <b>Обработать KML</b> — загрузить и обработать KML файл с каталогом снимков\n\n"
-        f"👇 <b>Выберите действие в меню ниже:</b>"
+        f"• 🔍 <b>Поиск снимков</b> — введите название деревни\n"
+        f"• 📋 <b>Список деревень</b> — все доступные деревни\n"
+        f"• 📖 <b>Инструкция</b> — помощь по боту\n"
+        f"• 🗺️ <b>Карта Ржев</b> — скачать карту\n"
+        f"• 🗺️ <b>Locus Maps</b> — инструкция и приложение\n"
+        f"• 🔄 <b>Обработать KML</b> — загрузить каталог снимков\n"
+        f"• ⚙️ <b>Настройки</b> — управление каталогом НП\n\n"
+        f"👇 <b>Выберите действие:</b>"
     )
     
     await message.answer(
@@ -1028,33 +1130,26 @@ async def menu_instruction(message: types.Message):
         
         "🔍 <b>1. ПОИСК СНИМКОВ</b>\n"
         "• Нажмите кнопку «🔍 ПОИСК» в главном меню\n"
-        "• Введите название деревни (например: Горбово, Полунино)\n"
+        "• Введите название деревни\n"
         "• Бот покажет все снимки, где встречается эта деревня\n"
-        "• Нажмите на номер снимка для просмотра детальной информации\n"
-        "• В деталях снимка будут ссылки на скачивание MBTiles и KMZ файлов\n\n"
+        "• Нажмите на номер снимка для просмотра детальной информации\n\n"
         
         "📋 <b>2. СПИСОК ДЕРЕВЕНЬ</b>\n"
-        "• Просмотр всех деревень, которые есть в базе данных\n"
-        "• Удобно, если вы не знаете точное название\n\n"
+        "• Просмотр всех деревень в базе данных\n\n"
         
         "🗺️ <b>3. КАРТА РЖЕВСКОГО РАЙОНА</b>\n"
-        "• Скачивание карты Ржевского района с привязкой к Locus Maps\n"
-        "• На карте отмечены основные населенные пункты\n\n"
+        "• Скачивание карты для Locus Maps\n\n"
         
         "🗺️ <b>4. LOCUS MAPS</b>\n"
-        "• Раздел для работы с приложением Locus Maps\n"
-        "• <b>Инструкция</b> — ссылка на руководство от ПО Сокол\n"
-        "• <b>Скачать Locus Maps</b> — ссылка на скачивание приложения\n\n"
+        "• Инструкция и скачивание приложения\n\n"
         
         "🔄 <b>5. ОБРАБОТКА KML</b>\n"
         "• Загрузите KML файл с каталогом снимков\n"
-        "• Бот извлечет все полигоны и определит населенные пункты\n"
-        "• Данные будут добавлены в базу для более точного поиска\n"
-        "• После обработки вы сможете скачать все созданные файлы\n\n"
+        "• Бот найдет населенные пункты в каждом кадре\n\n"
         
-        "🔄 <b>6. НАВИГАЦИЯ</b>\n"
-        "• После просмотра снимка можно вернуться к списку кнопкой «🔙 Назад к списку»\n"
-        "• Кнопка «🏠 В главное меню» доступна на всех этапах\n\n"
+        "⚙️ <b>6. НАСТРОЙКИ</b>\n"
+        "• Загрузка официального каталога населенных пунктов\n"
+        "• Просмотр статистики базы\n\n"
         
         "🛩️ <b>ПРИЯТНОГО ИСПОЛЬЗОВАНИЯ!</b>"
     )
@@ -1068,13 +1163,12 @@ async def menu_instruction(message: types.Message):
 @dp.message(F.text == "🗺️ КАРТА РЖЕВ")
 async def menu_map(message: types.Message):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📥 Скачать карту для Locus", callback_data="download_map")],
+        [InlineKeyboardButton(text="📥 Скачать карту", url="https://disk.yandex.ru/d/mrxZWJqLuAtnNA")],
         [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
     ])
     await message.answer(
         "🗺️ <b>Карта Ржевского района для Locus Maps</b>\n\n"
-        "Нажмите кнопку ниже для скачивания карты с Яндекс.Диска.\n\n"
-        "📌 Карта с привязкой для приложения Locus Maps.",
+        "Нажмите кнопку для скачивания.",
         parse_mode="HTML",
         reply_markup=keyboard
     )
@@ -1092,15 +1186,99 @@ async def menu_process_kml(message: types.Message, state: FSMContext):
     await message.answer(
         "📤 <b>Загрузите KML файл</b>\n\n"
         "Отправьте мне KML файл с каталогом снимков для обработки.\n\n"
-        "После загрузки я:\n"
-        "1. Извлеку все полигоны снимков\n"
-        "2. Найду населенные пункты в каждом кадре\n"
-        "3. Обновлю базу данных для более точного поиска\n"
-        "4. Создам файлы с данными для скачивания\n\n"
-        "⏱️ Обработка может занять несколько минут.",
+        "После загрузки я найду населенные пункты в каждом кадре "
+        "на основе загруженного каталога НП.",
         parse_mode="HTML"
     )
     await state.set_state(SearchStates.waiting_for_kml)
+
+@dp.message(F.text == "⚙️ НАСТРОЙКИ")
+async def menu_settings(message: types.Message):
+    """Меню настроек"""
+    stats = village_db.get_stats()
+    
+    text = (
+        f"⚙️ <b>Настройки базы населенных пунктов</b>\n\n"
+        f"📊 <b>Текущая статистика:</b>\n"
+        f"• Всего записей: {stats['total']}\n"
+        f"• С координатами: {stats['with_coords']}\n"
+    )
+    
+    if stats['last_update']:
+        text += f"• Последнее обновление: {stats['last_update']}\n"
+    if stats['source_file']:
+        text += f"• Источник: {stats['source_file']}\n\n"
+    else:
+        text += f"• База данных пуста\n\n"
+    
+    text += f"👇 <b>Выберите действие:</b>"
+    
+    await message.answer(text, parse_mode="HTML", reply_markup=get_settings_keyboard())
+
+# ========== ОБРАБОТЧИКИ НАСТРОЕК ==========
+
+@dp.callback_query(lambda c: c.data == "village_stats")
+async def show_village_stats(callback: CallbackQuery):
+    """Показывает подробную статистику базы"""
+    stats = village_db.get_stats()
+    
+    text = (
+        f"📊 <b>Детальная статистика каталога НП</b>\n\n"
+        f"• Всего записей: {stats['total']}\n"
+        f"• С координатами: {stats['with_coords']}\n"
+        f"• Без координат: {stats['total'] - stats['with_coords']}\n"
+    )
+    
+    if stats['last_update']:
+        text += f"• Последнее обновление: {stats['last_update']}\n"
+    if stats['source_file']:
+        text += f"• Источник: {stats['source_file']}\n\n"
+    
+    # Показываем первые 10 записей для примера
+    if village_db.villages:
+        text += f"\n📋 <b>Примеры записей:</b>\n"
+        for v in village_db.villages[:10]:
+            coords = f"({v['lat']}, {v['lon']})" if v['lat'] and v['lon'] else "(без координат)"
+            text += f"• {v['name']} ({v['type']}) {coords}\n"
+        if len(village_db.villages) > 10:
+            text += f"  и ещё {len(village_db.villages) - 10}..."
+    
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=back_keyboard())
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data == "update_villages")
+async def update_villages_start(callback: CallbackQuery, state: FSMContext):
+    """Начинает процесс загрузки нового каталога"""
+    await callback.message.edit_text(
+        "📤 <b>Загрузка официального каталога населенных пунктов</b>\n\n"
+        "⚠️ <b>ВНИМАНИЕ:</b> Это действие ПОЛНОСТЬЮ ЗАМЕНИТ текущую базу данных!\n\n"
+        "Пожалуйста, отправьте CSV файл со следующей структурой:\n\n"
+        "<code>name,type,lat,lon,source,district</code>\n\n"
+        "Пример:\n"
+        "<code>Горбово,деревня,56.2345,34.1234,agkgn,Ржевский\n"
+        "Грибеево,урочище,,,1859,Ржевский</code>\n\n"
+        "Поля <b>lat, lon</b> могут быть пустыми для записей без координат.\n\n"
+        "Все существующие данные будут удалены и заменены новыми.",
+        parse_mode="HTML"
+    )
+    await state.set_state(SearchStates.waiting_for_csv_upload)
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data == "download_villages")
+async def download_villages(callback: CallbackQuery):
+    """Отправляет текущий каталог"""
+    if os.path.exists(village_db.csv_path):
+        document = FSInputFile(village_db.csv_path, filename="villages.csv")
+        await callback.message.answer_document(
+            document,
+            caption=f"📁 <b>Текущий каталог населенных пунктов</b>\n"
+                    f"Всего записей: {village_db.stats['total']}",
+            parse_mode="HTML"
+        )
+    else:
+        await callback.message.answer("❌ Файл каталога не найден")
+    
+    await callback.answer()
 
 # ========== ОБРАБОТЧИКИ LOCUS ==========
 
@@ -1114,7 +1292,7 @@ async def locus_instruction(callback: CallbackQuery):
     ])
     await callback.message.edit_text(
         "📖 <b>Инструкция по Locus Maps</b>\n\n"
-        "Нажмите кнопку ниже для скачивания инструкции от ПО Сокол с Яндекс.Диска.",
+        "Нажмите кнопку ниже для скачивания инструкции.",
         parse_mode="HTML",
         reply_markup=keyboard
     )
@@ -1130,9 +1308,7 @@ async def locus_download_app(callback: CallbackQuery):
     ])
     await callback.message.edit_text(
         "📥 <b>Скачать Locus Maps</b>\n\n"
-        "Нажмите кнопку ниже для скачивания приложения Locus Maps с Яндекс.Диска.\n\n"
-        "После установки приложения вы можете скачать карту Ржевского района "
-        "в разделе «🗺️ КАРТА РЖЕВ».",
+        "Нажмите кнопку ниже для скачивания приложения.",
         parse_mode="HTML",
         reply_markup=keyboard
     )
@@ -1141,56 +1317,21 @@ async def locus_download_app(callback: CallbackQuery):
 @dp.callback_query(lambda c: c.data == "back_to_locus")
 async def back_to_locus(callback: CallbackQuery):
     await callback.message.edit_text(
-        "🗺️ <b>Locus Maps</b>\n\n"
-        "Выберите действие:",
+        "🗺️ <b>Locus Maps</b>\n\nВыберите действие:",
         reply_markup=get_locus_keyboard()
-    )
-    await callback.answer()
-
-# ========== ОБРАБОТЧИКИ СКАЧИВАНИЯ С ЯНДЕКС.ДИСКА ==========
-
-@dp.callback_query(lambda c: c.data == "download_map")
-async def download_map(callback: CallbackQuery):
-    await callback.message.edit_text(
-        "⏳ <b>Загрузка...</b>\n\n"
-        "Идет подготовка файла карты для скачивания...",
-        parse_mode="HTML"
-    )
-    
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📥 Скачать карту", url="https://disk.yandex.ru/d/mrxZWJqLuAtnNA")],
-        [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
-    ])
-    
-    await callback.message.edit_text(
-        "🗺️ <b>Карта Ржевского района для Locus Maps</b>\n\n"
-        "Файл готов к скачиванию:\n"
-        "https://disk.yandex.ru/d/mrxZWJqLuAtnNA\n\n"
-        "📌 Нажмите кнопку ниже для скачивания.",
-        parse_mode="HTML",
-        reply_markup=keyboard
     )
     await callback.answer()
 
 @dp.callback_query(lambda c: c.data == "download_locus_instruction")
 async def download_locus_instruction(callback: CallbackQuery):
-    await callback.message.edit_text(
-        "⏳ <b>Загрузка...</b>\n\n"
-        "Идет подготовка инструкции для скачивания...",
-        parse_mode="HTML"
-    )
-    
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📖 Скачать инструкцию", url="https://disk.yandex.ru/i/sE2Jy99in7MCxw")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="locus_instruction")],
         [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
     ])
-    
     await callback.message.edit_text(
         "📖 <b>Инструкция по Locus Maps</b>\n\n"
-        "Файл готов к скачиванию:\n"
-        "https://disk.yandex.ru/i/sE2Jy99in7MCxw\n\n"
-        "📌 Нажмите кнопку ниже для скачивания.",
+        "Файл готов к скачиванию.",
         parse_mode="HTML",
         reply_markup=keyboard
     )
@@ -1198,23 +1339,14 @@ async def download_locus_instruction(callback: CallbackQuery):
 
 @dp.callback_query(lambda c: c.data == "download_locus_app")
 async def download_locus_app(callback: CallbackQuery):
-    await callback.message.edit_text(
-        "⏳ <b>Загрузка...</b>\n\n"
-        "Идет подготовка приложения для скачивания...",
-        parse_mode="HTML"
-    )
-    
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📥 Скачать Locus Maps", url="https://disk.yandex.ru/d/uUgVGkMoq3WITw")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="locus_download_app")],
         [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
     ])
-    
     await callback.message.edit_text(
         "📥 <b>Скачать Locus Maps</b>\n\n"
-        "Файл готов к скачиванию:\n"
-        "https://disk.yandex.ru/d/uUgVGkMoq3WITw\n\n"
-        "📌 Нажмите кнопку ниже для скачивания.",
+        "Файл готов к скачиванию.",
         parse_mode="HTML",
         reply_markup=keyboard
     )
@@ -1300,25 +1432,26 @@ async def process_kml_upload(message: types.Message, state: FSMContext):
         # Удаляем временный файл
         os.unlink(tmp_path)
         
-        # Показываем результаты
-        meta = results['metadata']
-        
-        response = f"✅ <b>Обработка завершена!</b>\n\n"
-        response += f"📊 <b>Результаты:</b>\n"
-        response += f"• Обработано снимков: {meta['total_photos']}\n"
-        response += f"• Снимков с НП: {meta['photos_with_villages']}\n"
-        response += f"• Всего связей: {meta['total_villages_found']}\n\n"
-        response += f"📁 <b>Созданы файлы:</b>\n"
-        response += f"• data/photo_villages.json - для быстрого поиска\n"
-        response += f"• data/kml_processed_results.json - полные данные\n"
-        response += f"• data/kml_processor.log - лог обработки\n\n"
-        response += f"👇 <b>Нажмите кнопку для скачивания файлов:</b>"
-        
-        await message.answer(
-            response,
-            parse_mode="HTML",
-            reply_markup=get_download_keyboard()
-        )
+        if results:
+            # Считаем статистику
+            total_np = sum(r.get('village_count', 0) for r in results)
+            photos_with_np = sum(1 for r in results if r.get('village_count', 0) > 0)
+            
+            await message.answer(
+                f"✅ <b>Обработка завершена!</b>\n\n"
+                f"📊 <b>Результаты:</b>\n"
+                f"• Обработано снимков: {len(results)}\n"
+                f"• Снимков с НП: {photos_with_np}\n"
+                f"• Всего найдено связей: {total_np}\n\n"
+                f"Данные сохранены во временные файлы.",
+                parse_mode="HTML",
+                reply_markup=back_keyboard()
+            )
+        else:
+            await message.answer(
+                "❌ В файле не найдено снимков для обработки",
+                reply_markup=back_keyboard()
+            )
         
     except Exception as e:
         logger.error(f"Ошибка при обработке KML: {e}")
@@ -1338,38 +1471,79 @@ async def process_kml_upload_invalid(message: types.Message, state: FSMContext):
     )
     await state.clear()
 
-# ========== ОБРАБОТЧИКИ СКАЧИВАНИЯ ФАЙЛОВ ==========
+# ========== ОБРАБОТЧИК ЗАГРУЗКИ CSV ==========
 
-@dp.callback_query(lambda c: c.data.startswith('download_'))
-async def process_file_download(callback: CallbackQuery):
-    file_map = {
-        'download_photo_villages': ('data/photo_villages.json', 'photo_villages.json'),
-        'download_kml_results': ('data/kml_processed_results.json', 'kml_processed_results.json'),
-        'download_kml_log': ('data/kml_processor.log', 'kml_processor.log')
-    }
+@dp.message(SearchStates.waiting_for_csv_upload, F.document)
+async def process_csv_upload(message: types.Message, state: FSMContext):
+    """Обрабатывает загрузку нового каталога"""
+    document = message.document
     
-    file_key = callback.data
-    if file_key not in file_map:
-        await callback.answer("❌ Файл не найден")
+    # Проверяем расширение файла
+    if not document.file_name.endswith('.csv'):
+        await message.answer(
+            "❌ <b>Неверный формат файла</b>\n\n"
+            "Пожалуйста, загрузите файл с расширением .csv",
+            parse_mode="HTML"
+        )
+        await state.clear()
         return
     
-    file_path, file_name = file_map[file_key]
+    await message.answer(
+        "⏳ <b>Файл получен. Загружаю новый каталог...</b>\n\n"
+        "Это может занять несколько секунд.",
+        parse_mode="HTML"
+    )
     
     try:
-        if os.path.exists(file_path):
-            document = FSInputFile(file_path, filename=file_name)
-            await callback.message.answer_document(
-                document,
-                caption=f"📁 <b>Файл {file_name}</b>",
-                parse_mode="HTML"
-            )
-        else:
-            await callback.message.answer(f"❌ Файл {file_name} еще не создан")
+        # Скачиваем файл
+        file_info = await bot.get_file(document.file_id)
+        file_path = file_info.file_path
+        
+        # Читаем содержимое
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.csv') as tmp_file:
+            await bot.download_file(file_path, tmp_file)
+            tmp_path = tmp_file.name
+        
+        with open(tmp_path, 'r', encoding='utf-8') as f:
+            csv_content = f.read()
+        
+        os.unlink(tmp_path)
+        
+        # Заменяем базу новым каталогом
+        stats = village_db.replace_with_catalog(csv_content, document.file_name)
+        
+        await message.answer(
+            f"✅ <b>Каталог успешно загружен!</b>\n\n"
+            f"📊 <b>Результаты:</b>\n"
+            f"• Загружено записей: {stats['loaded']}\n"
+            f"• С координатами: {stats['with_coords']}\n"
+            f"• Ошибок: {stats['errors']}\n"
+            f"• Источник: {document.file_name}\n\n"
+            f"Теперь поиск будет использовать этот каталог!",
+            parse_mode="HTML",
+            reply_markup=back_keyboard()
+        )
+        
     except Exception as e:
-        logger.error(f"Ошибка при отправке файла {file_path}: {e}")
-        await callback.message.answer(f"❌ Ошибка при отправке файла")
+        logger.error(f"Ошибка при загрузке каталога: {e}")
+        await message.answer(
+            f"❌ <b>Ошибка при загрузке каталога</b>\n\n"
+            f"{str(e)}\n\n"
+            f"Проверьте формат файла и попробуйте снова.",
+            parse_mode="HTML"
+        )
     
-    await callback.answer()
+    await state.clear()
+
+@dp.message(SearchStates.waiting_for_csv_upload)
+async def process_csv_upload_invalid(message: types.Message, state: FSMContext):
+    """Обрабатывает неверный ввод при ожидании CSV"""
+    await message.answer(
+        "❌ <b>Ожидался CSV файл</b>\n\n"
+        "Пожалуйста, отправьте файл с расширением .csv",
+        parse_mode="HTML"
+    )
+    await state.clear()
 
 # ========== ОБРАБОТЧИКИ КНОПОК ==========
 
@@ -1449,6 +1623,7 @@ async def main() -> None:
     logger.info(f"📊 Загружено локаций: {len(db.locations)}")
     logger.info(f"📊 Уникальных деревень: {len(db.all_villages)}")
     logger.info(f"📊 Описаний снимков: {len(db.photo_details)}")
+    logger.info(f"📊 Населенных пунктов в каталоге: {village_db.stats['total']}")
     logger.info(f"✅ Яндекс.Диск токен загружен")
     await delete_webhook()
     logger.info("🔄 Polling...")
