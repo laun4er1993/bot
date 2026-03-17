@@ -1299,7 +1299,7 @@ async def menu_instruction(message: types.Message):
         "• Загрузка официального каталога населенных пунктов\n"
         "• Просмотр статистики базы\n"
         "• Генерация полного каталога\n"
-        "• 🌐 Загрузка из интернета (АГКГН, Wikidata, OSM, исторические)\n\n"
+        "• 🌐 Загрузка из интернета (OpenStreetMap, Wikidata, Overpass, Wikimapia, EtoMesto)\n\n"
         
         "🛩️ <b>ПРИЯТНОГО ИСПОЛЬЗОВАНИЯ!</b>"
     )
@@ -1478,8 +1478,8 @@ async def update_villages_start(callback: CallbackQuery, state: FSMContext):
         "Пожалуйста, отправьте CSV файл со следующей структурой:\n\n"
         "<code>name,type,lat,lon,source,district</code>\n\n"
         "Пример:\n"
-        "<code>Горбово,деревня,56.2345,34.1234,agkgn,Ржевский\n"
-        "Грибеево,урочище,,,historical,Ржевский</code>\n\n"
+        "<code>Горбово,деревня,56.2345,34.1234,osm,Ржевский\n"
+        "Грибеево,урочище,,,overpass,Ржевский</code>\n\n"
         "Поля <b>lat, lon</b> могут быть пустыми для записей без координат.\n\n"
         "Все существующие данные будут удалены и заменены новыми.",
         parse_mode="HTML"
@@ -1507,15 +1507,17 @@ async def download_villages(callback: CallbackQuery):
 async def download_from_web_start(callback: CallbackQuery, state: FSMContext):
     """Начинает загрузку данных из интернета через API"""
     
-    await callback.message.edit_text(
+    await callback.answer("⏳ Загрузка начата...")
+    
+    status_msg = await callback.message.answer(
         "🌐 <b>Загрузка данных из интернета</b>\n\n"
-        "⏳ Загружаю данные из API:\n"
-        "• АГКГН (государственный каталог)\n"
-        "• Wikidata\n"
-        "• OpenStreetMap Nominatim\n"
-        "• Исторические данные 1859 года\n"
-        "• EtoMesto.ru (исторические карты)\n\n"
-        "Это может занять до 30 секунд...",
+        "⏳ Загружаю данные из источников:\n"
+        "• OpenStreetMap (современные НП)\n"
+        "• Wikidata (база знаний)\n"
+        "• Overpass API (исторические данные)\n"
+        "• Wikimapia (краудсорсинг)\n"
+        "• EtoMesto (исторические карты)\n\n"
+        "Это может занять до 20 секунд...",
         parse_mode="HTML"
     )
     
@@ -1524,19 +1526,27 @@ async def download_from_web_start(callback: CallbackQuery, state: FSMContext):
         api_manager = APISourceManager()
         
         # Загружаем данные из всех источников параллельно
-        villages = await api_manager.fetch_all_sources()
+        villages = await asyncio.wait_for(
+            api_manager.fetch_all_sources(),
+            timeout=20.0
+        )
         
-        # Закрываем сессию
         await api_manager.close_session()
         
         if not villages:
-            raise Exception("Не удалось загрузить данные ни из одного источника")
+            await status_msg.edit_text(
+                "❌ <b>Не удалось загрузить данные</b>\n\n"
+                "Ни один из источников не вернул данных.\n"
+                "Попробуйте позже.",
+                parse_mode="HTML",
+                reply_markup=back_to_settings_keyboard()
+            )
+            return
         
-        # Создаем временный файл с новыми данными
+        # Создаем временный файл
         timestamp = time.strftime('%Y%m%d_%H%M%S')
         temp_file = f"data/temp_catalog_{timestamp}.csv"
         
-        # Сохраняем в CSV
         os.makedirs(os.path.dirname(temp_file), exist_ok=True)
         with open(temp_file, 'w', encoding='utf-8', newline='') as f:
             writer = csv.DictWriter(f, fieldnames=['name', 'type', 'lat', 'lon', 'source', 'district', 'status', 'notes'])
@@ -1549,10 +1559,8 @@ async def download_from_web_start(callback: CallbackQuery, state: FSMContext):
             source = v.get('source', 'unknown')
             source_stats[source] = source_stats.get(source, 0) + 1
         
-        # Сохраняем в состоянии
         await state.update_data(temp_catalog=temp_file, temp_stats=source_stats, temp_total=len(villages))
         
-        # Формируем сообщение со статистикой
         stats_text = "📊 <b>Результаты по источникам:</b>\n"
         for source, count in sorted(source_stats.items(), key=lambda x: x[1], reverse=True):
             stats_text += f"• {source}: {count} записей\n"
@@ -1573,11 +1581,20 @@ async def download_from_web_start(callback: CallbackQuery, state: FSMContext):
             [InlineKeyboardButton(text="❌ Отмена", callback_data="back_to_settings")]
         ])
         
-        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
+        await status_msg.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
         
+    except asyncio.TimeoutError:
+        logger.error("Таймаут при загрузке данных")
+        await status_msg.edit_text(
+            "❌ <b>Ошибка загрузки</b>\n\n"
+            "Превышено время ожидания ответа от серверов.\n"
+            "Попробуйте позже.",
+            parse_mode="HTML",
+            reply_markup=back_to_settings_keyboard()
+        )
     except Exception as e:
         logger.error(f"Ошибка при загрузке данных: {e}")
-        await callback.message.edit_text(
+        await status_msg.edit_text(
             f"❌ <b>Ошибка загрузки</b>\n\n{str(e)}",
             parse_mode="HTML",
             reply_markup=back_to_settings_keyboard()
@@ -1585,8 +1602,6 @@ async def download_from_web_start(callback: CallbackQuery, state: FSMContext):
     finally:
         if 'api_manager' in locals():
             await api_manager.close_session()
-    
-    await callback.answer()
 
 @dp.callback_query(lambda c: c.data == "view_temp_stats")
 async def view_temp_stats(callback: CallbackQuery, state: FSMContext):
