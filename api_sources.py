@@ -31,7 +31,7 @@ class APISourceManager:
                 },
                 'parser': self._parse_osm_response
             },
-            # Wikidata Query Service - работает через POST с правильными заголовками [citation:1][citation:9]
+            # Wikidata Query Service - работает через POST с правильными заголовками 
             'wikidata': {
                 'url': 'https://query.wikidata.org/sparql',
                 'method': 'POST',
@@ -50,7 +50,7 @@ class APISourceManager:
                 '''),
                 'parser': self._parse_wikidata_response
             },
-            # Overpass API - работает с оптимизированным запросом и таймаутами [citation:2][citation:10]
+            # Overpass API - работает с оптимизированным запросом и таймаутами 
             'overpass': {
                 'url': 'https://overpass-api.de/api/interpreter',
                 'method': 'POST',
@@ -69,7 +69,7 @@ class APISourceManager:
                 '''),
                 'parser': self._parse_overpass_response
             },
-            # EtoMesto - используем альтернативный API [citation:7]
+            # EtoMesto - используем альтернативный API 
             'etomesto': {
                 'url': 'https://boxpis.ru/api/v1/etomesto',
                 'method': 'GET',
@@ -160,7 +160,7 @@ class APISourceManager:
         return villages
     
     def _parse_wikidata_response(self, data: Dict) -> List[Dict]:
-        """Парсит ответ Wikidata Query Service [citation:1]"""
+        """Парсит ответ Wikidata Query Service """
         villages = []
         try:
             bindings = data.get('results', {}).get('bindings', [])
@@ -196,7 +196,7 @@ class APISourceManager:
         return villages
     
     def _parse_overpass_response(self, data: Dict) -> List[Dict]:
-        """Парсит ответ Overpass API [citation:2]"""
+        """Парсит ответ Overpass API """
         villages = []
         try:
             elements = data.get('elements', [])
@@ -242,7 +242,7 @@ class APISourceManager:
         return villages
     
     def _parse_etomesto_response(self, data: List) -> List[Dict]:
-        """Парсит ответ альтернативного API для исторических карт [citation:7]"""
+        """Парсит ответ альтернативного API для исторических карт """
         villages = []
         try:
             for item in data:
