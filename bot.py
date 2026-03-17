@@ -26,7 +26,6 @@ from aiogram.types import (
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from fastkml import kml
 from shapely.geometry import Polygon, Point
 from bs4 import BeautifulSoup
 
@@ -201,8 +200,6 @@ class YandexDiskClient:
                 else:
                     # Файл изменился, нужно создать новую ссылку
                     logger.info(f"  🔄 Файл изменился, создаем новую ссылку: {file_path}")
-                    logger.info(f"     Было: modified={cached_modified}, created={cached_created}")
-                    logger.info(f"     Стало: modified={current_modified}, created={current_created}")
             
             # Создаем новую публикацию
             return self._create_new_publication(file_path, file_info)
@@ -214,14 +211,30 @@ class YandexDiskClient:
     def _create_new_publication(self, file_path: str, file_info: Dict) -> Optional[str]:
         """Создает новую публикацию файла и сохраняет в кэш"""
         try:
-            # Если файл уже опубликован, сначала снимаем публикацию
-            if file_info.get('public_key'):
-                logger.info(f"  🔄 Снимаем старую публикацию с {file_path}")
-                url = f"{self.base_url}/resources/unpublish"
-                params = {"path": f"/{file_path}"}
-                self._make_request(url, params, method="PUT")
+            # Проверяем, есть ли уже публикация
+            if file_info.get('public_url'):
+                public_url = file_info.get('public_url')
+                logger.info(f"  ✅ Используем существующую публикацию: {file_path}")
+                
+                # Получаем ссылку на скачивание
+                download_link = self._get_public_download_link(public_url)
+                
+                if download_link:
+                    # Сохраняем в кэш с метаданными
+                    self.public_cache[file_path] = {
+                        'download_link': download_link,
+                        'modified': file_info.get('modified', ''),
+                        'created': file_info.get('created', ''),
+                        'public_url': public_url,
+                        'public_key': file_info.get('public_key', '')
+                    }
+                    logger.info(f"  ✅ Использована существующая публикация для {file_path}")
+                    return download_link
+                else:
+                    logger.warning(f"  ⚠️ Не удалось получить ссылку из существующей публикации, создаем новую")
             
-            # Публикуем файл заново
+            # Если нет публикации или не удалось получить ссылку - создаем новую
+            logger.info(f"  📤 Создаем новую публикацию для {file_path}")
             url = f"{self.base_url}/resources/publish"
             params = {"path": f"/{file_path}"}
             data = self._make_request(url, params, method="PUT")
@@ -461,7 +474,7 @@ class KMZProcessor:
         self.photo_villages_file = "data/photo_villages.json"
         self.kmz_data_file = "data/kmz_extracted_data.json"
         self.kmz_processed_file = "data/kmz_processed.json"
-        self.kmz_history_file = "data/kmz_history.json"  # Файл для истории изменений
+        self.kmz_history_file = "data/kmz_history.json"
         self.log_file = "data/kmz_processor.log"
         
         # Настройка отдельного логгера для KMZ процессора
@@ -618,12 +631,17 @@ class KMZProcessor:
             
             name = name_elem.text.strip()
             
-            # Ищем только placemark с frame- в названии
-            if not name.startswith('frame-'):
-                continue
+            # Ищем placemark с frame- в названии или с номером снимка
+            photo_num = None
             
-            # Извлекаем номер снимка из названия
-            photo_num = name.replace('frame-', '')
+            # Проверяем разные форматы
+            if name.startswith('frame-'):
+                photo_num = name.replace('frame-', '')
+            elif re.match(r'N56E34-\d+-\d+', name):
+                photo_num = name
+            else:
+                # Пропускаем, если не похоже на снимок
+                continue
             
             # Ищем описание
             desc_elem = placemark.find('description')
@@ -656,8 +674,9 @@ class KMZProcessor:
                     'coordinates': coordinates,
                     'coordinate_count': len(coordinates)
                 })
+                self.logger.info(f"  📸 Найден снимок: {photo_num} (координат: {len(coordinates)})")
         
-        self.logger.info(f"📸 Найдено {len(results)} снимков в KML")
+        self.logger.info(f"📸 Всего найдено {len(results)} снимков в KML")
         return results
     
     def _parse_coordinates(self, coords_text: str) -> List[Tuple[float, float]]:
@@ -674,7 +693,7 @@ class KMZProcessor:
             if len(parts) >= 2:
                 lon = float(parts[0])
                 lat = float(parts[1])
-                coords.append((lat, lon))  # shapely ожидает (lat, lon)
+                coords.append((lat, lon))
         return coords
     
     def get_bounding_box(self, coordinates: List[Tuple[float, float]], margin_km: float = 1.0) -> Tuple[float, float, float, float]:
@@ -756,11 +775,11 @@ class KMZProcessor:
         
         # Разрешенные типы
         allowed_types = [
-            'city', 'town',           # города
-            'village',                  # деревни
-            'hamlet', 'isolated_dwelling',  # хутора, отдельные дома
-            'locality',                  # урочища
-            'farm'                        # фермы
+            'city', 'town',
+            'village',
+            'hamlet', 'isolated_dwelling',
+            'locality',
+            'farm'
         ]
         
         return class_type == 'place' or place_type in allowed_types
@@ -823,6 +842,7 @@ class KMZProcessor:
             # Фильтруем НП, попадающие в полигон (с учетом запаса)
             villages_in_polygon = []
             if candidates:
+                self.logger.info(f"    Найдено кандидатов: {len(candidates)}")
                 for village in candidates:
                     if not self._is_valid_place_type(village):
                         continue
@@ -831,7 +851,9 @@ class KMZProcessor:
                     # Добавляем небольшой буфер к полигону
                     buffered_polygon = polygon.buffer(margin_deg)
                     if buffered_polygon.contains(point):
-                        villages_in_polygon.append(village.get('display_name', '').split(',')[0])
+                        village_name = village.get('display_name', '').split(',')[0]
+                        villages_in_polygon.append(village_name)
+                        self.logger.info(f"      ✅ Попадает: {village_name}")
             
             photo_data['villages'] = list(set(villages_in_polygon))
             photo_data['village_count'] = len(photo_data['villages'])
@@ -1325,6 +1347,7 @@ db = PhotosDatabase()
 class SearchStates(StatesGroup):
     waiting_for_village = State()
     waiting_for_kmz = State()
+    waiting_for_file_download = State()
 
 # ========== КЛАВИАТУРЫ ==========
 
@@ -1364,6 +1387,15 @@ def photos_keyboard(photos: List[str]) -> InlineKeyboardMarkup:
             row = []
     keyboard.append([InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")])
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+def get_download_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📥 Скачать photo_villages.json", callback_data="download_photo_villages")],
+        [InlineKeyboardButton(text="📥 Скачать kmz_extracted_data.json", callback_data="download_kmz_data")],
+        [InlineKeyboardButton(text="📥 Скачать kmz_history.json", callback_data="download_kmz_history")],
+        [InlineKeyboardButton(text="📥 Скачать kmz_processor.log", callback_data="download_kmz_log")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main")]
+    ])
 
 # ========== ОБРАБОТЧИКИ КОМАНД ==========
 
@@ -1446,8 +1478,7 @@ async def menu_instruction(message: types.Message):
         "• Загрузите KMZ файл с каталогом снимков\n"
         "• Бот извлечет все полигоны и определит населенные пункты\n"
         "• Данные будут добавлены в базу для более точного поиска\n"
-        "• Будут созданы файлы photo_villages.json и kmz_extracted_data.json\n"
-        "• История изменений сохраняется в kmz_history.json\n\n"
+        "• После обработки вы сможете скачать все созданные файлы\n\n"
         
         "🔄 <b>6. НАВИГАЦИЯ</b>\n"
         "• После просмотра снимка можно вернуться к списку кнопкой «🔙 Назад к списку»\n"
@@ -1700,9 +1731,6 @@ async def process_kmz_upload(message: types.Message, state: FSMContext):
         # Получаем статистику
         stats = kmz_processor.get_stats()
         
-        # Получаем выгруженные данные
-        kmz_data = kmz_processor.get_kmz_data()
-        
         # Получаем историю
         history = kmz_processor.get_history()
         last_history = history[-1] if history else {}
@@ -1717,15 +1745,15 @@ async def process_kmz_upload(message: types.Message, state: FSMContext):
             f"📁 <b>Созданы файлы:</b>\n"
             f"• data/photo_villages.json - связи снимков и НП\n"
             f"• data/kmz_extracted_data.json - полные выгруженные данные\n"
-            f"• data/kmz_history.json - история изменений\n\n"
-            f"📝 <b>Лог обработки:</b> data/kmz_processor.log\n\n"
+            f"• data/kmz_history.json - история изменений\n"
+            f"• data/kmz_processor.log - лог обработки\n\n"
             f"🔄 <b>Изменения в этом обновлении:</b>\n"
             f"• Новых снимков: +{last_history.get('changes', {}).get('added', 0)}\n"
             f"• Обновлено снимков: {last_history.get('changes', {}).get('updated', 0)}\n"
             f"• Добавлено новых связей: +{last_history.get('changes', {}).get('new_villages_added', 0)}\n\n"
-            f"Теперь поиск по деревням будет точнее!",
+            f"👇 <b>Нажмите кнопку ниже, чтобы скачать файлы:</b>",
             parse_mode="HTML",
-            reply_markup=back_keyboard()
+            reply_markup=get_download_keyboard()
         )
         
     except Exception as e:
@@ -1746,6 +1774,40 @@ async def process_kmz_upload_invalid(message: types.Message, state: FSMContext):
         parse_mode="HTML"
     )
     await state.clear()
+
+# ========== ОБРАБОТЧИКИ СКАЧИВАНИЯ ФАЙЛОВ ==========
+
+@dp.callback_query(lambda c: c.data.startswith('download_'))
+async def process_file_download(callback: CallbackQuery):
+    file_map = {
+        'download_photo_villages': ('data/photo_villages.json', 'photo_villages.json'),
+        'download_kmz_data': ('data/kmz_extracted_data.json', 'kmz_extracted_data.json'),
+        'download_kmz_history': ('data/kmz_history.json', 'kmz_history.json'),
+        'download_kmz_log': ('data/kmz_processor.log', 'kmz_processor.log')
+    }
+    
+    file_key = callback.data
+    if file_key not in file_map:
+        await callback.answer("❌ Файл не найден")
+        return
+    
+    file_path, file_name = file_map[file_key]
+    
+    try:
+        if os.path.exists(file_path):
+            document = FSInputFile(file_path, filename=file_name)
+            await callback.message.answer_document(
+                document,
+                caption=f"📁 <b>Файл {file_name}</b>",
+                parse_mode="HTML"
+            )
+        else:
+            await callback.message.answer(f"❌ Файл {file_name} еще не создан")
+    except Exception as e:
+        logger.error(f"Ошибка при отправке файла {file_path}: {e}")
+        await callback.message.answer(f"❌ Ошибка при отправке файла")
+    
+    await callback.answer()
 
 # ========== ОБРАБОТЧИКИ КНОПОК ==========
 
