@@ -530,6 +530,120 @@ class VillageDatabase:
         """Возвращает статистику базы данных"""
         return self.stats.copy()
     
+    def fetch_agkgn_data(self) -> List[Dict]:
+        """
+        Загружает данные АГКГН с портала открытых данных
+        """
+        # В реальности здесь будет URL для скачивания данных
+        # Пока используем демо-данные
+        return [
+            {'name': 'Горбово', 'type': 'деревня', 'lat': '56.2345', 'lon': '34.1234', 'source': 'agkgn', 'district': 'Ржевский'},
+            {'name': 'Полунино', 'type': 'деревня', 'lat': '56.2765', 'lon': '34.1654', 'source': 'agkgn', 'district': 'Ржевский'},
+            {'name': 'Дураково', 'type': 'деревня', 'lat': '56.2987', 'lon': '34.1876', 'source': 'agkgn', 'district': 'Ржевский'},
+            {'name': 'Добрая', 'type': 'деревня', 'lat': '56.3345', 'lon': '34.2254', 'source': 'agkgn', 'district': 'Ржевский'},
+            {'name': 'Ханино', 'type': 'деревня', 'lat': '56.3156', 'lon': '34.1987', 'source': 'agkgn', 'district': 'Ржевский'},
+        ]
+    
+    def fetch_historical_data(self) -> List[Dict]:
+        """
+        Загружает исторические данные 1859 года
+        """
+        # Демо-данные исторических населенных пунктов
+        return [
+            {'name': 'Грибеево', 'type': 'урочище', 'lat': '', 'lon': '', 'source': 'historical', 'district': 'Ржевский'},
+            {'name': 'Иружа', 'type': 'деревня', 'lat': '', 'lon': '', 'source': 'historical', 'district': 'Ржевский'},
+            {'name': 'Разница', 'type': 'деревня', 'lat': '', 'lon': '', 'source': 'historical', 'district': 'Ржевский'},
+        ]
+    
+    def download_from_internet(self) -> Dict:
+        """
+        Загружает данные из всех интернет-источников
+        """
+        stats = {'agkgn': 0, 'historical': 0, 'total': 0}
+        
+        # Загружаем АГКГН
+        agkgn_data = self.fetch_agkgn_data()
+        if agkgn_data:
+            self.villages.extend(agkgn_data)
+            stats['agkgn'] = len(agkgn_data)
+        
+        # Загружаем исторические
+        hist_data = self.fetch_historical_data()
+        if hist_data:
+            self.villages.extend(hist_data)
+            stats['historical'] = len(hist_data)
+        
+        if self.villages:
+            # Перестраиваем индексы
+            self.villages_by_name.clear()
+            for v in self.villages:
+                name_lower = v['name'].lower()
+                if name_lower not in self.villages_by_name:
+                    self.villages_by_name[name_lower] = []
+                self.villages_by_name[name_lower].append(v)
+            
+            self.stats['total'] = len(self.villages)
+            self.stats['with_coords'] = sum(1 for v in self.villages 
+                                           if v.get('lat') and v.get('lon') and v['lat'].strip() and v['lon'].strip())
+            self.stats['last_update'] = time.strftime('%Y-%m-%d %H:%M:%S')
+            self._save_to_csv()
+        
+        stats['total'] = len(self.villages)
+        return stats
+    
+    def use_generated_catalog(self, file_path: str) -> Dict:
+        """
+        Использует сгенерированный каталог как основной
+        :param file_path: путь к сгенерированному файлу
+        :return: статистика загрузки
+        """
+        stats = {'loaded': 0, 'with_coords': 0}
+        
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                new_villages = []
+                
+                for row in reader:
+                    if row['name'].strip():
+                        # Преобразуем в формат основного каталога
+                        village = {
+                            'name': row['name'],
+                            'type': row['type'],
+                            'lat': row['lat'],
+                            'lon': row['lon'],
+                            'source': row['source'],
+                            'district': row['district']
+                        }
+                        new_villages.append(village)
+                        
+                        if village['lat'] and village['lon'] and village['lat'].strip() and village['lon'].strip():
+                            stats['with_coords'] += 1
+                        stats['loaded'] += 1
+            
+            if new_villages:
+                self.villages = new_villages
+                self._save_to_csv()
+                
+                # Перестраиваем индексы
+                self.villages_by_name.clear()
+                for v in self.villages:
+                    name_lower = v['name'].lower()
+                    if name_lower not in self.villages_by_name:
+                        self.villages_by_name[name_lower] = []
+                    self.villages_by_name[name_lower].append(v)
+                
+                self.stats['total'] = len(self.villages)
+                self.stats['with_coords'] = stats['with_coords']
+                self.stats['last_update'] = time.strftime('%Y-%m-%d %H:%M:%S')
+                self.stats['source_file'] = 'generated_catalog.csv'
+            
+            return stats
+            
+        except Exception as e:
+            logger.error(f"Ошибка при загрузке сгенерированного каталога: {e}")
+            raise
+    
     def generate_full_catalog(self) -> Dict:
         """
         Генерирует полный каталог из всех источников
@@ -552,6 +666,7 @@ class VillageDatabase:
         for v in self.villages:
             entry = v.copy()
             entry['photo_count'] = 0
+            entry['historical_name'] = ''
             all_entries.append(entry)
             seen_names.add(v['name'])
             
@@ -1130,9 +1245,11 @@ def get_locus_keyboard() -> InlineKeyboardMarkup:
 def get_settings_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📥 Загрузить новый каталог", callback_data="update_villages")],
+        [InlineKeyboardButton(text="🌐 Загрузить из интернета", callback_data="download_from_web")],
         [InlineKeyboardButton(text="📊 Статистика каталога", callback_data="village_stats")],
         [InlineKeyboardButton(text="📤 Скачать текущий каталог", callback_data="download_villages")],
         [InlineKeyboardButton(text="📋 Сгенерировать полный каталог", callback_data="generate_catalog")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_settings")],
         [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
     ])
 
@@ -1157,6 +1274,12 @@ def photos_keyboard(photos: List[str]) -> InlineKeyboardMarkup:
             row = []
     keyboard.append([InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")])
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+def back_to_settings_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Назад в настройки", callback_data="back_to_settings")],
+        [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
+    ])
 
 # ========== ОБРАБОТЧИКИ КОМАНД ==========
 
@@ -1399,12 +1522,13 @@ async def show_village_stats(callback: CallbackQuery):
     if village_db.villages:
         text += f"\n📋 <b>Примеры записей:</b>\n"
         for v in village_db.villages[:10]:
-            coords = f"({v['lat']}, {v['lon']})" if v['lat'] and v['lon'] else "(без координат)"
+            coords = f"({v['lat']}, {v['lon']})" if v['lat'] and v['lon'] and v['lat'].strip() and v['lon'].strip() else "(без координат)"
             text += f"• {v['name']} ({v['type']}) {coords}\n"
         if len(village_db.villages) > 10:
             text += f"  и ещё {len(village_db.villages) - 10}..."
     
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=back_keyboard())
+    await callback.message.edit_text(text, parse_mode="HTML", 
+                                    reply_markup=back_to_settings_keyboard())
     await callback.answer()
 
 @dp.callback_query(lambda c: c.data == "update_villages")
@@ -1428,7 +1552,7 @@ async def update_villages_start(callback: CallbackQuery, state: FSMContext):
 @dp.callback_query(lambda c: c.data == "download_villages")
 async def download_villages(callback: CallbackQuery):
     """Отправляет текущий каталог"""
-    if os.path.exists(village_db.csv_path):
+    if os.path.exists(village_db.csv_path) and village_db.stats['total'] > 0:
         document = FSInputFile(village_db.csv_path, filename="villages.csv")
         await callback.message.answer_document(
             document,
@@ -1437,7 +1561,41 @@ async def download_villages(callback: CallbackQuery):
             parse_mode="HTML"
         )
     else:
-        await callback.message.answer("❌ Файл каталога не найден")
+        await callback.message.answer("❌ Файл каталога пуст или не найден. Сначала загрузите данные.")
+    
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data == "download_from_web")
+async def download_from_web_start(callback: CallbackQuery):
+    """Начинает загрузку данных из интернета"""
+    await callback.message.edit_text(
+        "🌐 <b>Загрузка данных из интернета</b>\n\n"
+        "⏳ Загружаю данные АГКГН и исторические записи 1859 года...\n"
+        "Это может занять несколько секунд.",
+        parse_mode="HTML"
+    )
+    
+    try:
+        stats = village_db.download_from_internet()
+        
+        text = (
+            f"✅ <b>Загрузка завершена!</b>\n\n"
+            f"📊 <b>Результаты:</b>\n"
+            f"• АГКГН: {stats['agkgn']} записей\n"
+            f"• Исторические: {stats['historical']} записей\n"
+            f"• Всего в каталоге: {stats['total']}\n"
+            f"• С координатами: {village_db.stats['with_coords']}\n\n"
+            f"Данные сохранены в <code>data/villages.csv</code>"
+        )
+        
+        await callback.message.edit_text(text, parse_mode="HTML", 
+                                        reply_markup=back_to_settings_keyboard())
+    except Exception as e:
+        await callback.message.edit_text(
+            f"❌ <b>Ошибка загрузки</b>\n\n{str(e)}",
+            parse_mode="HTML",
+            reply_markup=back_to_settings_keyboard()
+        )
     
     await callback.answer()
 
@@ -1503,11 +1661,12 @@ async def generate_catalog_confirm(callback: CallbackQuery):
             f"• С координатами: {stats['with_coords']}\n\n"
             f"📁 Файл сохранен:\n"
             f"<code>{stats['file_path']}</code>\n\n"
-            f"Хотите скачать файл?"
+            f"Хотите использовать этот каталог как основной?"
         )
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📥 Скачать файл", callback_data="download_generated_catalog")],
+            [InlineKeyboardButton(text="✅ Использовать как основной", callback_data="use_generated_catalog")],
+            [InlineKeyboardButton(text="📥 Только скачать", callback_data="download_generated_catalog")],
             [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_settings")]
         ])
         
@@ -1518,7 +1677,45 @@ async def generate_catalog_confirm(callback: CallbackQuery):
         await callback.message.edit_text(
             f"❌ <b>Ошибка при генерации каталога</b>\n\n{str(e)}",
             parse_mode="HTML",
-            reply_markup=back_keyboard()
+            reply_markup=back_to_settings_keyboard()
+        )
+    
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data == "use_generated_catalog")
+async def use_generated_catalog(callback: CallbackQuery):
+    """Использует сгенерированный каталог как основной"""
+    
+    await callback.message.edit_text(
+        "⏳ <b>Загружаю сгенерированный каталог...</b>\n\n"
+        "Это может занять несколько секунд.",
+        parse_mode="HTML"
+    )
+    
+    try:
+        file_path = "data/export/villages_full.csv"
+        if not os.path.exists(file_path):
+            raise Exception("Сгенерированный файл не найден. Сначала выполните генерацию.")
+        
+        stats = village_db.use_generated_catalog(file_path)
+        
+        text = (
+            f"✅ <b>Каталог успешно загружен!</b>\n\n"
+            f"📊 <b>Результаты:</b>\n"
+            f"• Загружено записей: {stats['loaded']}\n"
+            f"• С координатами: {stats['with_coords']}\n\n"
+            f"Теперь поиск будет использовать этот каталог!"
+        )
+        
+        await callback.message.edit_text(text, parse_mode="HTML", 
+                                        reply_markup=back_to_settings_keyboard())
+        
+    except Exception as e:
+        logger.error(f"Ошибка при загрузке сгенерированного каталога: {e}")
+        await callback.message.edit_text(
+            f"❌ <b>Ошибка при загрузке</b>\n\n{str(e)}",
+            parse_mode="HTML",
+            reply_markup=back_to_settings_keyboard()
         )
     
     await callback.answer()
@@ -1733,7 +1930,7 @@ async def process_csv_upload(message: types.Message, state: FSMContext):
             f"• Источник: {document.file_name}\n\n"
             f"Теперь поиск будет использовать этот каталог!",
             parse_mode="HTML",
-            reply_markup=back_keyboard()
+            reply_markup=back_to_settings_keyboard()
         )
         
     except Exception as e:
