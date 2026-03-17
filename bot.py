@@ -13,6 +13,7 @@ import io
 from typing import Optional, Dict, List, Set, Tuple, Any, Union
 from collections import defaultdict
 import requests
+import shutil
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
@@ -1299,7 +1300,7 @@ async def menu_instruction(message: types.Message):
         "• Загрузка официального каталога населенных пунктов\n"
         "• Просмотр статистики базы\n"
         "• Генерация полного каталога\n"
-        "• 🌐 Загрузка из интернета (OpenStreetMap, Wikidata, Overpass, Wikimapia, EtoMesto)\n\n"
+        "• 🌐 Загрузка из интернета (OpenStreetMap, Wikidata, Overpass, EtoMesto)\n\n"
         
         "🛩️ <b>ПРИЯТНОГО ИСПОЛЬЗОВАНИЯ!</b>"
     )
@@ -1513,11 +1514,10 @@ async def download_from_web_start(callback: CallbackQuery, state: FSMContext):
         "🌐 <b>Загрузка данных из интернета</b>\n\n"
         "⏳ Загружаю данные из источников:\n"
         "• OpenStreetMap (современные НП)\n"
-        "• Wikidata (база знаний)\n"
-        "• Overpass API (исторические данные)\n"
-        "• Wikimapia (краудсорсинг)\n"
+        "• Wikidata (исторические названия)\n"
+        "• Overpass API (заброшенные деревни)\n"
         "• EtoMesto (исторические карты)\n\n"
-        "Это может занять до 20 секунд...",
+        "Это может занять до 25 секунд...",
         parse_mode="HTML"
     )
     
@@ -1528,7 +1528,7 @@ async def download_from_web_start(callback: CallbackQuery, state: FSMContext):
         # Загружаем данные из всех источников параллельно
         villages = await asyncio.wait_for(
             api_manager.fetch_all_sources(),
-            timeout=20.0
+            timeout=25.0
         )
         
         await api_manager.close_session()
@@ -1536,7 +1536,7 @@ async def download_from_web_start(callback: CallbackQuery, state: FSMContext):
         if not villages:
             await status_msg.edit_text(
                 "❌ <b>Не удалось загрузить данные</b>\n\n"
-                "Ни один из источников не вернул данных.\n"
+                "API источники не вернули данных.\n"
                 "Попробуйте позже.",
                 parse_mode="HTML",
                 reply_markup=back_to_settings_keyboard()
