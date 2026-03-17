@@ -175,9 +175,12 @@ class YandexDiskClient:
         :param file_path: путь к файлу
         :return: временная ссылка на скачивание
         """
-        # Проверяем, есть ли пробелы в имени файла
-        if ' ' in file_path or '%20' in file_path:
-            logger.warning(f"  ⚠️ Пропускаем файл с пробелами: {file_path}")
+        # Извлекаем только имя файла из пути
+        file_name = os.path.basename(file_path)
+        
+        # Проверяем, есть ли пробелы только в имени файла
+        if ' ' in file_name:
+            logger.warning(f"  ⚠️ Пропускаем файл с пробелом в имени: {file_name}")
             return None
         
         url = f"{self.base_url}/resources/download"
@@ -189,7 +192,7 @@ class YandexDiskClient:
                 data = response.json()
                 if "href" in data:
                     download_link = data["href"]
-                    logger.info(f"  ✅ Получена новая временная ссылка для {file_path}")
+                    logger.info(f"  ✅ Получена новая временная ссылка для {file_name}")
                     return download_link
                 else:
                     logger.error(f"  ❌ В ответе нет href: {data}")
@@ -278,9 +281,9 @@ class YandexDiskClient:
             if not name.endswith(extension) or not name.startswith(base_name):
                 continue
             
-            # Пропускаем файлы с пробелами в названии
+            # Проверяем только имя файла на наличие пробелов
             if ' ' in name:
-                logger.info(f"    ⏭️ Пропущен файл с пробелом: {name}")
+                logger.info(f"    ⏭️ Пропущен файл с пробелом в имени: {name}")
                 continue
             
             version = 0
@@ -331,25 +334,22 @@ class YandexDiskClient:
 # Инициализация клиента Яндекс.Диска
 yd_client = YandexDiskClient(YANDEX_DISK_TOKEN)
 
-# ========== КЛАСС ДЛЯ ОБРАБОТКИ KMZ ФАЙЛОВ ==========
+# ========== КЛАСС ДЛЯ ОБРАБОТКИ KML ФАЙЛОВ ==========
 
-class KMZProcessor:
+class KMLProcessor:
     def __init__(self, nominatim_endpoint: str = "https://nominatim.openstreetmap.org/search"):
         """
-        Инициализация процессора KMZ файлов
+        Инициализация процессора KML файлов
         :param nominatim_endpoint: API endpoint для Nominatim
         """
         self.nominatim_endpoint = nominatim_endpoint
         self.user_agent = "WW2AerialPhotoBot/1.0 (your_email@example.com)"
-        self.cache_file = "data/np_cache.json"
-        self.photo_villages_file = "data/photo_villages.json"
-        self.kmz_data_file = "data/kmz_extracted_data.json"
-        self.kmz_processed_file = "data/kmz_processed.json"
-        self.kmz_history_file = "data/kmz_history.json"
-        self.log_file = "data/kmz_processor.log"
+        self.results_file = "data/kml_processed_results.json"
+        self.villages_file = "data/photo_villages.json"
+        self.log_file = "data/kml_processor.log"
         
-        # Настройка отдельного логгера для KMZ процессора
-        self.logger = logging.getLogger('KMZProcessor')
+        # Настройка отдельного логгера для KML процессора
+        self.logger = logging.getLogger('KMLProcessor')
         self.logger.setLevel(logging.INFO)
         
         # Создаем обработчик для файла
@@ -363,166 +363,58 @@ class KMZProcessor:
         # Добавляем обработчик к логгеру
         self.logger.addHandler(fh)
         
-        # Загружаем данные
-        self.load_cache()
-        self.load_photo_villages()
-        self.load_kmz_data()
-        self.load_kmz_processed()
-        self.load_kmz_history()
+        # Загружаем существующие данные
+        self.load_results()
         
-    def load_cache(self):
-        """Загружает кэш населенных пунктов"""
-        if os.path.exists(self.cache_file):
-            with open(self.cache_file, 'r', encoding='utf-8') as f:
-                self.np_cache = json.load(f)
+    def load_results(self):
+        """Загружает результаты предыдущих обработок"""
+        if os.path.exists(self.results_file):
+            with open(self.results_file, 'r', encoding='utf-8') as f:
+                self.results = json.load(f)
         else:
-            self.np_cache = {}
+            self.results = {"metadata": {"total_processed": 0}, "photos": []}
     
-    def save_cache(self):
-        """Сохраняет кэш населенных пунктов"""
-        os.makedirs(os.path.dirname(self.cache_file), exist_ok=True)
-        with open(self.cache_file, 'w', encoding='utf-8') as f:
-            json.dump(self.np_cache, f, ensure_ascii=False, indent=2)
+    def save_results(self):
+        """Сохраняет результаты"""
+        os.makedirs(os.path.dirname(self.results_file), exist_ok=True)
+        with open(self.results_file, 'w', encoding='utf-8') as f:
+            json.dump(self.results, f, ensure_ascii=False, indent=2)
     
-    def load_photo_villages(self):
-        """Загружает данные о связях снимков и населенных пунктов"""
-        if os.path.exists(self.photo_villages_file):
-            with open(self.photo_villages_file, 'r', encoding='utf-8') as f:
-                self.photo_villages = json.load(f)
-        else:
-            self.photo_villages = {}
-    
-    def save_photo_villages(self):
-        """Сохраняет данные о связях снимков и населенных пунктов"""
-        os.makedirs(os.path.dirname(self.photo_villages_file), exist_ok=True)
-        with open(self.photo_villages_file, 'w', encoding='utf-8') as f:
-            json.dump(self.photo_villages, f, ensure_ascii=False, indent=2)
-    
-    def load_kmz_data(self):
-        """Загружает выгруженные данные из KMZ"""
-        if os.path.exists(self.kmz_data_file):
-            with open(self.kmz_data_file, 'r', encoding='utf-8') as f:
-                self.kmz_data = json.load(f)
-        else:
-            self.kmz_data = {"metadata": {"total_photos": 0}, "photos": []}
-    
-    def save_kmz_data(self):
-        """Сохраняет выгруженные данные из KMZ"""
-        os.makedirs(os.path.dirname(self.kmz_data_file), exist_ok=True)
-        with open(self.kmz_data_file, 'w', encoding='utf-8') as f:
-            json.dump(self.kmz_data, f, ensure_ascii=False, indent=2, default=str)
-    
-    def load_kmz_processed(self):
-        """Загружает информацию о обработанных KMZ файлах"""
-        if os.path.exists(self.kmz_processed_file):
-            with open(self.kmz_processed_file, 'r', encoding='utf-8') as f:
-                self.kmz_processed = json.load(f)
-        else:
-            self.kmz_processed = {}
-    
-    def save_kmz_processed(self):
-        """Сохраняет информацию о обработанных KMZ файлах"""
-        os.makedirs(os.path.dirname(self.kmz_processed_file), exist_ok=True)
-        with open(self.kmz_processed_file, 'w', encoding='utf-8') as f:
-            json.dump(self.kmz_processed, f, ensure_ascii=False, indent=2)
-    
-    def load_kmz_history(self):
-        """Загружает историю изменений KMZ"""
-        if os.path.exists(self.kmz_history_file):
-            with open(self.kmz_history_file, 'r', encoding='utf-8') as f:
-                self.kmz_history = json.load(f)
-        else:
-            self.kmz_history = []
-    
-    def save_kmz_history(self):
-        """Сохраняет историю изменений KMZ"""
-        os.makedirs(os.path.dirname(self.kmz_history_file), exist_ok=True)
-        with open(self.kmz_history_file, 'w', encoding='utf-8') as f:
-            json.dump(self.kmz_history, f, ensure_ascii=False, indent=2)
-    
-    def should_process_kmz(self, kmz_path: str, file_size: int) -> bool:
+    def parse_kml_file(self, kml_path: str) -> List[Dict]:
         """
-        Проверяет, нужно ли обрабатывать KMZ файл
-        :param kmz_path: путь к файлу
-        :param file_size: размер файла
-        :return: True если нужно обработать, False если уже обработан
-        """
-        file_stat = os.stat(kmz_path)
-        file_mtime = file_stat.st_mtime
-        
-        if kmz_path in self.kmz_processed:
-            last_processed = self.kmz_processed[kmz_path]
-            if (last_processed['mtime'] == file_mtime and 
-                last_processed['size'] == file_size):
-                self.logger.info(f"✅ Файл {kmz_path} уже обработан, пропускаем")
-                return False
-        
-        return True
-    
-    def mark_kmz_processed(self, kmz_path: str):
-        """Отмечает KMZ файл как обработанный"""
-        file_stat = os.stat(kmz_path)
-        self.kmz_processed[kmz_path] = {
-            'mtime': file_stat.st_mtime,
-            'size': file_stat.st_size,
-            'processed_date': time.strftime('%Y-%m-%d %H:%M:%S')
-        }
-        self.save_kmz_processed()
-    
-    def extract_kml_from_kmz(self, kmz_path: str) -> str:
-        """
-        Извлекает KML файл из KMZ архива
-        :param kmz_path: путь к KMZ файлу
-        :return: содержимое KML файла
-        """
-        with zipfile.ZipFile(kmz_path, 'r') as kmz:
-            # Ищем KML файл (обычно doc.kml)
-            kml_files = [f for f in kmz.namelist() if f.endswith('.kml')]
-            if not kml_files:
-                raise ValueError("KML файл не найден в KMZ архиве")
-            
-            # Берем первый KML файл
-            with kmz.open(kml_files[0], 'r') as kml_file:
-                return kml_file.read().decode('utf-8')
-    
-    def parse_kml_polygons(self, kml_content: str) -> List[Dict]:
-        """
-        Парсит KML и извлекает полигоны снимков
-        :param kml_content: содержимое KML файла
+        Парсит KML файл и извлекает все Placemark с полигонами
+        :param kml_path: путь к KML файлу
         :return: список словарей с информацией о снимках
         """
-        soup = BeautifulSoup(kml_content, 'xml')
+        self.logger.info(f"📄 Чтение KML файла: {kml_path}")
+        
+        with open(kml_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        soup = BeautifulSoup(content, 'xml')
         placemarks = soup.find_all('Placemark')
         
         results = []
         for placemark in placemarks:
+            # Извлекаем название
             name_elem = placemark.find('name')
             if not name_elem:
                 continue
             
             name = name_elem.text.strip()
             
-            # Ищем placemark с frame- в названии или с номером снимка
-            photo_num = None
-            
-            # Проверяем разные форматы
-            if name.startswith('frame-'):
-                photo_num = name.replace('frame-', '')
-            elif re.match(r'N56E34-\d+-\d+', name):
-                photo_num = name
-            else:
-                # Пропускаем, если не похоже на снимок
+            # Проверяем, что это снимок (начинается с Frame-)
+            if not name.startswith('Frame-'):
                 continue
             
-            # Ищем описание
+            # Извлекаем номер снимка
+            photo_num = name.replace('Frame-', '')
+            
+            # Извлекаем описание
             desc_elem = placemark.find('description')
             description = desc_elem.text.strip() if desc_elem else ""
             
-            # Ищем стиль
-            style_elem = placemark.find('styleUrl')
-            style = style_elem.text.strip() if style_elem else ""
-            
-            # Ищем полигон
+            # Извлекаем полигон
             polygon_elem = placemark.find('Polygon')
             if not polygon_elem:
                 continue
@@ -532,34 +424,30 @@ class KMZProcessor:
             if not coords_elem:
                 continue
             
-            # Парсим координаты
-            coords_text = coords_elem.text.strip()
-            coordinates = self._parse_coordinates(coords_text)
+            coordinates = self._parse_coordinates(coords_elem.text.strip())
             
             if coordinates:
-                results.append({
+                photo_data = {
                     'photo_num': photo_num,
                     'name': name,
                     'description': description,
-                    'style': style,
                     'coordinates': coordinates,
                     'coordinate_count': len(coordinates)
-                })
-                self.logger.info(f"  📸 Найден снимок: {photo_num} (координат: {len(coordinates)})")
+                }
+                results.append(photo_data)
+                self.logger.info(f"  ✅ Найден снимок: {photo_num} ({len(coordinates)} координат)")
         
-        self.logger.info(f"📸 Всего найдено {len(results)} снимков в KML")
+        self.logger.info(f"📸 Всего найдено {len(results)} снимков")
         return results
     
     def _parse_coordinates(self, coords_text: str) -> List[Tuple[float, float]]:
         """
-        Парсит строку с координатами
-        :param coords_text: строка вида "lon,lat,alt lon,lat,alt ..."
+        Парсит координаты из KML (формат: lon,lat,alt lon,lat,alt ...)
+        :param coords_text: строка с координатами
         :return: список координат (lat, lon)
         """
         coords = []
-        # Разделяем по пробелам
         for point in coords_text.strip().split():
-            # Каждая точка: lon,lat,alt
             parts = point.split(',')
             if len(parts) >= 2:
                 lon = float(parts[0])
@@ -567,75 +455,66 @@ class KMZProcessor:
                 coords.append((lat, lon))
         return coords
     
-    def get_bounding_box(self, coordinates: List[Tuple[float, float]], margin_km: float = 1.0) -> Tuple[float, float, float, float]:
+    def calculate_bounding_box(self, coordinates: List[Tuple[float, float]], margin_m: float = 100.0) -> Tuple[float, float, float, float]:
         """
-        Вычисляет bounding box для полигона с запасом
+        Вычисляет bounding box с запасом в метрах
         :param coordinates: список координат
-        :param margin_km: запас в километрах
+        :param margin_m: запас в метрах
         :return: (min_lat, max_lat, min_lon, max_lon)
         """
         lats = [c[0] for c in coordinates]
         lons = [c[1] for c in coordinates]
+        margin_deg = margin_m / 111000  # 1 градус ≈ 111 км
         
-        min_lat = min(lats)
-        max_lat = max(lats)
-        min_lon = min(lons)
-        max_lon = max(lons)
-        
-        # Добавляем запас (примерно 0.01 градуса = 1.1 км)
-        margin_deg = margin_km / 111.0
-        
-        return (min_lat - margin_deg, max_lat + margin_deg, 
-                min_lon - margin_deg, max_lon + margin_deg)
+        return (min(lats) - margin_deg, max(lats) + margin_deg,
+                min(lons) - margin_deg, max(lons) + margin_deg)
     
-    def _make_nominatim_request(self, params: Dict) -> Optional[List[Dict]]:
+    def search_nominatim(self, bbox: Tuple[float, float, float, float]) -> List[Dict]:
         """
-        Выполняет запрос к Nominatim API с повторными попытками
-        :param params: параметры запроса
-        :return: ответ API или None
+        Ищет населенные пункты через Nominatim API
+        :param bbox: (min_lat, max_lat, min_lon, max_lon)
+        :return: список найденных населенных пунктов
         """
-        max_retries = 3
-        retry_delay = 2
+        params = {
+            'q': '',
+            'format': 'json',
+            'bounded': 1,
+            'viewbox': f"{bbox[2]},{bbox[1]},{bbox[3]},{bbox[0]}",
+            'addressdetails': 1,
+            'limit': 50,
+            'accept-language': 'ru'
+        }
         
-        for attempt in range(max_retries):
-            try:
-                response = requests.get(
-                    self.nominatim_endpoint, 
-                    params=params, 
-                    headers={'User-Agent': self.user_agent},
-                    timeout=10
-                )
-                
-                if response.status_code == 200:
-                    return response.json()
-                elif response.status_code == 429:
-                    self.logger.warning(f"⚠️ Превышен лимит запросов, попытка {attempt+1}/{max_retries}")
-                    if attempt < max_retries - 1:
-                        time.sleep(retry_delay * (attempt + 1))
-                    continue
-                else:
-                    self.logger.error(f"❌ Ошибка Nominatim API: {response.status_code}")
-                    if attempt < max_retries - 1:
-                        time.sleep(retry_delay)
-                    continue
-                    
-            except requests.exceptions.Timeout:
-                self.logger.warning(f"⚠️ Таймаут, попытка {attempt+1}/{max_retries}")
-                if attempt < max_retries - 1:
-                    time.sleep(retry_delay)
-                continue
-            except Exception as e:
-                self.logger.error(f"❌ Исключение при запросе: {e}")
-                if attempt < max_retries - 1:
-                    time.sleep(retry_delay)
-                continue
-        
-        self.logger.error(f"❌ Все попытки запроса исчерпаны")
-        return None
+        try:
+            response = requests.get(
+                self.nominatim_endpoint, 
+                params=params, 
+                headers={'User-Agent': self.user_agent},
+                timeout=10
+            )
+            if response.status_code == 200:
+                data = response.json()
+                # Фильтруем только населенные пункты
+                villages = []
+                for item in data:
+                    if self._is_valid_place_type(item):
+                        villages.append({
+                            'name': item.get('display_name', '').split(',')[0],
+                            'lat': float(item['lat']),
+                            'lon': float(item['lon']),
+                            'type': item.get('type', '')
+                        })
+                return villages
+            return []
+        except Exception as e:
+            self.logger.error(f"Ошибка Nominatim: {e}")
+            return []
     
     def _is_valid_place_type(self, item: Dict) -> bool:
         """
         Проверяет, относится ли объект к нужным типам населенных пунктов
+        :param item: объект из Nominatim
+        :return: True если подходит
         """
         place_type = item.get('type', '')
         class_type = item.get('class', '')
@@ -645,319 +524,108 @@ class KMZProcessor:
             return False
         
         # Разрешенные типы
-        allowed_types = [
-            'city', 'town',
-            'village',
-            'hamlet', 'isolated_dwelling',
-            'locality',
-            'farm'
-        ]
+        allowed_types = ['city', 'town', 'village', 'hamlet', 'isolated_dwelling', 'locality', 'farm']
         
         return class_type == 'place' or place_type in allowed_types
     
-    def calculate_center_and_radius(self, coordinates: List[Tuple[float, float]]) -> Dict:
+    def point_in_polygon(self, point: Tuple[float, float], polygon_coords: List[Tuple[float, float]], margin_m: float = 100.0) -> bool:
         """
-        Вычисляет центр полигона и приблизительный радиус
-        :param coordinates: список координат вершин
-        :return: словарь с центром и радиусом
-        """
-        polygon = Polygon(coordinates)
-        center = polygon.centroid
-        
-        # Вычисляем максимальное расстояние от центра до вершин
-        max_distance = 0
-        for coord in coordinates:
-            point = Point(coord[0], coord[1])
-            distance = center.distance(point)
-            # Конвертируем градусы в метры (приблизительно)
-            distance_m = distance * 111000  # 1° ≈ 111 км
-            max_distance = max(max_distance, distance_m)
-        
-        return {
-            'center_lat': center.y,
-            'center_lon': center.x,
-            'radius_m': round(max_distance, 2)
-        }
-    
-    def process_single_polygon(self, photo_data: Dict, margin_m: float = 100.0) -> Dict:
-        """
-        Обрабатывает один полигон и находит попадающие в него НП
-        :param photo_data: данные о снимке
+        Проверяет, попадает ли точка в полигон с учетом запаса
+        :param point: координаты точки (lat, lon)
+        :param polygon_coords: координаты полигона
         :param margin_m: запас в метрах
-        :return: обогащенные данные о снимке
+        :return: True если попадает
         """
-        try:
-            # Создаем полигон из координат
-            polygon = Polygon(photo_data['coordinates'])
+        polygon = Polygon(polygon_coords)
+        point_obj = Point(point[0], point[1])
+        margin_deg = margin_m / 111000
+        return polygon.buffer(margin_deg).contains(point_obj)
+    
+    def process_kml_file(self, kml_path: str, margin_m: float = 100.0) -> Dict:
+        """
+        Основной метод: обрабатывает KML файл и находит НП для каждого снимка
+        :param kml_path: путь к KML файлу
+        :param margin_m: запас в метрах
+        :return: словарь с результатами обработки
+        """
+        self.logger.info(f"🚀 Начало обработки KML файла: {kml_path}")
+        
+        # Парсим все снимки из KML
+        photos = self.parse_kml_file(kml_path)
+        
+        if not photos:
+            self.logger.warning("❌ В файле не найдено снимков")
+            return {"metadata": {"total_photos": 0}, "photos": []}
+        
+        # Обрабатываем каждый снимок
+        results = []
+        photo_villages = {}
+        
+        for i, photo in enumerate(photos):
+            self.logger.info(f"🔄 Обработка {i+1}/{len(photos)}: {photo['photo_num']}")
             
-            # Вычисляем центр и радиус
-            geo_data = self.calculate_center_and_radius(photo_data['coordinates'])
-            
-            # Конвертируем запас в градусы (приблизительно)
-            margin_deg = margin_m / 111000
-            
-            # Вычисляем bounding box с запасом (в км для обратной совместимости)
-            bbox = self.get_bounding_box(photo_data['coordinates'], margin_m / 1000)
+            # Вычисляем область поиска
+            bbox = self.calculate_bounding_box(photo['coordinates'], margin_m)
             
             # Ищем НП в этом районе
-            candidates = self._make_nominatim_request({
-                'q': '',
-                'format': 'json',
-                'bounded': 1,
-                'viewbox': f"{bbox[2]},{bbox[1]},{bbox[3]},{bbox[0]}",
-                'addressdetails': 1,
-                'limit': 50,
-                'accept-language': 'ru'
-            })
+            candidates = self.search_nominatim(bbox)
+            self.logger.info(f"    Найдено кандидатов: {len(candidates)}")
             
-            # Фильтруем НП, попадающие в полигон (с учетом запаса)
-            villages_in_polygon = []
-            if candidates:
-                self.logger.info(f"    Найдено кандидатов: {len(candidates)}")
-                for village in candidates:
-                    if not self._is_valid_place_type(village):
-                        continue
-                    
-                    point = Point(float(village['lat']), float(village['lon']))
-                    # Добавляем небольшой буфер к полигону
-                    buffered_polygon = polygon.buffer(margin_deg)
-                    if buffered_polygon.contains(point):
-                        village_name = village.get('display_name', '').split(',')[0]
-                        villages_in_polygon.append(village_name)
-                        self.logger.info(f"      ✅ Попадает: {village_name}")
+            # Проверяем каждый кандидат
+            villages_in_photo = []
+            for village in candidates:
+                if self.point_in_polygon(
+                    (village['lat'], village['lon']), 
+                    photo['coordinates'], 
+                    margin_m
+                ):
+                    villages_in_photo.append(village['name'])
+                    self.logger.info(f"      ✅ Попадает: {village['name']}")
             
-            photo_data['villages'] = list(set(villages_in_polygon))
-            photo_data['village_count'] = len(photo_data['villages'])
-            photo_data['center'] = {'lat': geo_data['center_lat'], 'lon': geo_data['center_lon']}
-            photo_data['radius_m'] = geo_data['radius_m']
-            photo_data['bbox'] = bbox
-            photo_data['all_candidates_count'] = len(candidates) if candidates else 0
+            # Сохраняем результаты
+            photo['villages'] = list(set(villages_in_photo))
+            photo['village_count'] = len(photo['villages'])
+            results.append(photo)
             
-            self.logger.info(f"✅ Снимок {photo_data['photo_num']}: найдено {len(photo_data['villages'])} НП")
-            return photo_data
+            # Обновляем словарь для быстрого доступа
+            photo_villages[photo['photo_num']] = photo['villages']
             
-        except Exception as e:
-            self.logger.error(f"❌ Ошибка обработки полигона {photo_data.get('photo_num')}: {e}")
-            photo_data['villages'] = []
-            photo_data['village_count'] = 0
-            photo_data['error'] = str(e)
-            return photo_data
-    
-    def merge_photo_villages(self, photo_num: str, new_villages: List[str]) -> List[str]:
-        """
-        Объединяет старые и новые списки населенных пунктов
-        :param photo_num: номер снимка
-        :param new_villages: новые населенные пункты из текущей обработки
-        :return: объединенный список
-        """
-        old_villages = self.photo_villages.get(photo_num, [])
+            self.logger.info(f"  ✅ Найдено {photo['village_count']} НП")
+            
+            # Задержка для соблюдения лимитов API
+            if i < len(photos) - 1:
+                time.sleep(1)
         
-        # Объединяем старые и новые, убираем дубликаты
-        merged = list(set(old_villages + new_villages))
-        
-        if merged != old_villages:
-            self.logger.info(f"🔄 Снимок {photo_num}: добавлено {len(merged) - len(old_villages)} новых НП")
-        
-        return merged
-    
-    def update_with_new_kmz(self, new_results: List[Dict], kmz_filename: str) -> Dict:
-        """
-        Обновляет базу данных новыми результатами
-        :param new_results: новые результаты обработки
-        :param kmz_filename: имя обработанного файла
-        :return: словарь со статистикой изменений
-        """
-        self.logger.info(f"📊 Обновление базы данных новыми результатами из {kmz_filename}")
-        
-        changes = {
-            'added': 0,
-            'updated': 0,
-            'unchanged': 0,
-            'new_villages_added': 0
+        # Сохраняем результаты
+        self.results = {
+            'metadata': {
+                'source_file': os.path.basename(kml_path),
+                'processing_date': time.strftime('%Y-%m-%d %H:%M:%S'),
+                'total_photos': len(results),
+                'photos_with_villages': sum(1 for p in results if p['village_count'] > 0),
+                'total_villages_found': sum(p['village_count'] for p in results)
+            },
+            'photos': results
         }
+        self.save_results()
         
-        # Создаем словарь для быстрого доступа по имени
-        new_photos_by_name = {photo['name']: photo for photo in new_results}
+        # Сохраняем упрощенный файл для быстрого доступа бота
+        with open(self.villages_file, 'w', encoding='utf-8') as f:
+            json.dump(photo_villages, f, ensure_ascii=False, indent=2)
         
-        # Обновляем существующие и добавляем новые
-        for name, new_photo in new_photos_by_name.items():
-            photo_num = new_photo['photo_num']
-            
-            if photo_num in self.photo_villages:
-                # Снимок существует - обновляем
-                old_villages = self.photo_villages[photo_num]
-                new_villages = new_photo.get('villages', [])
-                
-                # Объединяем старые и новые НП
-                merged_villages = self.merge_photo_villages(photo_num, new_villages)
-                self.photo_villages[photo_num] = merged_villages
-                
-                # Считаем изменения
-                if len(merged_villages) > len(old_villages):
-                    changes['new_villages_added'] += len(merged_villages) - len(old_villages)
-                    changes['updated'] += 1
-                else:
-                    changes['unchanged'] += 1
-                
-                # Обновляем данные в kmz_data
-                self._update_photo_in_kmz_data(photo_num, new_photo)
-                
-            else:
-                # Новый снимок - добавляем
-                self.photo_villages[photo_num] = new_photo.get('villages', [])
-                self._add_photo_to_kmz_data(new_photo)
-                changes['added'] += 1
-        
-        # Сохраняем обновленные данные
-        self.save_photo_villages()
-        self.save_kmz_data()
-        
-        # Записываем историю изменений
-        history_entry = {
-            'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
-            'filename': kmz_filename,
-            'changes': changes,
-            'total_photos': len(self.photo_villages)
-        }
-        self.kmz_history.append(history_entry)
-        self.save_kmz_history()
-        
-        self.logger.info(f"✅ Обновление завершено: +{changes['added']} новых, "
-                        f"обновлено {changes['updated']}, "
-                        f"добавлено {changes['new_villages_added']} новых связей")
-        
-        return changes
+        self.logger.info(f"✅ Обработка завершена. Результаты сохранены")
+        return self.results
     
-    def _update_photo_in_kmz_data(self, photo_num: str, new_photo: Dict):
-        """Обновляет данные снимка в kmz_data"""
-        for i, photo in enumerate(self.kmz_data.get('photos', [])):
-            if photo['photo_num'] == photo_num:
-                # Обновляем, сохраняя историю населенных пунктов
-                old_villages = photo.get('villages_found', [])
-                new_villages = new_photo.get('villages', [])
-                
-                # Объединяем списки
-                merged_villages = list(set(old_villages + new_villages))
-                
-                self.kmz_data['photos'][i] = {
-                    'photo_num': photo_num,
-                    'name': new_photo['name'],
-                    'description': new_photo['description'],
-                    'style': new_photo.get('style', ''),
-                    'center': new_photo.get('center', {'lat': 0, 'lon': 0}),
-                    'radius_m': new_photo.get('radius_m', 0),
-                    'bbox': new_photo.get('bbox', (0,0,0,0)),
-                    'villages_found': merged_villages,
-                    'village_count': len(merged_villages),
-                    'all_candidates_count': new_photo.get('all_candidates_count', 0),
-                    'processing_time': time.strftime('%Y-%m-%d %H:%M:%S'),
-                    'last_update': time.strftime('%Y-%m-%d %H:%M:%S')
-                }
-                return
-        
-        # Если не нашли - добавляем новый
-        self._add_photo_to_kmz_data(new_photo)
-    
-    def _add_photo_to_kmz_data(self, photo: Dict):
-        """Добавляет новый снимок в kmz_data"""
-        if 'photos' not in self.kmz_data:
-            self.kmz_data['photos'] = []
-        
-        self.kmz_data['photos'].append({
-            'photo_num': photo['photo_num'],
-            'name': photo['name'],
-            'description': photo['description'],
-            'style': photo.get('style', ''),
-            'center': photo.get('center', {'lat': 0, 'lon': 0}),
-            'radius_m': photo.get('radius_m', 0),
-            'bbox': photo.get('bbox', (0,0,0,0)),
-            'villages_found': photo.get('villages', []),
-            'village_count': len(photo.get('villages', [])),
-            'all_candidates_count': photo.get('all_candidates_count', 0),
-            'processing_time': time.strftime('%Y-%m-%d %H:%M:%S'),
-            'first_seen': time.strftime('%Y-%m-%d %H:%M:%S')
-        })
-        
-        # Обновляем метаданные
-        self.kmz_data['metadata']['total_photos'] = len(self.kmz_data['photos'])
-        self.kmz_data['metadata']['last_update'] = time.strftime('%Y-%m-%d %H:%M:%S')
-    
-    def process_kmz_file(self, kmz_path: str, margin_m: float = 100.0) -> List[Dict]:
-        """
-        Основной метод: обрабатывает KMZ файл и сохраняет результаты
-        :param kmz_path: путь к KMZ файлу
-        :param margin_m: запас в метрах
-        :return: список обработанных снимков
-        """
-        self.logger.info(f"🚀 Начало обработки KMZ файла: {kmz_path}")
-        kmz_filename = os.path.basename(kmz_path)
-        
-        # Проверяем, нужно ли обрабатывать файл
-        file_size = os.path.getsize(kmz_path)
-        if not self.should_process_kmz(kmz_path, file_size):
-            self.logger.info(f"⏭️ Файл {kmz_filename} уже обработан, пропускаем")
-            return []
-        
-        try:
-            # Извлекаем KML
-            kml_content = self.extract_kml_from_kmz(kmz_path)
-            
-            # Парсим полигоны
-            photos = self.parse_kml_polygons(kml_content)
-            self.logger.info(f"📸 Найдено {len(photos)} снимков для обработки")
-            
-            # Обрабатываем каждый снимок
-            results = []
-            for i, photo in enumerate(photos):
-                self.logger.info(f"🔄 Обработка {i+1}/{len(photos)}: {photo['photo_num']}")
-                
-                processed = self.process_single_polygon(photo, margin_m)
-                results.append(processed)
-                
-                # Задержка для соблюдения лимитов Nominatim
-                if i < len(photos) - 1:
-                    time.sleep(1)
-            
-            # Обновляем базу данных с новой логикой
-            changes = self.update_with_new_kmz(results, kmz_filename)
-            
-            # Отмечаем файл как обработанный
-            self.mark_kmz_processed(kmz_path)
-            
-            self.logger.info(f"✅ Обработка завершена. Изменения: {changes}")
-            return results
-            
-        except Exception as e:
-            self.logger.error(f"❌ Критическая ошибка при обработке KMZ: {e}")
-            raise
-    
-    def get_villages_for_photo(self, photo_num: str) -> List[str]:
-        """Возвращает список населенных пунктов для снимка"""
-        return self.photo_villages.get(photo_num, [])
-    
-    def get_kmz_data(self) -> Dict:
-        """Возвращает выгруженные данные из KMZ"""
-        return self.kmz_data
-    
-    def get_stats(self) -> Dict:
-        """Возвращает статистику по обработанным данным"""
-        total_photos = len(self.photo_villages)
-        total_with_villages = sum(1 for v in self.photo_villages.values() if v)
-        total_villages = sum(len(v) for v in self.photo_villages.values())
-        
-        return {
-            'total_photos': total_photos,
-            'photos_with_villages': total_with_villages,
-            'total_village_entries': total_villages,
-            'avg_villages_per_photo': round(total_villages / total_photos, 2) if total_photos > 0 else 0
-        }
-    
-    def get_history(self) -> List[Dict]:
-        """Возвращает историю изменений"""
-        return self.kmz_history
+    def get_photo_villages(self, photo_num: str) -> List[str]:
+        """Возвращает НП для конкретного снимка"""
+        if os.path.exists(self.villages_file):
+            with open(self.villages_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                return data.get(photo_num, [])
+        return []
 
-# Инициализация KMZ процессора
-kmz_processor = KMZProcessor()
+# Инициализация KML процессора
+kml_processor = KMLProcessor()
 
 # ========== КЛАСС ДЛЯ РАБОТЫ С ДАННЫМИ ==========
 
@@ -1084,8 +752,8 @@ class PhotosDatabase:
         found = []
         seen = set()
         
-        # Сначала ищем в данных из KMZ
-        for photo_num, villages in kmz_processor.photo_villages.items():
+        # Сначала ищем в данных из KML
+        for photo_num, villages in kml_processor.get_photo_villages().items():
             for village in villages:
                 if query_lower in village.lower():
                     # Находим запись в locations
@@ -1120,10 +788,10 @@ class PhotosDatabase:
         for r in records:
             villages.extend(r['villages'])
         
-        # Добавляем населенные пункты из KMZ для этих снимков
+        # Добавляем населенные пункты из KML для этих снимков
         for photo in self.get_all_photos(records):
-            kmz_villages = kmz_processor.get_villages_for_photo(photo)
-            villages.extend(kmz_villages)
+            kml_villages = kml_processor.get_photo_villages(photo)
+            villages.extend(kml_villages)
         
         return sorted(list(set(villages)))
     
@@ -1138,12 +806,12 @@ class PhotosDatabase:
         if details:
             download_links = []
             
-            # Добавляем информацию о населенных пунктах из KMZ
-            kmz_villages = kmz_processor.get_villages_for_photo(photo_num)
-            if kmz_villages:
-                village_text = f"\n📍 <b>Населенные пункты в кадре:</b>\n" + "\n".join([f"• {v}" for v in kmz_villages[:10]])
-                if len(kmz_villages) > 10:
-                    village_text += f"\n  и ещё {len(kmz_villages)-10}"
+            # Добавляем информацию о населенных пунктах из KML
+            kml_villages = kml_processor.get_photo_villages(photo_num)
+            if kml_villages:
+                village_text = f"\n📍 <b>Населенные пункты в кадре:</b>\n" + "\n".join([f"• {v}" for v in kml_villages[:10]])
+                if len(kml_villages) > 10:
+                    village_text += f"\n  и ещё {len(kml_villages)-10}"
                 details += village_text
             
             # Добавляем MBTILES версии
@@ -1178,10 +846,15 @@ class PhotosDatabase:
         return details
     
     def get_all_villages_list(self) -> List[str]:
-        # Объединяем деревни из multi_keys и из KMZ
+        # Объединяем деревни из multi_keys и из KML
         all_villages = set(self.all_villages)
-        for villages in kmz_processor.photo_villages.values():
-            all_villages.update(villages)
+        
+        # Исправлено: get_photo_villages возвращает словарь, а не список
+        villages_dict = kml_processor.get_photo_villages()
+        if isinstance(villages_dict, dict):
+            for villages in villages_dict.values():
+                all_villages.update(villages)
+        
         return sorted(list(all_villages))
     
     def set_last_photos(self, user_id: int, photos: List[str]):
@@ -1203,13 +876,11 @@ class PhotosDatabase:
         return self.user_last_query.get(user_id)
     
     def log_stats(self):
-        kmz_stats = kmz_processor.get_stats()
         logger.info(f"📊 Статистика:")
         logger.info(f"   • Записей в multi_keys: {len(self.locations)}")
         logger.info(f"   • Деревень в multi_keys: {len(self.all_villages)}")
         logger.info(f"   • Описаний снимков: {len(self.photo_details)}")
         logger.info(f"   • Файловых записей: {len(self.photo_files)}")
-        logger.info(f"   • KMZ: {kmz_stats['total_photos']} снимков, {kmz_stats['total_village_entries']} связей")
 
 db = PhotosDatabase()
 
@@ -1217,7 +888,7 @@ db = PhotosDatabase()
 
 class SearchStates(StatesGroup):
     waiting_for_village = State()
-    waiting_for_kmz = State()
+    waiting_for_kml = State()
     waiting_for_file_download = State()
 
 # ========== КЛАВИАТУРЫ ==========
@@ -1226,7 +897,7 @@ def get_main_keyboard() -> ReplyKeyboardMarkup:
     keyboard = [
         [KeyboardButton(text="🔍 ПОИСК"), KeyboardButton(text="📋 СПИСОК ДЕРЕВЕНЬ")],
         [KeyboardButton(text="📖 ИНСТРУКЦИЯ"), KeyboardButton(text="🗺️ КАРТА РЖЕВ")],
-        [KeyboardButton(text="🗺️ LOCUS MAPS"), KeyboardButton(text="🔄 ОБРАБОТАТЬ KMZ")]
+        [KeyboardButton(text="🗺️ LOCUS MAPS"), KeyboardButton(text="🔄 ОБРАБОТАТЬ KML")]
     ]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
@@ -1262,9 +933,8 @@ def photos_keyboard(photos: List[str]) -> InlineKeyboardMarkup:
 def get_download_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📥 Скачать photo_villages.json", callback_data="download_photo_villages")],
-        [InlineKeyboardButton(text="📥 Скачать kmz_extracted_data.json", callback_data="download_kmz_data")],
-        [InlineKeyboardButton(text="📥 Скачать kmz_history.json", callback_data="download_kmz_history")],
-        [InlineKeyboardButton(text="📥 Скачать kmz_processor.log", callback_data="download_kmz_log")],
+        [InlineKeyboardButton(text="📥 Скачать kml_processed_results.json", callback_data="download_kml_results")],
+        [InlineKeyboardButton(text="📥 Скачать kml_processor.log", callback_data="download_kml_log")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main")]
     ])
 
@@ -1281,7 +951,7 @@ async def cmd_start(message: types.Message) -> None:
         f"• 📖 <b>Инструкция</b> — подробное описание всех функций бота\n"
         f"• 🗺️ <b>Карта Ржев</b> — скачать карту Ржевского района с привязкой к Locus Maps\n"
         f"• 🗺️ <b>Locus Maps</b> — инструкция и скачивание приложения\n"
-        f"• 🔄 <b>Обработать KMZ</b> — загрузить и обработать KMZ файл с каталогом снимков\n\n"
+        f"• 🔄 <b>Обработать KML</b> — загрузить и обработать KML файл с каталогом снимков\n\n"
         f"👇 <b>Выберите действие в меню ниже:</b>"
     )
     
@@ -1345,8 +1015,8 @@ async def menu_instruction(message: types.Message):
         "• <b>Инструкция</b> — ссылка на руководство от ПО Сокол\n"
         "• <b>Скачать Locus Maps</b> — ссылка на скачивание приложения\n\n"
         
-        "🔄 <b>5. ОБРАБОТКА KMZ</b>\n"
-        "• Загрузите KMZ файл с каталогом снимков\n"
+        "🔄 <b>5. ОБРАБОТКА KML</b>\n"
+        "• Загрузите KML файл с каталогом снимков\n"
         "• Бот извлечет все полигоны и определит населенные пункты\n"
         "• Данные будут добавлены в базу для более точного поиска\n"
         "• После обработки вы сможете скачать все созданные файлы\n\n"
@@ -1386,20 +1056,20 @@ async def menu_locus(message: types.Message):
         reply_markup=get_locus_keyboard()
     )
 
-@dp.message(F.text == "🔄 ОБРАБОТАТЬ KMZ")
-async def menu_process_kmz(message: types.Message, state: FSMContext):
+@dp.message(F.text == "🔄 ОБРАБОТАТЬ KML")
+async def menu_process_kml(message: types.Message, state: FSMContext):
     await message.answer(
-        "📤 <b>Загрузите KMZ файл</b>\n\n"
-        "Отправьте мне KMZ файл с каталогом снимков для обработки.\n\n"
+        "📤 <b>Загрузите KML файл</b>\n\n"
+        "Отправьте мне KML файл с каталогом снимков для обработки.\n\n"
         "После загрузки я:\n"
         "1. Извлеку все полигоны снимков\n"
         "2. Найду населенные пункты в каждом кадре\n"
         "3. Обновлю базу данных для более точного поиска\n"
-        "4. Создам файлы с данными и историей изменений\n\n"
+        "4. Создам файлы с данными для скачивания\n\n"
         "⏱️ Обработка может занять несколько минут.",
         parse_mode="HTML"
     )
-    await state.set_state(SearchStates.waiting_for_kmz)
+    await state.set_state(SearchStates.waiting_for_kml)
 
 # ========== ОБРАБОТЧИКИ LOCUS ==========
 
@@ -1561,17 +1231,17 @@ async def process_search(message: types.Message, state: FSMContext):
             reply_markup=keyboard
         )
 
-# ========== ОБРАБОТЧИК ЗАГРУЗКИ KMZ ==========
+# ========== ОБРАБОТЧИК ЗАГРУЗКИ KML ==========
 
-@dp.message(SearchStates.waiting_for_kmz, F.document)
-async def process_kmz_upload(message: types.Message, state: FSMContext):
+@dp.message(SearchStates.waiting_for_kml, F.document)
+async def process_kml_upload(message: types.Message, state: FSMContext):
     document = message.document
     
-    # Проверяем расширение файла
-    if not document.file_name.endswith('.kmz'):
+    # Проверяем расширение файла (только .kml)
+    if not document.file_name.endswith('.kml'):
         await message.answer(
             "❌ <b>Неверный формат файла</b>\n\n"
-            "Пожалуйста, загрузите файл с расширением .kmz",
+            "Пожалуйста, загрузите файл с расширением .kml",
             parse_mode="HTML"
         )
         await state.clear()
@@ -1589,59 +1259,50 @@ async def process_kmz_upload(message: types.Message, state: FSMContext):
         file_path = file_info.file_path
         
         # Создаем временный файл
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.kmz') as tmp_file:
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.kml') as tmp_file:
             await bot.download_file(file_path, tmp_file)
             tmp_path = tmp_file.name
         
-        # Обрабатываем KMZ
-        results = kmz_processor.process_kmz_file(tmp_path, margin_m=100.0)
+        # Обрабатываем KML файл
+        results = kml_processor.process_kml_file(tmp_path, margin_m=100.0)
         
         # Удаляем временный файл
         os.unlink(tmp_path)
         
-        # Получаем статистику
-        stats = kmz_processor.get_stats()
+        # Показываем результаты
+        meta = results['metadata']
         
-        # Получаем историю
-        history = kmz_processor.get_history()
-        last_history = history[-1] if history else {}
+        response = f"✅ <b>Обработка завершена!</b>\n\n"
+        response += f"📊 <b>Результаты:</b>\n"
+        response += f"• Обработано снимков: {meta['total_photos']}\n"
+        response += f"• Снимков с НП: {meta['photos_with_villages']}\n"
+        response += f"• Всего связей: {meta['total_villages_found']}\n\n"
+        response += f"📁 <b>Созданы файлы:</b>\n"
+        response += f"• data/photo_villages.json - для быстрого поиска\n"
+        response += f"• data/kml_processed_results.json - полные данные\n"
+        response += f"• data/kml_processor.log - лог обработки\n\n"
+        response += f"👇 <b>Нажмите кнопку для скачивания файлов:</b>"
         
         await message.answer(
-            f"✅ <b>Обработка завершена!</b>\n\n"
-            f"📊 <b>Результаты:</b>\n"
-            f"• Обработано снимков: {stats['total_photos']}\n"
-            f"• Снимков с НП: {stats['photos_with_villages']}\n"
-            f"• Всего связей: {stats['total_village_entries']}\n"
-            f"• В среднем: {stats['avg_villages_per_photo']} НП на снимок\n\n"
-            f"📁 <b>Созданы файлы:</b>\n"
-            f"• data/photo_villages.json - связи снимков и НП\n"
-            f"• data/kmz_extracted_data.json - полные выгруженные данные\n"
-            f"• data/kmz_history.json - история изменений\n"
-            f"• data/kmz_processor.log - лог обработки\n\n"
-            f"🔄 <b>Изменения в этом обновлении:</b>\n"
-            f"• Новых снимков: +{last_history.get('changes', {}).get('added', 0)}\n"
-            f"• Обновлено снимков: {last_history.get('changes', {}).get('updated', 0)}\n"
-            f"• Добавлено новых связей: +{last_history.get('changes', {}).get('new_villages_added', 0)}\n\n"
-            f"👇 <b>Нажмите кнопку ниже, чтобы скачать файлы:</b>",
+            response,
             parse_mode="HTML",
             reply_markup=get_download_keyboard()
         )
         
     except Exception as e:
-        logger.error(f"Ошибка при обработке KMZ: {e}")
+        logger.error(f"Ошибка при обработке KML: {e}")
         await message.answer(
-            f"❌ <b>Ошибка при обработке файла</b>\n\n"
-            f"{str(e)}",
+            f"❌ <b>Ошибка при обработке файла</b>\n\n{str(e)}",
             parse_mode="HTML"
         )
     
     await state.clear()
 
-@dp.message(SearchStates.waiting_for_kmz)
-async def process_kmz_upload_invalid(message: types.Message, state: FSMContext):
+@dp.message(SearchStates.waiting_for_kml)
+async def process_kml_upload_invalid(message: types.Message, state: FSMContext):
     await message.answer(
         "❌ <b>Ожидался файл</b>\n\n"
-        "Пожалуйста, отправьте KMZ файл для обработки.",
+        "Пожалуйста, отправьте KML файл для обработки.",
         parse_mode="HTML"
     )
     await state.clear()
@@ -1652,9 +1313,8 @@ async def process_kmz_upload_invalid(message: types.Message, state: FSMContext):
 async def process_file_download(callback: CallbackQuery):
     file_map = {
         'download_photo_villages': ('data/photo_villages.json', 'photo_villages.json'),
-        'download_kmz_data': ('data/kmz_extracted_data.json', 'kmz_extracted_data.json'),
-        'download_kmz_history': ('data/kmz_history.json', 'kmz_history.json'),
-        'download_kmz_log': ('data/kmz_processor.log', 'kmz_processor.log')
+        'download_kml_results': ('data/kml_processed_results.json', 'kml_processed_results.json'),
+        'download_kml_log': ('data/kml_processor.log', 'kml_processor.log')
     }
     
     file_key = callback.data
