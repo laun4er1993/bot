@@ -635,7 +635,9 @@ class KMLProcessor:
         """
         Возвращает НП для конкретного снимка или весь словарь
         :param photo_num: номер снимка (если None, возвращает весь словарь)
-        :return: список НП или весь словарь
+        :return: 
+            - если photo_num указан: список НП для конкретного снимка
+            - если photo_num не указан: весь словарь {photo_num: [villages]}
         """
         self.load_villages_data()  # Перезагружаем на всякий случай
         if photo_num:
@@ -770,8 +772,8 @@ class PhotosDatabase:
         found = []
         seen = set()
         
-        # Получаем данные из KML
-        kml_villages_dict = kml_processor.get_photo_villages()  # получаем весь словарь
+        # Получаем данные из KML (теперь работает без аргумента)
+        kml_villages_dict = kml_processor.get_photo_villages()  # без аргумента - возвращает словарь
         
         # Сначала ищем в данных из KML
         if isinstance(kml_villages_dict, dict):
@@ -817,7 +819,7 @@ class PhotosDatabase:
         
         # Добавляем населенные пункты из KML для этих снимков
         for photo in self.get_all_photos(records):
-            kml_villages = kml_processor.get_photo_villages(photo)
+            kml_villages = kml_processor.get_photo_villages(photo)  # с аргументом - возвращает список
             if kml_villages:
                 villages.extend(kml_villages)
         
@@ -835,7 +837,7 @@ class PhotosDatabase:
             download_links = []
             
             # Добавляем информацию о населенных пунктах из KML
-            kml_villages = kml_processor.get_photo_villages(photo_num)
+            kml_villages = kml_processor.get_photo_villages(photo_num)  # с аргументом - возвращает список
             if kml_villages:
                 village_text = f"\n📍 <b>Населенные пункты в кадре:</b>\n" + "\n".join([f"• {v}" for v in kml_villages[:10]])
                 if len(kml_villages) > 10:
@@ -878,7 +880,7 @@ class PhotosDatabase:
         # Объединяем деревни из multi_keys и из KML
         all_villages = set(self.all_villages)
         
-        # Получаем данные из KML
+        # Получаем данные из KML (без аргумента - возвращает словарь)
         kml_villages_dict = kml_processor.get_photo_villages()
         if isinstance(kml_villages_dict, dict):
             for villages in kml_villages_dict.values():
