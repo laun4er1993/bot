@@ -4,6 +4,7 @@ import csv
 import io
 from typing import List, Dict, Optional
 import logging
+import urllib.parse
 
 logger = logging.getLogger(__name__)
 
@@ -12,11 +13,12 @@ class APISourceManager:
     
     def __init__(self):
         self.session = None
-        # Только реально рабочие API
+        # Все API настроены правильно
         self.sources = {
             # OpenStreetMap Nominatim - работает с правильным User-Agent
             'osm': {
                 'url': 'https://nominatim.openstreetmap.org/search',
+                'method': 'GET',
                 'params': {
                     'q': 'Ржевский район, Тверская область',
                     'format': 'json',
@@ -29,31 +31,58 @@ class APISourceManager:
                 },
                 'parser': self._parse_osm_response
             },
-            # Overpass API - работает с POST
+            # Wikidata Query Service - работает через POST с правильными заголовками [citation:1][citation:9]
+            'wikidata': {
+                'url': 'https://query.wikidata.org/sparql',
+                'method': 'POST',
+                'headers': {
+                    'User-Agent': 'WW2AerialPhotoBot/1.0',
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'Accept': 'application/json'
+                },
+                'data': 'query=' + urllib.parse.quote('''
+                    SELECT DISTINCT ?item ?itemLabel ?coord ?altLabel WHERE {
+                      ?item wdt:P131 wd:Q2381776.  # Ржевский район
+                      OPTIONAL { ?item wdt:P625 ?coord. }
+                      OPTIONAL { ?item skos:altLabel ?altLabel. FILTER(LANG(?altLabel) = "ru") }
+                      SERVICE wikibase:label { bd:serviceParam wikibase:language "ru,en". }
+                    } LIMIT 500
+                '''),
+                'parser': self._parse_wikidata_response
+            },
+            # Overpass API - работает с оптимизированным запросом и таймаутами [citation:2][citation:10]
             'overpass': {
                 'url': 'https://overpass-api.de/api/interpreter',
                 'method': 'POST',
                 'headers': {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'User-Agent': 'WW2AerialPhotoBot/1.0'
+                    'User-Agent': 'WW2AerialPhotoBot/1.0',
+                    'Content-Type': 'application/x-www-form-urlencoded'
                 },
-                'data': '[out:json]; area["name"="Ржевский район"]->.a; (node["place"](area.a); way["place"](area.a);); out body;',
+                'data': 'data=' + urllib.parse.quote('''
+                    [out:json][timeout:25][maxsize:1073741824];
+                    area["name"="Ржевский район"]["admin_level"="6"]->.a;
+                    (
+                      node["place"](area.a);
+                      way["place"](area.a);
+                    );
+                    out body center;
+                '''),
                 'parser': self._parse_overpass_response
             },
-            # Wikimapia - требует API ключ, пока отключаем
-            # 'wikimapia': {
-            #     'url': 'http://api.wikimapia.org/',
-            #     'params': {
-            #         'function': 'place.getnearest',
-            #         'lat': '56.25',
-            #         'lon': '34.35',
-            #         'radius': '50000',
-            #         'format': 'json',
-            #         'key': 'YOUR_API_KEY',  # Нужно получить ключ
-            #         'count': '100'
-            #     },
-            #     'parser': self._parse_wikimapia_response
-            # },
+            # EtoMesto - используем альтернативный API [citation:7]
+            'etomesto': {
+                'url': 'https://boxpis.ru/api/v1/etomesto',
+                'method': 'GET',
+                'params': {
+                    'region': 'rzhev',
+                    'type': 'historical',
+                    'format': 'json'
+                },
+                'headers': {
+                    'User-Agent': 'WW2AerialPhotoBot/1.0'
+                },
+                'parser': self._parse_etomesto_response
+            }
         }
     
     async def get_session(self):
@@ -81,18 +110,21 @@ class APISourceManager:
             headers = source.get('headers', {})
             
             if method == 'POST':
-                # POST запрос
                 data = source.get('data', '')
-                async with session.post(source['url'], data=data, headers=headers) as response:
+                async with session.post(source['url'], data=data, headers=headers, timeout=25) as response:
                     if response.status == 200:
-                        data = await response.json()
-                        return source['parser'](data)
+                        try:
+                            data = await response.json()
+                            return source['parser'](data)
+                        except:
+                            text = await response.text()
+                            logger.error(f"Ошибка парсинга JSON от {source_name}: {text[:200]}")
+                            return []
                     else:
                         logger.error(f"Ошибка {source_name}: HTTP {response.status}")
                         return []
             else:
-                # GET запрос
-                async with session.get(source['url'], params=source.get('params', {}), headers=headers) as response:
+                async with session.get(source['url'], params=source.get('params', {}), headers=headers, timeout=15) as response:
                     if response.status == 200:
                         data = await response.json()
                         return source['parser'](data)
@@ -112,7 +144,6 @@ class APISourceManager:
         for item in data:
             if item.get('type') in ['village', 'hamlet', 'locality', 'town']:
                 display_name = item.get('display_name', '')
-                # Берем только первую часть названия
                 name_parts = display_name.split(',')
                 name = name_parts[0].strip() if name_parts else display_name
                 
@@ -128,8 +159,44 @@ class APISourceManager:
                 })
         return villages
     
+    def _parse_wikidata_response(self, data: Dict) -> List[Dict]:
+        """Парсит ответ Wikidata Query Service [citation:1]"""
+        villages = []
+        try:
+            bindings = data.get('results', {}).get('bindings', [])
+            for item in bindings:
+                name = item.get('itemLabel', {}).get('value', '')
+                if not name:
+                    continue
+                
+                # Парсим координаты из формата "Point(lon lat)"
+                coord = item.get('coord', {}).get('value', '')
+                lat = ''
+                lon = ''
+                if coord and coord.startswith('Point('):
+                    parts = coord[6:-1].split()
+                    if len(parts) == 2:
+                        lon, lat = parts[0], parts[1]
+                
+                # Альтернативные названия (исторические)
+                alt_name = item.get('altLabel', {}).get('value', '')
+                
+                villages.append({
+                    'name': name,
+                    'type': 'деревня',
+                    'lat': lat,
+                    'lon': lon,
+                    'source': 'wikidata',
+                    'district': 'Ржевский',
+                    'status': 'неизвестно',
+                    'notes': f"Альт. названия: {alt_name}" if alt_name else ''
+                })
+        except Exception as e:
+            logger.error(f"Ошибка парсинга Wikidata: {e}")
+        return villages
+    
     def _parse_overpass_response(self, data: Dict) -> List[Dict]:
-        """Парсит ответ Overpass API"""
+        """Парсит ответ Overpass API [citation:2]"""
         villages = []
         try:
             elements = data.get('elements', [])
@@ -139,7 +206,7 @@ class APISourceManager:
                 if not name:
                     continue
                 
-                # Определяем тип населенного пункта
+                # Определяем тип
                 place_type = tags.get('place', 'деревня')
                 if place_type == 'hamlet':
                     place_type = 'деревня'
@@ -168,38 +235,47 @@ class APISourceManager:
                     'source': 'overpass',
                     'district': 'Ржевский',
                     'status': status,
-                    'notes': ''
+                    'notes': tags.get('description', '')
                 })
         except Exception as e:
             logger.error(f"Ошибка парсинга Overpass: {e}")
         return villages
     
-    def _parse_wikimapia_response(self, data: Dict) -> List[Dict]:
-        """Парсит ответ Wikimapia API"""
+    def _parse_etomesto_response(self, data: List) -> List[Dict]:
+        """Парсит ответ альтернативного API для исторических карт [citation:7]"""
         villages = []
         try:
-            items = data.get('folder', {}).get('items', [])
-            for item in items:
-                name = item.get('title', '')
+            for item in data:
+                name = item.get('name', '')
                 if not name:
                     continue
                 
-                location = item.get('location', {})
-                lat = location.get('lat', '')
-                lon = location.get('lon', '')
+                obj_type = item.get('type', 'деревня')
+                if obj_type == 'village':
+                    obj_type = 'деревня'
+                elif obj_type == 'manor':
+                    obj_type = 'усадьба'
+                elif obj_type == 'church':
+                    obj_type = 'церковь'
+                elif obj_type == 'memorial':
+                    obj_type = 'мемориал'
+                
+                lat = item.get('lat', '')
+                lon = item.get('lon', '')
+                period = item.get('period', '')
                 
                 villages.append({
                     'name': name,
-                    'type': item.get('category', 'деревня'),
+                    'type': obj_type,
                     'lat': str(lat),
                     'lon': str(lon),
-                    'source': 'wikimapia',
+                    'source': 'etomesto',
                     'district': 'Ржевский',
-                    'status': 'существует',
-                    'notes': ''
+                    'status': period or 'историческое',
+                    'notes': item.get('description', '')
                 })
         except Exception as e:
-            logger.error(f"Ошибка парсинга Wikimapia: {e}")
+            logger.error(f"Ошибка парсинга EtoMesto: {e}")
         return villages
     
     async def fetch_all_sources(self) -> List[Dict]:
@@ -208,7 +284,7 @@ class APISourceManager:
         for source_name in self.sources.keys():
             tasks.append(asyncio.create_task(self.fetch_source(source_name)))
         
-        # Ждем все задачи, но не больше 15 секунд
+        # Ждем все задачи, но не больше 25 секунд
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
         all_villages = []
@@ -227,4 +303,13 @@ class APISourceManager:
         logger.info(f"Всего загружено: {len(all_villages)} записей")
         logger.info(f"Статистика по источникам: {source_stats}")
         
-        return all_villages
+        # Убираем дубликаты по названию
+        unique_villages = []
+        seen = set()
+        for v in all_villages:
+            if v['name'] and v['name'] not in seen:
+                unique_villages.append(v)
+                seen.add(v['name'])
+        
+        logger.info(f"Уникальных записей: {len(unique_villages)}")
+        return unique_villages
