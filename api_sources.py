@@ -4,7 +4,6 @@ import csv
 import io
 from typing import List, Dict, Optional
 import logging
-import time
 
 logger = logging.getLogger(__name__)
 
@@ -13,80 +12,54 @@ class APISourceManager:
     
     def __init__(self):
         self.session = None
-        # Реальные рабочие API
+        # Только реально рабочие API
         self.sources = {
-            # OpenStreetMap Nominatim - стабильно работает
+            # OpenStreetMap Nominatim - работает с правильным User-Agent
             'osm': {
                 'url': 'https://nominatim.openstreetmap.org/search',
                 'params': {
-                    'q': 'Ржевский район',
+                    'q': 'Ржевский район, Тверская область',
                     'format': 'json',
                     'addressdetails': 1,
-                    'limit': 100
+                    'limit': 100,
+                    'accept-language': 'ru'
+                },
+                'headers': {
+                    'User-Agent': 'WW2AerialPhotoBot/1.0 (research project; mailto:your_email@example.com)'
                 },
                 'parser': self._parse_osm_response
             },
-            # Wikidata Query Service - официальный SPARQL эндпоинт
-            'wikidata': {
-                'url': 'https://query.wikidata.org/sparql',
-                'method': 'POST',
-                'headers': {'Accept': 'application/json'},
-                'data': '''
-                    SELECT ?item ?itemLabel ?coord WHERE {
-                      ?item wdt:P131 wd:Q2381776.  # Ржевский район
-                      ?item wdt:P625 ?coord.
-                      SERVICE wikibase:label { bd:serviceParam wikibase:language "ru". }
-                    } LIMIT 200
-                ''',
-                'parser': self._parse_wikidata_response
-            },
-            # Overpass API - для исторических данных OpenHistoricalMap
+            # Overpass API - работает с POST
             'overpass': {
                 'url': 'https://overpass-api.de/api/interpreter',
                 'method': 'POST',
-                'data': '''
-                    [out:json];
-                    area["name"="Ржевский район"]["admin_level"="6"]->.a;
-                    (
-                      node["place"](area.a);
-                      way["place"](area.a);
-                    );
-                    out body;
-                ''',
+                'headers': {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'User-Agent': 'WW2AerialPhotoBot/1.0'
+                },
+                'data': '[out:json]; area["name"="Ржевский район"]->.a; (node["place"](area.a); way["place"](area.a);); out body;',
                 'parser': self._parse_overpass_response
             },
-            # Wikimapia API - краудсорсинговые данные
-            'wikimapia': {
-                'url': 'https://api.wikimapia.org/',
-                'params': {
-                    'function': 'place.getnearest',
-                    'lat': '56.25',
-                    'lon': '34.35',
-                    'radius': '50000',  # 50 км радиус
-                    'format': 'json',
-                    'key': '',  # Требуется API ключ
-                    'count': '100'
-                },
-                'parser': self._parse_wikimapia_response
-            },
-            # EtoMesto API - исторические карты
-            'etomesto': {
-                'url': 'https://etomesto.ru/api/v1/places',
-                'params': {
-                    'region': 'rzhev',
-                    'type': 'all',
-                    'format': 'json'
-                },
-                'parser': self._parse_etomesto_response
-            }
+            # Wikimapia - требует API ключ, пока отключаем
+            # 'wikimapia': {
+            #     'url': 'http://api.wikimapia.org/',
+            #     'params': {
+            #         'function': 'place.getnearest',
+            #         'lat': '56.25',
+            #         'lon': '34.35',
+            #         'radius': '50000',
+            #         'format': 'json',
+            #         'key': 'YOUR_API_KEY',  # Нужно получить ключ
+            #         'count': '100'
+            #     },
+            #     'parser': self._parse_wikimapia_response
+            # },
         }
     
     async def get_session(self):
         """Создает или возвращает существующую сессию"""
         if self.session is None or self.session.closed:
-            self.session = aiohttp.ClientSession(
-                headers={'User-Agent': 'WW2AerialPhotoBot/1.0 (research project; mailto:your_email@example.com)'}
-            )
+            self.session = aiohttp.ClientSession()
         return self.session
     
     async def close_session(self):
@@ -119,7 +92,7 @@ class APISourceManager:
                         return []
             else:
                 # GET запрос
-                async with session.get(source['url'], params=source.get('params', {})) as response:
+                async with session.get(source['url'], params=source.get('params', {}), headers=headers) as response:
                     if response.status == 200:
                         data = await response.json()
                         return source['parser'](data)
@@ -151,42 +124,8 @@ class APISourceManager:
                     'source': 'osm',
                     'district': 'Ржевский',
                     'status': 'существует',
-                    'notes': f"OSM ID: {item.get('osm_id', '')}"
+                    'notes': ''
                 })
-        return villages
-    
-    def _parse_wikidata_response(self, data: Dict) -> List[Dict]:
-        """Парсит ответ Wikidata Query Service"""
-        villages = []
-        try:
-            bindings = data.get('results', {}).get('bindings', [])
-            for item in bindings:
-                name = item.get('itemLabel', {}).get('value', '')
-                if not name:
-                    continue
-                    
-                coord = item.get('coord', {}).get('value', '')
-                
-                # Парсим координаты из формата "Point(lon lat)"
-                lat = ''
-                lon = ''
-                if coord and coord.startswith('Point('):
-                    parts = coord[6:-1].split()
-                    if len(parts) == 2:
-                        lon, lat = parts[0], parts[1]
-                
-                villages.append({
-                    'name': name,
-                    'type': 'деревня',
-                    'lat': lat,
-                    'lon': lon,
-                    'source': 'wikidata',
-                    'district': 'Ржевский',
-                    'status': 'неизвестно',
-                    'notes': f"Wikidata ID: {item.get('item', {}).get('value', '').split('/')[-1]}"
-                })
-        except Exception as e:
-            logger.error(f"Ошибка парсинга Wikidata: {e}")
         return villages
     
     def _parse_overpass_response(self, data: Dict) -> List[Dict]:
@@ -229,7 +168,7 @@ class APISourceManager:
                     'source': 'overpass',
                     'district': 'Ржевский',
                     'status': status,
-                    'notes': tags.get('description', '')
+                    'notes': ''
                 })
         except Exception as e:
             logger.error(f"Ошибка парсинга Overpass: {e}")
@@ -257,51 +196,10 @@ class APISourceManager:
                     'source': 'wikimapia',
                     'district': 'Ржевский',
                     'status': 'существует',
-                    'notes': item.get('description', '')
+                    'notes': ''
                 })
         except Exception as e:
             logger.error(f"Ошибка парсинга Wikimapia: {e}")
-        return villages
-    
-    def _parse_etomesto_response(self, data: List) -> List[Dict]:
-        """Парсит ответ EtoMesto API"""
-        villages = []
-        try:
-            for item in data:
-                name = item.get('name', '')
-                if not name:
-                    continue
-                
-                # Определяем тип объекта
-                obj_type = item.get('type', 'деревня')
-                if obj_type == 'village':
-                    obj_type = 'деревня'
-                elif obj_type == 'manor':
-                    obj_type = 'усадьба'
-                elif obj_type == 'church':
-                    obj_type = 'церковь'
-                elif obj_type == 'memorial':
-                    obj_type = 'мемориал'
-                
-                # Координаты
-                lat = item.get('lat', '')
-                lon = item.get('lon', '')
-                
-                # Исторический период
-                period = item.get('period', '')
-                
-                villages.append({
-                    'name': name,
-                    'type': obj_type,
-                    'lat': str(lat),
-                    'lon': str(lon),
-                    'source': 'etomesto',
-                    'district': 'Ржевский',
-                    'status': period or 'историческое',
-                    'notes': item.get('description', '')
-                })
-        except Exception as e:
-            logger.error(f"Ошибка парсинга EtoMesto: {e}")
         return villages
     
     async def fetch_all_sources(self) -> List[Dict]:
@@ -310,7 +208,7 @@ class APISourceManager:
         for source_name in self.sources.keys():
             tasks.append(asyncio.create_task(self.fetch_source(source_name)))
         
-        # Ждем все задачи, но не больше 20 секунд
+        # Ждем все задачи, но не больше 15 секунд
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
         all_villages = []
@@ -329,13 +227,4 @@ class APISourceManager:
         logger.info(f"Всего загружено: {len(all_villages)} записей")
         logger.info(f"Статистика по источникам: {source_stats}")
         
-        # Убираем дубликаты по названию
-        unique_villages = []
-        seen = set()
-        for v in all_villages:
-            if v['name'] and v['name'] not in seen:
-                unique_villages.append(v)
-                seen.add(v['name'])
-        
-        logger.info(f"Уникальных записей: {len(unique_villages)}")
-        return unique_villages
+        return all_villages
