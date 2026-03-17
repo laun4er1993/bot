@@ -8,7 +8,7 @@ import zipfile
 import tempfile
 import json
 import time
-from typing import Optional, Dict, List, Set, Tuple, Any
+from typing import Optional, Dict, List, Set, Tuple, Any, Union
 import requests
 import io
 
@@ -365,6 +365,7 @@ class KMLProcessor:
         
         # Загружаем существующие данные
         self.load_results()
+        self.load_villages_data()
         
     def load_results(self):
         """Загружает результаты предыдущих обработок"""
@@ -379,6 +380,20 @@ class KMLProcessor:
         os.makedirs(os.path.dirname(self.results_file), exist_ok=True)
         with open(self.results_file, 'w', encoding='utf-8') as f:
             json.dump(self.results, f, ensure_ascii=False, indent=2)
+    
+    def load_villages_data(self):
+        """Загружает данные о связях снимков и НП"""
+        if os.path.exists(self.villages_file):
+            with open(self.villages_file, 'r', encoding='utf-8') as f:
+                self.villages_data = json.load(f)
+        else:
+            self.villages_data = {}
+    
+    def save_villages_data(self):
+        """Сохраняет данные о связях снимков и НП"""
+        os.makedirs(os.path.dirname(self.villages_file), exist_ok=True)
+        with open(self.villages_file, 'w', encoding='utf-8') as f:
+            json.dump(self.villages_data, f, ensure_ascii=False, indent=2)
     
     def parse_kml_file(self, kml_path: str) -> List[Dict]:
         """
@@ -559,7 +574,7 @@ class KMLProcessor:
         
         # Обрабатываем каждый снимок
         results = []
-        photo_villages = {}
+        new_villages_data = {}
         
         for i, photo in enumerate(photos):
             self.logger.info(f"🔄 Обработка {i+1}/{len(photos)}: {photo['photo_num']}")
@@ -588,7 +603,7 @@ class KMLProcessor:
             results.append(photo)
             
             # Обновляем словарь для быстрого доступа
-            photo_villages[photo['photo_num']] = photo['villages']
+            new_villages_data[photo['photo_num']] = photo['villages']
             
             self.logger.info(f"  ✅ Найдено {photo['village_count']} НП")
             
@@ -609,20 +624,23 @@ class KMLProcessor:
         }
         self.save_results()
         
-        # Сохраняем упрощенный файл для быстрого доступа бота
-        with open(self.villages_file, 'w', encoding='utf-8') as f:
-            json.dump(photo_villages, f, ensure_ascii=False, indent=2)
+        # Обновляем данные в памяти и сохраняем в файл
+        self.villages_data.update(new_villages_data)
+        self.save_villages_data()
         
         self.logger.info(f"✅ Обработка завершена. Результаты сохранены")
         return self.results
     
-    def get_photo_villages(self, photo_num: str) -> List[str]:
-        """Возвращает НП для конкретного снимка"""
-        if os.path.exists(self.villages_file):
-            with open(self.villages_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                return data.get(photo_num, [])
-        return []
+    def get_photo_villages(self, photo_num: Optional[str] = None) -> Union[List[str], Dict]:
+        """
+        Возвращает НП для конкретного снимка или весь словарь
+        :param photo_num: номер снимка (если None, возвращает весь словарь)
+        :return: список НП или весь словарь
+        """
+        self.load_villages_data()  # Перезагружаем на всякий случай
+        if photo_num:
+            return self.villages_data.get(photo_num, [])
+        return self.villages_data
 
 # Инициализация KML процессора
 kml_processor = KMLProcessor()
@@ -752,16 +770,22 @@ class PhotosDatabase:
         found = []
         seen = set()
         
+        # Получаем данные из KML
+        kml_villages_dict = kml_processor.get_photo_villages()  # получаем весь словарь
+        
         # Сначала ищем в данных из KML
-        for photo_num, villages in kml_processor.get_photo_villages().items():
-            for village in villages:
-                if query_lower in village.lower():
-                    # Находим запись в locations
-                    for record in self.locations:
-                        if photo_num in record['photos'] and record['id'] not in seen:
-                            found.append(record)
-                            seen.add(record['id'])
-                            break
+        if isinstance(kml_villages_dict, dict):
+            for photo_num, villages in kml_villages_dict.items():
+                if villages:  # если есть населенные пункты
+                    for village in villages:
+                        if query_lower in village.lower():
+                            # Находим запись в locations
+                            for record in self.locations:
+                                if photo_num in record['photos'] and record['id'] not in seen:
+                                    found.append(record)
+                                    seen.add(record['id'])
+                                    logger.info(f"✅ Найден снимок {photo_num} по KML для '{village}'")
+                                    break
         
         # Затем ищем в исходных данных из multi_keys
         for record in self.locations:
@@ -770,7 +794,10 @@ class PhotosDatabase:
                     if record['id'] not in seen:
                         found.append(record)
                         seen.add(record['id'])
+                        logger.info(f"✅ Найден снимок по multi_keys для '{village}'")
                     break
+        
+        logger.info(f"🔍 По запросу '{query}' найдено {len(found)} записей")
         return found
     
     def get_all_photos(self, records: List[Dict]) -> List[str]:
@@ -791,7 +818,8 @@ class PhotosDatabase:
         # Добавляем населенные пункты из KML для этих снимков
         for photo in self.get_all_photos(records):
             kml_villages = kml_processor.get_photo_villages(photo)
-            villages.extend(kml_villages)
+            if kml_villages:
+                villages.extend(kml_villages)
         
         return sorted(list(set(villages)))
     
@@ -813,6 +841,7 @@ class PhotosDatabase:
                 if len(kml_villages) > 10:
                     village_text += f"\n  и ещё {len(kml_villages)-10}"
                 details += village_text
+                logger.info(f"  ✅ Добавлены НП из KML: {len(kml_villages)}")
             
             # Добавляем MBTILES версии
             if files.get('mbtiles'):
@@ -849,10 +878,10 @@ class PhotosDatabase:
         # Объединяем деревни из multi_keys и из KML
         all_villages = set(self.all_villages)
         
-        # Исправлено: get_photo_villages возвращает словарь, а не список
-        villages_dict = kml_processor.get_photo_villages()
-        if isinstance(villages_dict, dict):
-            for villages in villages_dict.values():
+        # Получаем данные из KML
+        kml_villages_dict = kml_processor.get_photo_villages()
+        if isinstance(kml_villages_dict, dict):
+            for villages in kml_villages_dict.values():
                 all_villages.update(villages)
         
         return sorted(list(all_villages))
