@@ -11,6 +11,7 @@ import time
 import csv
 import io
 from typing import Optional, Dict, List, Set, Tuple, Any, Union
+from collections import defaultdict
 import requests
 
 from aiogram import Bot, Dispatcher, types, F
@@ -528,6 +529,99 @@ class VillageDatabase:
     def get_stats(self) -> Dict:
         """Возвращает статистику базы данных"""
         return self.stats.copy()
+    
+    def generate_full_catalog(self) -> Dict:
+        """
+        Генерирует полный каталог из всех источников
+        :return: статистика генерации и путь к файлу
+        """
+        stats = {
+            'total': 0,
+            'agkgn': 0,
+            'historical': 0,
+            'from_multi_keys': 0,
+            'with_coords': 0,
+            'file_path': None
+        }
+        
+        # Собираем все уникальные названия
+        all_entries = []
+        seen_names = set()
+        
+        # 1. Добавляем из текущего каталога (АГКГН и исторические)
+        for v in self.villages:
+            entry = v.copy()
+            entry['photo_count'] = 0
+            all_entries.append(entry)
+            seen_names.add(v['name'])
+            
+            if v.get('source') == 'agkgn':
+                stats['agkgn'] += 1
+            elif v.get('source') == 'historical':
+                stats['historical'] += 1
+            
+            if v.get('lat') and v.get('lon') and v['lat'].strip() and v['lon'].strip():
+                stats['with_coords'] += 1
+        
+        # 2. Добавляем из multi_keys.txt (деревни, которые есть в снимках)
+        for record in db.locations:
+            for village in record['villages']:
+                if village not in seen_names:
+                    all_entries.append({
+                        'name': village,
+                        'type': 'деревня',
+                        'lat': '',
+                        'lon': '',
+                        'source': 'multi_keys',
+                        'district': 'Ржевский',
+                        'historical_name': '',
+                        'photo_count': 0
+                    })
+                    seen_names.add(village)
+                    stats['from_multi_keys'] += 1
+        
+        # 3. Подсчитываем количество снимков для каждого НП
+        photo_counter = defaultdict(int)
+        for record in db.locations:
+            for village in record['villages']:
+                photo_counter[village] += 1
+        
+        # Обновляем photo_count для всех записей
+        for entry in all_entries:
+            entry['photo_count'] = photo_counter.get(entry['name'], 0)
+        
+        stats['total'] = len(all_entries)
+        
+        # Создаем папку export, если её нет
+        export_dir = "data/export"
+        os.makedirs(export_dir, exist_ok=True)
+        
+        # Генерируем файл
+        file_path = os.path.join(export_dir, "villages_full.csv")
+        
+        fieldnames = ['name', 'type', 'lat', 'lon', 'source', 'district', 'historical_name', 'photo_count']
+        
+        with open(file_path, 'w', encoding='utf-8', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            
+            # Сортируем по названию
+            sorted_entries = sorted(all_entries, key=lambda x: x['name'])
+            for entry in sorted_entries:
+                row = {
+                    'name': entry.get('name', ''),
+                    'type': entry.get('type', ''),
+                    'lat': entry.get('lat', ''),
+                    'lon': entry.get('lon', ''),
+                    'source': entry.get('source', ''),
+                    'district': entry.get('district', ''),
+                    'historical_name': entry.get('historical_name', ''),
+                    'photo_count': entry.get('photo_count', 0)
+                }
+                writer.writerow(row)
+        
+        stats['file_path'] = file_path
+        return stats
 
 # Инициализация базы данных НП
 village_db = VillageDatabase()
@@ -535,11 +629,7 @@ village_db = VillageDatabase()
 # ========== КЛАСС ДЛЯ ОБРАБОТКИ KML ФАЙЛОВ ==========
 
 class KMLProcessor:
-    def __init__(self, nominatim_endpoint: str = "https://nominatim.openstreetmap.org/search"):
-        """
-        Инициализация процессора KML файлов
-        :param nominatim_endpoint: API endpoint для Nominatim (больше не используется, оставлено для совместимости)
-        """
+    def __init__(self):
         self.log_file = "data/kml_processor.log"
         
         # Настройка отдельного логгера для KML процессора
@@ -943,9 +1033,6 @@ class PhotosDatabase:
         if details:
             download_links = []
             
-            # Добавляем информацию о населенных пунктах из KML (если есть)
-            # Здесь можно добавить логику для отображения НП из обработанного KML
-            
             # Добавляем MBTILES версии
             if files.get('mbtiles'):
                 for v in files['mbtiles']:
@@ -1045,6 +1132,7 @@ def get_settings_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="📥 Загрузить новый каталог", callback_data="update_villages")],
         [InlineKeyboardButton(text="📊 Статистика каталога", callback_data="village_stats")],
         [InlineKeyboardButton(text="📤 Скачать текущий каталог", callback_data="download_villages")],
+        [InlineKeyboardButton(text="📋 Сгенерировать полный каталог", callback_data="generate_catalog")],
         [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
     ])
 
@@ -1149,7 +1237,8 @@ async def menu_instruction(message: types.Message):
         
         "⚙️ <b>6. НАСТРОЙКИ</b>\n"
         "• Загрузка официального каталога населенных пунктов\n"
-        "• Просмотр статистики базы\n\n"
+        "• Просмотр статистики базы\n"
+        "• Генерация полного каталога\n\n"
         
         "🛩️ <b>ПРИЯТНОГО ИСПОЛЬЗОВАНИЯ!</b>"
     )
@@ -1214,71 +1303,6 @@ async def menu_settings(message: types.Message):
     text += f"👇 <b>Выберите действие:</b>"
     
     await message.answer(text, parse_mode="HTML", reply_markup=get_settings_keyboard())
-
-# ========== ОБРАБОТЧИКИ НАСТРОЕК ==========
-
-@dp.callback_query(lambda c: c.data == "village_stats")
-async def show_village_stats(callback: CallbackQuery):
-    """Показывает подробную статистику базы"""
-    stats = village_db.get_stats()
-    
-    text = (
-        f"📊 <b>Детальная статистика каталога НП</b>\n\n"
-        f"• Всего записей: {stats['total']}\n"
-        f"• С координатами: {stats['with_coords']}\n"
-        f"• Без координат: {stats['total'] - stats['with_coords']}\n"
-    )
-    
-    if stats['last_update']:
-        text += f"• Последнее обновление: {stats['last_update']}\n"
-    if stats['source_file']:
-        text += f"• Источник: {stats['source_file']}\n\n"
-    
-    # Показываем первые 10 записей для примера
-    if village_db.villages:
-        text += f"\n📋 <b>Примеры записей:</b>\n"
-        for v in village_db.villages[:10]:
-            coords = f"({v['lat']}, {v['lon']})" if v['lat'] and v['lon'] else "(без координат)"
-            text += f"• {v['name']} ({v['type']}) {coords}\n"
-        if len(village_db.villages) > 10:
-            text += f"  и ещё {len(village_db.villages) - 10}..."
-    
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=back_keyboard())
-    await callback.answer()
-
-@dp.callback_query(lambda c: c.data == "update_villages")
-async def update_villages_start(callback: CallbackQuery, state: FSMContext):
-    """Начинает процесс загрузки нового каталога"""
-    await callback.message.edit_text(
-        "📤 <b>Загрузка официального каталога населенных пунктов</b>\n\n"
-        "⚠️ <b>ВНИМАНИЕ:</b> Это действие ПОЛНОСТЬЮ ЗАМЕНИТ текущую базу данных!\n\n"
-        "Пожалуйста, отправьте CSV файл со следующей структурой:\n\n"
-        "<code>name,type,lat,lon,source,district</code>\n\n"
-        "Пример:\n"
-        "<code>Горбово,деревня,56.2345,34.1234,agkgn,Ржевский\n"
-        "Грибеево,урочище,,,1859,Ржевский</code>\n\n"
-        "Поля <b>lat, lon</b> могут быть пустыми для записей без координат.\n\n"
-        "Все существующие данные будут удалены и заменены новыми.",
-        parse_mode="HTML"
-    )
-    await state.set_state(SearchStates.waiting_for_csv_upload)
-    await callback.answer()
-
-@dp.callback_query(lambda c: c.data == "download_villages")
-async def download_villages(callback: CallbackQuery):
-    """Отправляет текущий каталог"""
-    if os.path.exists(village_db.csv_path):
-        document = FSInputFile(village_db.csv_path, filename="villages.csv")
-        await callback.message.answer_document(
-            document,
-            caption=f"📁 <b>Текущий каталог населенных пунктов</b>\n"
-                    f"Всего записей: {village_db.stats['total']}",
-            parse_mode="HTML"
-        )
-    else:
-        await callback.message.answer("❌ Файл каталога не найден")
-    
-    await callback.answer()
 
 # ========== ОБРАБОТЧИКИ LOCUS ==========
 
@@ -1350,6 +1374,194 @@ async def download_locus_app(callback: CallbackQuery):
         parse_mode="HTML",
         reply_markup=keyboard
     )
+    await callback.answer()
+
+# ========== ОБРАБОТЧИКИ НАСТРОЕК ==========
+
+@dp.callback_query(lambda c: c.data == "village_stats")
+async def show_village_stats(callback: CallbackQuery):
+    """Показывает подробную статистику базы"""
+    stats = village_db.get_stats()
+    
+    text = (
+        f"📊 <b>Детальная статистика каталога НП</b>\n\n"
+        f"• Всего записей: {stats['total']}\n"
+        f"• С координатами: {stats['with_coords']}\n"
+        f"• Без координат: {stats['total'] - stats['with_coords']}\n"
+    )
+    
+    if stats['last_update']:
+        text += f"• Последнее обновление: {stats['last_update']}\n"
+    if stats['source_file']:
+        text += f"• Источник: {stats['source_file']}\n\n"
+    
+    # Показываем первые 10 записей для примера
+    if village_db.villages:
+        text += f"\n📋 <b>Примеры записей:</b>\n"
+        for v in village_db.villages[:10]:
+            coords = f"({v['lat']}, {v['lon']})" if v['lat'] and v['lon'] else "(без координат)"
+            text += f"• {v['name']} ({v['type']}) {coords}\n"
+        if len(village_db.villages) > 10:
+            text += f"  и ещё {len(village_db.villages) - 10}..."
+    
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=back_keyboard())
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data == "update_villages")
+async def update_villages_start(callback: CallbackQuery, state: FSMContext):
+    """Начинает процесс загрузки нового каталога"""
+    await callback.message.edit_text(
+        "📤 <b>Загрузка официального каталога населенных пунктов</b>\n\n"
+        "⚠️ <b>ВНИМАНИЕ:</b> Это действие ПОЛНОСТЬЮ ЗАМЕНИТ текущую базу данных!\n\n"
+        "Пожалуйста, отправьте CSV файл со следующей структурой:\n\n"
+        "<code>name,type,lat,lon,source,district</code>\n\n"
+        "Пример:\n"
+        "<code>Горбово,деревня,56.2345,34.1234,agkgn,Ржевский\n"
+        "Грибеево,урочище,,,1859,Ржевский</code>\n\n"
+        "Поля <b>lat, lon</b> могут быть пустыми для записей без координат.\n\n"
+        "Все существующие данные будут удалены и заменены новыми.",
+        parse_mode="HTML"
+    )
+    await state.set_state(SearchStates.waiting_for_csv_upload)
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data == "download_villages")
+async def download_villages(callback: CallbackQuery):
+    """Отправляет текущий каталог"""
+    if os.path.exists(village_db.csv_path):
+        document = FSInputFile(village_db.csv_path, filename="villages.csv")
+        await callback.message.answer_document(
+            document,
+            caption=f"📁 <b>Текущий каталог населенных пунктов</b>\n"
+                    f"Всего записей: {village_db.stats['total']}",
+            parse_mode="HTML"
+        )
+    else:
+        await callback.message.answer("❌ Файл каталога не найден")
+    
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data == "generate_catalog")
+async def generate_catalog_start(callback: CallbackQuery):
+    """Показывает предварительную статистику перед генерацией"""
+    
+    # Собираем предварительную статистику
+    agkgn_count = sum(1 for v in village_db.villages if v.get('source') == 'agkgn')
+    historical_count = sum(1 for v in village_db.villages if v.get('source') == 'historical')
+    
+    # Уникальные деревни из multi_keys
+    multi_keys_villages = set()
+    for record in db.locations:
+        for village in record['villages']:
+            multi_keys_villages.add(village)
+    
+    # Сколько из них уже есть в каталоге
+    existing_in_catalog = sum(1 for v in multi_keys_villages 
+                             if any(cat['name'] == v for cat in village_db.villages))
+    
+    text = (
+        f"📋 <b>Генерация полного каталога</b>\n\n"
+        f"Будет создан файл со следующими данными:\n\n"
+        f"📊 <b>Источники:</b>\n"
+        f"• АГКГН: {agkgn_count} записей\n"
+        f"• Исторические (1859): {historical_count} записей\n"
+        f"• Из multi_keys: {len(multi_keys_villages)} уникальных деревень\n"
+        f"  (из них {existing_in_catalog} уже есть в каталоге)\n\n"
+        f"📁 Файл будет сохранен в: <code>data/export/villages_full.csv</code>\n\n"
+        f"Продолжить генерацию?"
+    )
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Да, сгенерировать", callback_data="generate_catalog_confirm")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="back_to_settings")]
+    ])
+    
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data == "generate_catalog_confirm")
+async def generate_catalog_confirm(callback: CallbackQuery):
+    """Генерирует полный каталог"""
+    
+    await callback.message.edit_text(
+        "⏳ <b>Генерация каталога...</b>\n\n"
+        "Это может занять несколько секунд.",
+        parse_mode="HTML"
+    )
+    
+    try:
+        # Генерируем каталог
+        stats = village_db.generate_full_catalog()
+        
+        text = (
+            f"✅ <b>Каталог успешно сгенерирован!</b>\n\n"
+            f"📊 <b>Статистика:</b>\n"
+            f"• Всего записей: {stats['total']}\n"
+            f"• Из АГКГН: {stats['agkgn']}\n"
+            f"• Исторических: {stats['historical']}\n"
+            f"• Из multi_keys: {stats['from_multi_keys']}\n"
+            f"• С координатами: {stats['with_coords']}\n\n"
+            f"📁 Файл сохранен:\n"
+            f"<code>{stats['file_path']}</code>\n\n"
+            f"Хотите скачать файл?"
+        )
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📥 Скачать файл", callback_data="download_generated_catalog")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_settings")]
+        ])
+        
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
+        
+    except Exception as e:
+        logger.error(f"Ошибка при генерации каталога: {e}")
+        await callback.message.edit_text(
+            f"❌ <b>Ошибка при генерации каталога</b>\n\n{str(e)}",
+            parse_mode="HTML",
+            reply_markup=back_keyboard()
+        )
+    
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data == "download_generated_catalog")
+async def download_generated_catalog(callback: CallbackQuery):
+    """Отправляет сгенерированный каталог"""
+    file_path = "data/export/villages_full.csv"
+    
+    if os.path.exists(file_path):
+        document = FSInputFile(file_path, filename="villages_full.csv")
+        await callback.message.answer_document(
+            document,
+            caption=f"📁 <b>Полный каталог населенных пунктов</b>",
+            parse_mode="HTML"
+        )
+    else:
+        await callback.message.answer("❌ Файл не найден. Сначала сгенерируйте каталог.")
+    
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data == "back_to_settings")
+async def back_to_settings(callback: CallbackQuery):
+    """Возврат в меню настроек"""
+    stats = village_db.get_stats()
+    
+    text = (
+        f"⚙️ <b>Настройки базы населенных пунктов</b>\n\n"
+        f"📊 <b>Текущая статистика:</b>\n"
+        f"• Всего записей: {stats['total']}\n"
+        f"• С координатами: {stats['with_coords']}\n"
+    )
+    
+    if stats['last_update']:
+        text += f"• Последнее обновление: {stats['last_update']}\n"
+    if stats['source_file']:
+        text += f"• Источник: {stats['source_file']}\n\n"
+    else:
+        text += f"• База данных пуста\n\n"
+    
+    text += f"👇 <b>Выберите действие:</b>"
+    
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=get_settings_keyboard())
     await callback.answer()
 
 # ========== ОБРАБОТЧИК ПОИСКА ==========
