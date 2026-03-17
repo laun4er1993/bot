@@ -63,8 +63,6 @@ class YandexDiskClient:
             "Authorization": f"OAuth {token}",
             "Content-Type": "application/json"
         }
-        self.file_cache: Dict[str, str] = {}      # Кэш для временных ссылок
-        self.public_cache: Dict[str, Dict] = {}   # Кэш для публичных ссылок с метаданными
         
     def _make_request(self, url: str, params: dict = None, method: str = "GET") -> Optional[Dict]:
         """Выполняет запрос к API с обработкой ошибок"""
@@ -170,156 +168,17 @@ class YandexDiskClient:
                 logger.error(f"  ❌ Исключение при проверке папки: {e}")
             return False
     
-    def check_and_update_link(self, file_path: str) -> Optional[str]:
+    def get_file_download_link(self, file_path: str) -> Optional[str]:
         """
-        Проверяет актуальность ссылки и обновляет её при необходимости
-        Возвращает актуальную ссылку
+        Получает НОВУЮ временную ссылку на скачивание файла через API.
+        Каждый раз создается свежая ссылка.
+        :param file_path: путь к файлу
+        :return: временная ссылка на скачивание
         """
-        try:
-            # Получаем текущую информацию о файле
-            file_info = self.get_file_info(file_path)
-            if not file_info:
-                logger.error(f"  ❌ Не удалось получить информацию о файле: {file_path}")
-                return None
-            
-            current_modified = file_info.get('modified', '')
-            current_created = file_info.get('created', '')
-            
-            # Проверяем, есть ли файл в кэше
-            if file_path in self.public_cache:
-                cached_data = self.public_cache[file_path]
-                cached_modified = cached_data.get('modified', '')
-                cached_created = cached_data.get('created', '')
-                
-                # Сравниваем даты модификации и создания
-                if (cached_modified == current_modified and 
-                    cached_created == current_created):
-                    # Файл не изменился, возвращаем сохраненную ссылку
-                    logger.info(f"  ✅ Ссылка актуальна для {file_path}")
-                    return cached_data.get('download_link')
-                else:
-                    # Файл изменился, нужно создать новую ссылку
-                    logger.info(f"  🔄 Файл изменился, создаем новую ссылку: {file_path}")
-            
-            # Создаем новую публикацию
-            return self._create_new_publication(file_path, file_info)
-            
-        except Exception as e:
-            logger.error(f"  ❌ Ошибка при проверке ссылки {file_path}: {e}")
+        # Проверяем, есть ли пробелы в имени файла
+        if ' ' in file_path or '%20' in file_path:
+            logger.warning(f"  ⚠️ Пропускаем файл с пробелами: {file_path}")
             return None
-    
-    def _create_new_publication(self, file_path: str, file_info: Dict) -> Optional[str]:
-        """Создает новую публикацию файла и сохраняет в кэш"""
-        try:
-            # Проверяем, есть ли уже публикация
-            if file_info.get('public_url'):
-                public_url = file_info.get('public_url')
-                logger.info(f"  ✅ Используем существующую публикацию: {file_path}")
-                
-                # Получаем ссылку на скачивание
-                download_link = self._get_public_download_link(public_url)
-                
-                if download_link:
-                    # Сохраняем в кэш с метаданными
-                    self.public_cache[file_path] = {
-                        'download_link': download_link,
-                        'modified': file_info.get('modified', ''),
-                        'created': file_info.get('created', ''),
-                        'public_url': public_url,
-                        'public_key': file_info.get('public_key', '')
-                    }
-                    logger.info(f"  ✅ Использована существующая публикация для {file_path}")
-                    return download_link
-                else:
-                    logger.warning(f"  ⚠️ Не удалось получить ссылку из существующей публикации, создаем новую")
-            
-            # Если нет публикации или не удалось получить ссылку - создаем новую
-            logger.info(f"  📤 Создаем новую публикацию для {file_path}")
-            url = f"{self.base_url}/resources/publish"
-            params = {"path": f"/{file_path}"}
-            data = self._make_request(url, params, method="PUT")
-            
-            if data:
-                # Получаем обновленную информацию о файле
-                updated_info = self.get_file_info(file_path)
-                if updated_info and updated_info.get('public_url'):
-                    public_url = updated_info.get('public_url')
-                    download_link = self._get_public_download_link(public_url)
-                    
-                    if download_link:
-                        # Сохраняем в кэш с метаданными
-                        self.public_cache[file_path] = {
-                            'download_link': download_link,
-                            'modified': updated_info.get('modified', ''),
-                            'created': updated_info.get('created', ''),
-                            'public_url': public_url,
-                            'public_key': updated_info.get('public_key', '')
-                        }
-                        logger.info(f"  ✅ Создана новая публикация для {file_path}")
-                        return download_link
-            
-            logger.error(f"  ❌ Не удалось создать публикацию для {file_path}")
-            return None
-            
-        except Exception as e:
-            logger.error(f"  ❌ Ошибка при создании публикации {file_path}: {e}")
-            return None
-    
-    def publish_file(self, file_path: str) -> Optional[str]:
-        """
-        Публикует файл и возвращает публичную ссылку на скачивание
-        С проверкой актуальности ссылки
-        """
-        try:
-            # Проверяем актуальность ссылки и обновляем при необходимости
-            return self.check_and_update_link(file_path)
-            
-        except Exception as e:
-            logger.error(f"  ❌ Ошибка при публикации файла {file_path}: {e}")
-            return None
-    
-    def _get_public_download_link(self, public_url: str) -> Optional[str]:
-        """
-        Конвертирует публичную ссылку на папку/файл в прямую ссылку на скачивание
-        Формат: https://disk.yandex.ru/d/XXX -> https://downloader.disk.yandex.ru/disk/...
-        """
-        try:
-            # Извлекаем public_key из URL
-            import re
-            match = re.search(r'(?:disk\.yandex\.ru/d/|yadi\.sk/d/)([a-zA-Z0-9_-]+)', public_url)
-            if not match:
-                logger.error(f"  ❌ Не удалось извлечь public_key из URL: {public_url}")
-                return None
-            
-            public_key = match.group(1)
-            
-            # Получаем ссылку на скачивание через API
-            url = f"{self.base_url}/public/resources/download"
-            params = {"public_key": public_key}
-            data = self._make_request(url, params)
-            
-            if data and "href" in data:
-                return data["href"]
-            
-            logger.error(f"  ❌ Не удалось получить ссылку на скачивание для public_key: {public_key}")
-            return None
-            
-        except Exception as e:
-            logger.error(f"  ❌ Ошибка при получении ссылки на скачивание: {e}")
-            return None
-    
-    def get_file_download_link(self, file_path: str, use_public: bool = True) -> Optional[str]:
-        """
-        Получает ссылку на скачивание файла.
-        Если use_public=True, публикует файл и возвращает постоянную ссылку.
-        Иначе возвращает временную ссылку через /download.
-        """
-        if use_public:
-            return self.publish_file(file_path)
-        
-        # Старый метод с временными ссылками
-        if file_path in self.file_cache:
-            return self.file_cache[file_path]
         
         url = f"{self.base_url}/resources/download"
         params = {"path": f"/{file_path}"}
@@ -329,11 +188,16 @@ class YandexDiskClient:
             if response.status_code == 200:
                 data = response.json()
                 if "href" in data:
-                    self.file_cache[file_path] = data["href"]
-                    return data["href"]
+                    download_link = data["href"]
+                    logger.info(f"  ✅ Получена новая временная ссылка для {file_path}")
+                    return download_link
+                else:
+                    logger.error(f"  ❌ В ответе нет href: {data}")
+            else:
+                logger.error(f"  ❌ Ошибка получения ссылки: {response.status_code} - {response.text}")
             return None
         except Exception as e:
-            logger.error(f"  ❌ Ошибка получения ссылки: {e}")
+            logger.error(f"  ❌ Ошибка при запросе ссылки: {e}")
             return None
     
     def find_map_files(self, square: str, overlay: str, frame: str) -> Dict[str, List[Dict]]:
@@ -414,6 +278,11 @@ class YandexDiskClient:
             if not name.endswith(extension) or not name.startswith(base_name):
                 continue
             
+            # Пропускаем файлы с пробелами в названии
+            if ' ' in name:
+                logger.info(f"    ⏭️ Пропущен файл с пробелом: {name}")
+                continue
+            
             version = 0
             version_match = re.search(rf'{re.escape(base_name)}-(\d+){re.escape(extension)}$', name)
             if version_match:
@@ -423,8 +292,8 @@ class YandexDiskClient:
             
             file_path = f"{folder_path}/{name}"
             
-            # Получаем ПОСТОЯННУЮ публичную ссылку (use_public=True)
-            download_link = self.get_file_download_link(file_path, use_public=True)
+            # Получаем НОВУЮ временную ссылку
+            download_link = self.get_file_download_link(file_path)
             
             if download_link:
                 # Форматируем дату из поля created
@@ -454,6 +323,8 @@ class YandexDiskClient:
                     logger.info(f"    ✅ Добавлен файл: {name} (версия {version}, {formatted_date}, {size_mb} МБ)")
                 else:
                     logger.info(f"    ⏭️ Пропущен файл (меньше 10 МБ): {name} ({size_mb} МБ)")
+            else:
+                logger.info(f"    ⏭️ Пропущен файл (не удалось получить ссылку): {name}")
         
         return versions
 
