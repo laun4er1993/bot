@@ -1,135 +1,176 @@
-import aiohttp
-import asyncio
-from typing import List, Dict
-import logging
-import urllib.parse
+# Добавьте этот метод в класс APISourceManager в файле api_sources.py
 
-logger = logging.getLogger(__name__)
-
-class APISourceManager:
-    """Менеджер для работы с Photon API (исправленная версия)"""
+async def fetch_academic_ru_villages(self) -> List[Dict]:
+    """
+    Парсит страницу со списком бывших населённых пунктов Бельского района
+    с сайта dic.academic.ru
+    """
+    logger.info("  🔍 Парсинг сайта dic.academic.ru (Бельский район)...")
+    url = "https://dic.academic.ru/dic.nsf/ruwiki/1635988"
+    results = []
     
-    def __init__(self):
-        self.session = None
-        self.sources = {
-            'photon': {
-                'url': 'https://photon.komoot.io/api/',
-                'method': 'GET',
-                'params': {
-                    'q': 'Ржевский район',
-                    'limit': 100,
-                    # 'lang': 'ru',  # Удаляем - русский не поддерживается
-                    'osm_tag': 'place'
-                },
-                'headers': {
-                    'User-Agent': 'WW2AerialPhotoBot/1.0 (research project)',
-                    'Accept': 'application/json'
-                },
-                'parser': self._parse_photon_response
-            }
+    try:
+        session = await self._get_session()
+        
+        # Добавляем заголовки, чтобы имитировать браузер
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
-    
-    async def get_session(self):
-        if self.session is None or self.session.closed:
-            self.session = aiohttp.ClientSession()
-        return self.session
-    
-    async def close_session(self):
-        if self.session and not self.session.closed:
-            await self.session.close()
-    
-    async def fetch_source(self, source_name: str) -> List[Dict]:
-        if source_name not in self.sources:
-            logger.error(f"Неизвестный источник: {source_name}")
-            return []
         
-        source = self.sources[source_name]
-        session = await self.get_session()
+        await self._rate_limit()
+        async with session.get(url, headers=headers) as response:
+            if response.status == 200:
+                html = await response.text()
+                
+                # Здесь нужен парсинг HTML
+                # Поскольку структура страницы сложная, используем BeautifulSoup
+                # Но в асинхронном коде лучше вынести в отдельный поток
+                loop = asyncio.get_event_loop()
+                villages = await loop.run_in_executor(
+                    None, 
+                    self._parse_academic_ru_html, 
+                    html
+                )
+                
+                # Добавляем источник для каждой записи
+                for village in villages:
+                    village['source'] = 'academic_ru'
+                    if not village.get('district'):
+                        village['district'] = 'Бельский'  # Указываем район
+                    results.append(village)
+                
+                logger.info(f"    ✅ Найдено бывших НП: {len(results)}")
+            else:
+                logger.error(f"    ❌ Ошибка загрузки страницы: {response.status}")
+    
+    except Exception as e:
+        logger.error(f"    ❌ Ошибка при парсинге dic.academic.ru: {e}")
+    
+    return results
+
+def _parse_academic_ru_html(self, html: str) -> List[Dict]:
+    """
+    Синхронный метод для парсинга HTML с BeautifulSoup
+    Вызывается в отдельном потоке, чтобы не блокировать асинхронный код
+    """
+    from bs4 import BeautifulSoup
+    import re
+    
+    soup = BeautifulSoup(html, 'html.parser')
+    villages = []
+    
+    # Ищем все таблицы на странице
+    tables = soup.find_all('table')
+    
+    for table in tables:
+        rows = table.find_all('tr')
+        if not rows:
+            continue
         
-        try:
-            params = source.get('params', {})
-            url = source['url']
-            logger.info(f"Запрос к Photon: {url} с параметрами {params}")
+        # Пропускаем заголовок
+        for row in rows[1:]:
+            cells = row.find_all('td')
+            if len(cells) < 5:  # Ожидаем минимум 5 колонок
+                continue
             
-            async with session.get(
-                url, 
-                params=params,
-                headers=source.get('headers', {}),
-                timeout=10
-            ) as response:
-                logger.info(f"Photon ответ: HTTP {response.status}")
+            try:
+                # Извлекаем название (первая колонка)
+                name_cell = cells[0]
+                name = name_cell.get_text().strip()
                 
-                if response.status == 200:
-                    data = await response.json()
-                    return source['parser'](data)
-                else:
-                    # Читаем текст ошибки
-                    error_text = await response.text()
-                    logger.error(f"Ошибка Photon: {error_text}")
-                    return []
-        except asyncio.TimeoutError:
-            logger.error("Таймаут Photon API")
-            return []
-        except Exception as e:
-            logger.error(f"Ошибка Photon: {e}")
-            return []
+                # Извлекаем тип (вторая колонка)
+                type_cell = cells[1]
+                raw_type = type_cell.get_text().strip()
+                
+                # Определяем тип по сокращениям
+                village_type = self._determine_type_from_abbr(raw_type)
+                
+                # Извлекаем координаты (последняя колонка)
+                coords_cell = cells[-1]
+                coords_text = coords_cell.get_text().strip()
+                
+                # Парсим координаты
+                lat, lon = self._parse_coordinates(coords_text)
+                
+                if lat and lon and name:
+                    # Определяем статус (бывший)
+                    status = "abandoned"  # Бывший/упраздненный
+                    
+                    # Извлекаем год упразднения, если есть
+                    year = None
+                    if len(cells) >= 5:
+                        year_cell = cells[3]  # Предполагаем, что год в 4-й колонке
+                        year_text = year_cell.get_text().strip()
+                        if year_text and year_text.isdigit():
+                            year = year_text
+                    
+                    notes = f"Бывший НП Бельского района"
+                    if year:
+                        notes += f", упразднён в {year} г."
+                    
+                    villages.append({
+                        "name": name,
+                        "type": village_type,
+                        "lat": str(lat),
+                        "lon": str(lon),
+                        "district": "Бельский",
+                        "status": status,
+                        "notes": notes
+                    })
+                    
+            except Exception as e:
+                logger.error(f"    Ошибка парсинга строки: {e}")
+                continue
     
-    def _parse_photon_response(self, data: Dict) -> List[Dict]:
-        """Парсит ответ Photon API"""
-        villages = []
-        try:
-            features = data.get('features', [])
-            logger.info(f"Photon вернул {len(features)} объектов")
-            
-            for item in features:
-                props = item.get('properties', {})
-                coords = item.get('geometry', {}).get('coordinates', [])
-                
-                name = props.get('name', '')
-                if not name:
-                    continue
-                
-                # Проверяем, что это действительно населенный пункт
-                osm_key = props.get('osm_key', '')
-                if osm_key != 'place':
-                    continue
-                
-                # Определяем тип
-                osm_value = props.get('osm_value', '')
-                
-                obj_type = 'деревня'
-                if osm_value == 'city':
-                    obj_type = 'город'
-                elif osm_value == 'town':
-                    obj_type = 'поселок'
-                elif osm_value == 'village':
-                    obj_type = 'деревня'
-                elif osm_value == 'hamlet':
-                    obj_type = 'деревня'
-                elif osm_value == 'locality':
-                    obj_type = 'урочище'
-                
-                # Названия на разных языках
-                name_ru = props.get('name:ru', name)  # Русское название если есть
-                
-                villages.append({
-                    'name': name_ru,
-                    'type': obj_type,
-                    'lat': str(coords[1]) if len(coords) > 1 else '',
-                    'lon': str(coords[0]) if coords else '',
-                    'source': 'photon',
-                    'district': 'Ржевский',
-                    'status': 'существует',
-                    'notes': f"OSM: {osm_value}"
-                })
-            
-            logger.info(f"✅ Photon: найдено {len(villages)} населенных пунктов")
-        except Exception as e:
-            logger.error(f"Ошибка парсинга Photon: {e}")
-        return villages
+    return villages
+
+def _parse_coordinates(self, coord_text: str) -> Tuple[Optional[float], Optional[float]]:
+    """
+    Парсит координаты из разных форматов:
+    - 55°49′56.64″ с. ш. 33°20′59.64″ в. д.
+    - 55.8324 33.3499
+    """
+    import re
     
-    async def fetch_all_sources(self) -> List[Dict]:
-        """Загружает данные только из Photon"""
-        result = await self.fetch_source('photon')
-        logger.info(f"Всего загружено: {len(result)} записей из Photon")
-        return result
+    coord_text = coord_text.strip()
+    
+    # Формат: 55°49′56.64″ с. ш. 33°20′59.64″ в. д.
+    pattern_dms = r'(\d+)°(\d+)′([\d.]+)″.*?(\d+)°(\d+)′([\d.]+)″'
+    match = re.search(pattern_dms, coord_text)
+    
+    if match:
+        # Конвертируем DMS в десятичные градусы
+        lat_deg, lat_min, lat_sec = map(float, match.group(1, 2, 3))
+        lon_deg, lon_min, lon_sec = map(float, match.group(4, 5, 6))
+        
+        lat = lat_deg + lat_min/60 + lat_sec/3600
+        lon = lon_deg + lon_min/60 + lon_sec/3600
+        return lat, lon
+    
+    # Формат: 55.8324 33.3499
+    pattern_dec = r'([\d.]+)\s+([\d.]+)'
+    match = re.search(pattern_dec, coord_text)
+    
+    if match:
+        lat = float(match.group(1))
+        lon = float(match.group(2))
+        return lat, lon
+    
+    return None, None
+
+def _determine_type_from_abbr(self, abbr: str) -> str:
+    """Определяет тип НП по сокращению"""
+    mapping = {
+        'дер.': 'деревня',
+        'д.': 'деревня',
+        'пос.': 'посёлок',
+        'с.': 'село',
+        'х.': 'хутор',
+        'п.': 'посёлок'
+    }
+    
+    for abbr_key, full_type in mapping.items():
+        if abbr.startswith(abbr_key):
+            return full_type
+    
+    return 'деревня'  # По умолчанию
