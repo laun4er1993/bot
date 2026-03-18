@@ -473,7 +473,7 @@ class VillageDatabase:
             reader = csv.DictReader(io.StringIO(csv_content))
             
             # Проверяем наличие обязательных полей
-            required_fields = ['name', 'type', 'lat', 'lon', 'source', 'district']
+            required_fields = ['name', 'type', 'lat', 'lon', 'source', 'district', 'status', 'notes']
             if not all(field in reader.fieldnames for field in required_fields):
                 missing = [f for f in required_fields if f not in reader.fieldnames]
                 raise ValueError(f"Отсутствуют обязательные поля: {', '.join(missing)}")
@@ -1329,8 +1329,7 @@ async def menu_instruction(message: types.Message):
         "• Загрузка официального каталога населенных пунктов\n"
         "• Просмотр статистики базы\n"
         "• Генерация полного каталога\n"
-        "• 🌐 Загрузка из интернета (Google Places, dic.academic.ru)\n"
-        "   - Ржевский, Бельский, Оленинский, Зубцовский районы\n"
+        "• 🌐 Загрузка из интернета (dic.academic.ru для Бельского района)\n"
         "   - Возможность дополнить или заменить каталог\n\n"
         
         "🛩️ <b>ПРИЯТНОГО ИСПОЛЬЗОВАНИЯ!</b>"
@@ -1546,11 +1545,11 @@ async def download_from_web_start(callback: CallbackQuery, state: FSMContext):
         "🌐 <b>Загрузка данных из интернета</b>\n\n"
         "Выберите район, для которого нужно загрузить данные:\n\n"
         "📌 <b>Доступные районы:</b>\n"
-        "• Ржевский - основной район (Google Places)\n"
-        "• Бельский - бывшие населенные пункты (Google Places + dic.academic.ru)\n"
-        "• Оленинский - соседний район (Google Places)\n"
-        "• Зубцовский - соседний район (Google Places)\n\n"
-        "<i>Данные из разных районов можно комбинировать при дополнении каталога.</i>",
+        "• Бельский - бывшие населенные пункты (dic.academic.ru)\n"
+        "• Ржевский - (источники пока отсутствуют)\n"
+        "• Оленинский - (источники пока отсутствуют)\n"
+        "• Зубцовский - (источники пока отсутствуют)\n\n"
+        "<i>В текущей версии доступен только Бельский район через dic.academic.ru</i>",
         parse_mode="HTML",
         reply_markup=get_district_keyboard()
     )
@@ -1572,7 +1571,6 @@ async def process_district_select(callback: CallbackQuery, state: FSMContext):
         parse_mode="HTML"
     )
     
-    # Показываем, что бот работает
     await callback.answer("⏳ Начинаю загрузку...")
     
     try:
@@ -1582,7 +1580,7 @@ async def process_district_select(callback: CallbackQuery, state: FSMContext):
         # Загружаем данные для выбранного района
         results = await asyncio.wait_for(
             api_manager.fetch_district_data(district),
-            timeout=35.0
+            timeout=45.0  # Увеличиваем таймаут для обработки 3000+ записей
         )
         
         await api_manager.close_session()
@@ -1598,8 +1596,6 @@ async def process_district_select(callback: CallbackQuery, state: FSMContext):
         # Формируем статистику
         stats_text = f"📊 <b>Результаты для {district} района:</b>\n\n"
         
-        if results["google_places"]:
-            stats_text += f"• Google Places: {len(results['google_places'])} записей\n"
         if results.get("academic_ru"):
             stats_text += f"• dic.academic.ru: {len(results['academic_ru'])} записей (бывшие НП)\n"
         
