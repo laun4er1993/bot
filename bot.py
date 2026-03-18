@@ -33,7 +33,7 @@ from shapely.geometry import Polygon, Point
 from bs4 import BeautifulSoup
 
 # Импортируем наш модуль для работы с API
-from api_sources import APISourceManager, DISTRICTS
+from api_sources import APISourceManager, SOURCES_CONFIG
 
 # Токен из переменных окружения
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -394,7 +394,7 @@ class VillageDatabase:
         """Создает пустой файл каталога"""
         os.makedirs(os.path.dirname(self.csv_path), exist_ok=True)
         with open(self.csv_path, 'w', encoding='utf-8') as f:
-            f.write("name,type,lat,lon,source,district,status,notes\n")
+            f.write("name,type,lat,lon,source,district,settlement,status,notes\n")
         self.villages = []
         self.villages_by_name = {}
         self.stats = {'total': 0, 'with_coords': 0, 'last_update': None, 'source_file': None}
@@ -473,7 +473,7 @@ class VillageDatabase:
             reader = csv.DictReader(io.StringIO(csv_content))
             
             # Проверяем наличие обязательных полей
-            required_fields = ['name', 'type', 'lat', 'lon', 'source', 'district', 'status', 'notes']
+            required_fields = ['name', 'type', 'lat', 'lon', 'source', 'district', 'settlement', 'status', 'notes']
             if not all(field in reader.fieldnames for field in required_fields):
                 missing = [f for f in required_fields if f not in reader.fieldnames]
                 raise ValueError(f"Отсутствуют обязательные поля: {', '.join(missing)}")
@@ -523,7 +523,7 @@ class VillageDatabase:
         if not self.villages:
             return
         
-        fieldnames = ['name', 'type', 'lat', 'lon', 'source', 'district', 'status', 'notes']
+        fieldnames = ['name', 'type', 'lat', 'lon', 'source', 'district', 'settlement', 'status', 'notes']
         
         with open(self.csv_path, 'w', encoding='utf-8', newline='') as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -532,7 +532,16 @@ class VillageDatabase:
     
     def get_stats(self) -> Dict:
         """Возвращает статистику базы данных"""
-        return self.stats.copy()
+        stats = self.stats.copy()
+        
+        # Добавляем статистику по сельским поселениям
+        settlements = {}
+        for v in self.villages:
+            s = v.get('settlement', 'Не указано')
+            settlements[s] = settlements.get(s, 0) + 1
+        
+        stats['settlements'] = settlements
+        return stats
     
     def use_generated_catalog(self, file_path: str) -> Dict:
         """
@@ -557,6 +566,7 @@ class VillageDatabase:
                             'lon': row['lon'],
                             'source': row['source'],
                             'district': row['district'],
+                            'settlement': row.get('settlement', ''),
                             'status': row.get('status', 'existing'),
                             'notes': row.get('notes', '')
                         }
@@ -628,6 +638,7 @@ class VillageDatabase:
                         'lon': '',
                         'source': 'multi_keys',
                         'district': 'Ржевский',
+                        'settlement': '',
                         'status': 'existing',
                         'notes': '',
                         'photo_count': 0
@@ -654,7 +665,7 @@ class VillageDatabase:
         # Генерируем файл
         file_path = os.path.join(export_dir, "villages_full.csv")
         
-        fieldnames = ['name', 'type', 'lat', 'lon', 'source', 'district', 'status', 'notes', 'photo_count']
+        fieldnames = ['name', 'type', 'lat', 'lon', 'source', 'district', 'settlement', 'status', 'notes', 'photo_count']
         
         with open(file_path, 'w', encoding='utf-8', newline='') as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -670,6 +681,7 @@ class VillageDatabase:
                     'lon': entry.get('lon', ''),
                     'source': entry.get('source', ''),
                     'district': entry.get('district', ''),
+                    'settlement': entry.get('settlement', ''),
                     'status': entry.get('status', 'existing'),
                     'notes': entry.get('notes', ''),
                     'photo_count': entry.get('photo_count', 0)
@@ -1164,8 +1176,8 @@ class SearchStates(StatesGroup):
     waiting_for_village = State()
     waiting_for_kml = State()
     waiting_for_csv_upload = State()
-    waiting_for_district_select = State()  # Новое состояние для выбора района
-    waiting_for_merge_action = State()     # Новое состояние для выбора действия с данными
+    waiting_for_district_select = State()
+    waiting_for_merge_action = State()
 
 # ========== КЛАВИАТУРЫ ==========
 
@@ -1201,7 +1213,7 @@ def get_district_keyboard() -> InlineKeyboardMarkup:
     keyboard = []
     
     # Добавляем кнопки для всех доступных районов
-    for district in DISTRICTS.keys():
+    for district in SOURCES_CONFIG.keys():
         keyboard.append([InlineKeyboardButton(
             text=f"📍 {district} район", 
             callback_data=f"select_district_{district}"
@@ -1329,8 +1341,10 @@ async def menu_instruction(message: types.Message):
         "• Загрузка официального каталога населенных пунктов\n"
         "• Просмотр статистики базы\n"
         "• Генерация полного каталога\n"
-        "• 🌐 Загрузка из интернета (dic.academic.ru для Бельского района)\n"
-        "   - Возможность дополнить или заменить каталог\n\n"
+        "• 🌐 Загрузка из интернета (автоматический поиск по районам и сельским поселениям)\n"
+        "   - Ржевский, Оленинский, Зубцовский, Бельский районы\n"
+        "   - Поиск по общим спискам и страницам сельских поселений\n"
+        "   - Приоритет записей с координатами\n\n"
         
         "🛩️ <b>ПРИЯТНОГО ИСПОЛЬЗОВАНИЯ!</b>"
     )
@@ -1391,6 +1405,13 @@ async def menu_settings(message: types.Message):
         text += f"• Источник: {stats['source_file']}\n\n"
     else:
         text += f"• База данных пуста\n\n"
+    
+    # Добавляем статистику по сельским поселениям
+    if stats.get('settlements'):
+        text += f"\n📋 <b>По сельским поселениям:</b>\n"
+        for s, count in sorted(stats['settlements'].items(), key=lambda x: x[1], reverse=True)[:7]:
+            if s:
+                text += f"• {s}: {count}\n"
     
     text += f"👇 <b>Выберите действие:</b>"
     
@@ -1487,13 +1508,21 @@ async def show_village_stats(callback: CallbackQuery):
     if stats['source_file']:
         text += f"• Источник: {stats['source_file']}\n\n"
     
+    # Показываем статистику по сельским поселениям
+    if stats.get('settlements'):
+        text += f"\n📋 <b>По сельским поселениям:</b>\n"
+        for s, count in sorted(stats['settlements'].items(), key=lambda x: x[1], reverse=True)[:10]:
+            if s:
+                text += f"• {s}: {count}\n"
+    
     # Показываем первые 10 записей для примера
     if village_db.villages:
-        text += f"\n📋 <b>Примеры записей:</b>\n"
+        text += f"\n📝 <b>Примеры записей:</b>\n"
         for v in village_db.villages[:10]:
             coords = f"({v['lat']}, {v['lon']})" if v['lat'] and v['lon'] and v['lat'].strip() and v['lon'].strip() else "(без координат)"
             status = "🏚️" if v.get('status') == 'abandoned' else "🏡"
-            text += f"• {status} {v['name']} ({v['type']}) {coords}\n"
+            settlement = f" [{v.get('settlement', '')}]" if v.get('settlement') else ""
+            text += f"• {status} {v['name']}{settlement} ({v['type']}) {coords}\n"
             if v.get('notes'):
                 text += f"  <i>{v['notes'][:50]}...</i>\n"
         if len(village_db.villages) > 10:
@@ -1510,10 +1539,10 @@ async def update_villages_start(callback: CallbackQuery, state: FSMContext):
         "📤 <b>Загрузка официального каталога населенных пунктов</b>\n\n"
         "⚠️ <b>ВНИМАНИЕ:</b> Это действие ПОЛНОСТЬЮ ЗАМЕНИТ текущую базу данных!\n\n"
         "Пожалуйста, отправьте CSV файл со следующей структурой:\n\n"
-        "<code>name,type,lat,lon,source,district,status,notes</code>\n\n"
+        "<code>name,type,lat,lon,source,district,settlement,status,notes</code>\n\n"
         "Пример:\n"
-        "<code>Горбово,деревня,56.2345,34.1234,google_places,Ржевский,existing,</code>\n"
-        "<code>Авсюково,деревня,55.8324,33.3499,academic_ru,Бельский,abandoned,&lt;i&gt;Источник: dic.academic.ru&lt;/i&gt;</code>\n\n"
+        "<code>Горбово,деревня,56.2345,34.1234,google_places,Ржевский,Успенское СП,existing,</code>\n"
+        "<code>Авсюково,деревня,55.8324,33.3499,academic_ru,Бельский,Егорьевское СП,abandoned,&lt;i&gt;Источник: dic.academic.ru&lt;/i&gt;</code>\n\n"
         "Поля <b>lat, lon</b> могут быть пустыми для записей без координат.\n\n"
         "Все существующие данные будут удалены и заменены новыми.",
         parse_mode="HTML"
@@ -1529,7 +1558,8 @@ async def download_villages(callback: CallbackQuery):
         await callback.message.answer_document(
             document,
             caption=f"📁 <b>Текущий каталог населенных пунктов</b>\n"
-                    f"Всего записей: {village_db.stats['total']}",
+                    f"Всего записей: {village_db.stats['total']}\n"
+                    f"С координатами: {village_db.stats['with_coords']}",
             parse_mode="HTML"
         )
     else:
@@ -1545,11 +1575,11 @@ async def download_from_web_start(callback: CallbackQuery, state: FSMContext):
         "🌐 <b>Загрузка данных из интернета</b>\n\n"
         "Выберите район, для которого нужно загрузить данные:\n\n"
         "📌 <b>Доступные районы:</b>\n"
-        "• Бельский - бывшие населенные пункты (dic.academic.ru)\n"
-        "• Ржевский - (источники пока отсутствуют)\n"
-        "• Оленинский - (источники пока отсутствуют)\n"
-        "• Зубцовский - (источники пока отсутствуют)\n\n"
-        "<i>В текущей версии доступен только Бельский район через dic.academic.ru</i>",
+        "• Ржевский - общий список НП + поиск по сельским поселениям\n"
+        "• Оленинский - общий список НП + поиск по сельским поселениям\n"
+        "• Зубцовский - общий список НП + поиск по сельским поселениям\n"
+        "• Бельский - dic.academic.ru\n\n"
+        "<i>Бот автоматически проверит наличие страниц для каждого сельского поселения.</i>",
         parse_mode="HTML",
         reply_markup=get_district_keyboard()
     )
@@ -1567,7 +1597,7 @@ async def process_district_select(callback: CallbackQuery, state: FSMContext):
     
     await callback.message.edit_text(
         f"⏳ <b>Загрузка данных для {district} района...</b>\n\n"
-        f"Это может занять до 30 секунд. Я сообщу, когда данные будут готовы.",
+        f"Это может занять до 60 секунд. Я сообщу, когда данные будут готовы.",
         parse_mode="HTML"
     )
     
@@ -1580,7 +1610,7 @@ async def process_district_select(callback: CallbackQuery, state: FSMContext):
         # Загружаем данные для выбранного района
         results = await asyncio.wait_for(
             api_manager.fetch_district_data(district),
-            timeout=45.0  # Увеличиваем таймаут для обработки 3000+ записей
+            timeout=90.0  # Увеличиваем таймаут для обработки множества страниц
         )
         
         await api_manager.close_session()
@@ -1588,31 +1618,45 @@ async def process_district_select(callback: CallbackQuery, state: FSMContext):
         # Сохраняем результаты в состоянии
         await state.update_data(
             downloaded_data=results["total"],
-            google_count=len(results["google_places"]),
-            academic_count=len(results.get("academic_ru", [])),
+            sources_stats=results["sources"],
+            settlements_stats=results.get("settlements", {}),
             total_count=len(results["total"])
         )
         
         # Формируем статистику
         stats_text = f"📊 <b>Результаты для {district} района:</b>\n\n"
         
-        if results.get("academic_ru"):
-            stats_text += f"• dic.academic.ru: {len(results['academic_ru'])} записей (бывшие НП)\n"
+        # Общие источники
+        if results["sources"]:
+            stats_text += f"📋 <b>Общие источники:</b>\n"
+            for source_name, count in results["sources"].items():
+                if count > 0:
+                    stats_text += f"• {source_name}: {count} записей\n"
         
-        stats_text += f"• Всего уникальных: {len(results['total'])} записей\n"
+        # Сельские поселения
+        if results.get("settlements"):
+            found_settlements = {s: c for s, c in results["settlements"].items() if c > 0}
+            if found_settlements:
+                stats_text += f"\n🏘️ <b>Найденные сельские поселения:</b>\n"
+                for s, count in sorted(found_settlements.items()):
+                    stats_text += f"• {s}: {count} записей\n"
         
-        # Подсчет по типам
-        type_counts = {}
+        stats_text += f"\n• Всего уникальных: {len(results['total'])} записей\n"
+        
+        # Подсчет по статусам
+        status_counts = {}
         for v in results["total"]:
-            t = v.get('type', 'неизвестно')
-            type_counts[t] = type_counts.get(t, 0) + 1
+            status = v.get('status', 'unknown')
+            status_counts[status] = status_counts.get(status, 0) + 1
         
-        if type_counts:
-            stats_text += f"\n📋 <b>По типам:</b>\n"
-            for t, count in sorted(type_counts.items(), key=lambda x: x[1], reverse=True)[:5]:
-                stats_text += f"• {t}: {count}\n"
+        if status_counts:
+            stats_text += f"\n🔄 <b>По статусам:</b>\n"
+            if 'existing' in status_counts:
+                stats_text += f"• Существующие: {status_counts['existing']}\n"
+            if 'abandoned' in status_counts:
+                stats_text += f"• Бывшие: {status_counts['abandoned']}\n"
         
-        stats_text += f"\n<i>Источники данных указаны в поле notes мелким шрифтом.</i>"
+        stats_text += f"\n<i>Приоритет отдавался записям с координатами.</i>"
         
         # Создаем временный файл для предпросмотра
         timestamp = time.strftime('%Y%m%d_%H%M%S')
@@ -1621,7 +1665,7 @@ async def process_district_select(callback: CallbackQuery, state: FSMContext):
         temp_file = os.path.join(temp_dir, f"{district}_{timestamp}.csv")
         
         with open(temp_file, 'w', encoding='utf-8', newline='') as f:
-            writer = csv.DictWriter(f, fieldnames=['name', 'type', 'lat', 'lon', 'source', 'district', 'status', 'notes'])
+            writer = csv.DictWriter(f, fieldnames=['name', 'type', 'lat', 'lon', 'source', 'district', 'settlement', 'status', 'notes'])
             writer.writeheader()
             writer.writerows(results["total"])
         
@@ -1707,6 +1751,13 @@ async def show_detailed_stats(callback: CallbackQuery, state: FSMContext, data: 
         dist = v.get('district', 'неизвестно')
         district_stats[dist] = district_stats.get(dist, 0) + 1
     
+    # Статистика по сельским поселениям
+    settlement_stats = {}
+    for v in data:
+        s = v.get('settlement', 'Не указано')
+        if s:
+            settlement_stats[s] = settlement_stats.get(s, 0) + 1
+    
     # Статистика по статусам
     status_stats = {}
     status_names = {
@@ -1728,12 +1779,13 @@ async def show_detailed_stats(callback: CallbackQuery, state: FSMContext, data: 
         f"📋 <b>По источникам:</b>\n"
     )
     
-    for source, count in sorted(source_stats.items(), key=lambda x: x[1], reverse=True):
+    for source, count in sorted(source_stats.items(), key=lambda x: x[1], reverse=True)[:10]:
         text += f"  • {source}: {count}\n"
     
-    text += f"\n📍 <b>По районам:</b>\n"
-    for dist, count in sorted(district_stats.items(), key=lambda x: x[1], reverse=True):
-        text += f"  • {dist}: {count}\n"
+    if settlement_stats:
+        text += f"\n🏘️ <b>По сельским поселениям:</b>\n"
+        for s, count in sorted(settlement_stats.items(), key=lambda x: x[1], reverse=True)[:10]:
+            text += f"  • {s}: {count}\n"
     
     text += f"\n🔄 <b>По статусам:</b>\n"
     for status, count in status_stats.items():
@@ -1744,7 +1796,8 @@ async def show_detailed_stats(callback: CallbackQuery, state: FSMContext, data: 
     if data:
         text += f"\n📝 <b>Пример записи:</b>\n"
         sample = data[0]
-        text += f"  • {sample.get('name')} ({sample.get('type')})\n"
+        settlement_info = f" [{sample.get('settlement')}]" if sample.get('settlement') else ""
+        text += f"  • {sample.get('name')}{settlement_info} ({sample.get('type')})\n"
         if sample.get('notes'):
             # Убираем HTML теги для отображения в статистике
             notes = sample.get('notes', '').replace('<i>', '').replace('</i>', '').replace('<br>', ' ')
@@ -1850,8 +1903,8 @@ async def perform_append_catalog(callback: CallbackQuery, state: FSMContext,
                             updated += 1
                         else:
                             # Если у новой записи есть дополнительная информация в notes
-                            if new_village.get('notes') and not existing.get('notes'):
-                                existing['notes'] = new_village['notes']
+                            if new_village.get('notes') and (not existing.get('notes') or new_village['notes'] not in existing['notes']):
+                                existing['notes'] = existing.get('notes', '') + "<br>" + new_village['notes']
                                 updated += 1
                             else:
                                 skipped += 1
