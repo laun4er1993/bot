@@ -1,7 +1,7 @@
 # api_sources.py
 # Универсальный парсер для всех районов через dic.academic.ru
-# Автоматический поиск страниц районов, сельских поселений и населенных пунктов
-# Версия с упрощенной структурой данных и улучшенным поиском координат
+# Версия с улучшенной обработкой ошибок 429, поиском дополнительных списков
+# и быстрой проверкой дубликатов
 
 import aiohttp
 import asyncio
@@ -10,6 +10,7 @@ from typing import List, Dict, Optional, Tuple, Any, Set
 import os
 import time
 import re
+import random
 from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor
 import json
@@ -114,24 +115,24 @@ class APISourceManager:
     
     def __init__(self):
         self.session: Optional[aiohttp.ClientSession] = None
-        self.thread_pool = ThreadPoolExecutor(max_workers=5)
+        self.thread_pool = ThreadPoolExecutor(max_workers=3)
         
         # Для rate limiting
         self.request_count = 0
         self.last_request_time = 0
-        self.min_request_interval = 0.5  # 500 мс между запросами
+        self.min_request_interval = 1.5
         
         # Кэш для найденных ID
-        self.article_cache: Dict[str, str] = {}  # запрос -> ID статьи
-        self.district_cache: Dict[str, Dict] = {}  # район -> информация о районе
-        self.settlement_pages_cache: Dict[str, str] = {}  # название СП -> ID страницы
-        self.page_cache: Dict[str, Tuple[str, float]] = {}  # URL -> (HTML, timestamp)
+        self.article_cache: Dict[str, str] = {}
+        self.district_cache: Dict[str, Dict] = {}
+        self.settlement_pages_cache: Dict[str, str] = {}
+        self.page_cache: Dict[str, Tuple[str, float]] = {}
         
-        # Время жизни кэша (в секундах)
-        self.cache_ttl = 3600  # 1 час
+        # Время жизни кэша
+        self.cache_ttl = 3600
         
-        # Максимальное количество повторных попыток при ошибках
-        self.max_retries = 3
+        # Максимальное количество повторных попыток
+        self.max_retries = 5
         
         # Стандартные заголовки
         self.default_headers = {
@@ -154,13 +155,20 @@ class APISourceManager:
         self.thread_pool.shutdown(wait=False)
     
     async def _rate_limit(self):
-        """Соблюдение rate limiting"""
+        """Соблюдение rate limiting с случайной вариацией"""
         current_time = time.time()
         time_since_last = current_time - self.last_request_time
-        if time_since_last < self.min_request_interval:
-            await asyncio.sleep(self.min_request_interval - time_since_last)
+        
+        actual_interval = self.min_request_interval * random.uniform(0.8, 1.2)
+        
+        if time_since_last < actual_interval:
+            await asyncio.sleep(actual_interval - time_since_last)
+        
         self.last_request_time = time.time()
         self.request_count += 1
+        
+        if self.request_count % 100 == 0:
+            logger.info(f"    Выполнено {self.request_count} запросов")
     
     async def _fetch_page_with_retry(self, url: str, retry_count: int = 0) -> Optional[str]:
         """
@@ -174,12 +182,20 @@ class APISourceManager:
             session = await self._get_session()
             await self._rate_limit()
             
-            async with session.get(url, headers=self.default_headers, timeout=60) as response:  # Увеличен таймаут до 60 сек
+            async with session.get(url, headers=self.default_headers, timeout=60) as response:
                 if response.status == 200:
                     html = await response.text()
                     return html
-                elif response.status in [429, 500, 502, 503, 504]:  # Ошибки сервера
-                    wait_time = 2 ** retry_count  # Экспоненциальная задержка
+                elif response.status == 429:
+                    base_wait = 2 ** retry_count
+                    jitter = random.uniform(0.5, 1.5)
+                    wait_time = base_wait * jitter
+                    
+                    logger.warning(f"Ошибка 429 для {url}, повтор через {wait_time:.1f}с (попытка {retry_count + 1}/{self.max_retries})")
+                    await asyncio.sleep(wait_time)
+                    return await self._fetch_page_with_retry(url, retry_count + 1)
+                elif response.status in [500, 502, 503, 504]:
+                    wait_time = 2 ** retry_count
                     logger.warning(f"Ошибка {response.status} для {url}, повтор через {wait_time}с")
                     await asyncio.sleep(wait_time)
                     return await self._fetch_page_with_retry(url, retry_count + 1)
@@ -187,8 +203,9 @@ class APISourceManager:
                     logger.debug(f"Ошибка загрузки {url}: HTTP {response.status}")
                     return None
         except asyncio.TimeoutError:
-            logger.warning(f"Таймаут для {url}, повтор {retry_count + 1}")
-            await asyncio.sleep(2 ** retry_count)
+            wait_time = 2 ** retry_count
+            logger.warning(f"Таймаут для {url}, повтор через {wait_time}с")
+            await asyncio.sleep(wait_time)
             return await self._fetch_page_with_retry(url, retry_count + 1)
         except Exception as e:
             logger.error(f"Ошибка загрузки {url}: {e}")
@@ -198,7 +215,6 @@ class APISourceManager:
         """Загружает страницу с кэшированием и повторными попытками"""
         current_time = time.time()
         
-        # Проверяем кэш
         if url in self.page_cache:
             html, timestamp = self.page_cache[url]
             if current_time - timestamp < self.cache_ttl:
@@ -211,16 +227,20 @@ class APISourceManager:
         
         return html
     
-    async def _search_with_pagination(self, query: str, max_pages: int = 5) -> List[Dict]:  # Увеличено до 5 страниц
+    async def _search_with_pagination(self, query: str, max_pages: int = 20, unlimited: bool = False) -> List[Dict]:
         """
         Выполняет поиск с обработкой нескольких страниц результатов
-        Возвращает список найденных статей
         """
         all_results = []
         page = 1
         
-        while page <= max_pages:
-            # Формируем URL с учетом пагинации
+        while True:
+            if not unlimited and page > max_pages:
+                break
+            
+            if page > 1:
+                await asyncio.sleep(2.0)
+            
             encoded_query = quote(query)
             search_url = f"{DIC_ACADEMIC_SEARCH_URL}?SWord={encoded_query}"
             if page > 1:
@@ -230,7 +250,6 @@ class APISourceManager:
             if not html:
                 break
             
-            # Парсим результаты страницы
             loop = asyncio.get_event_loop()
             page_results = await loop.run_in_executor(
                 self.thread_pool,
@@ -243,8 +262,8 @@ class APISourceManager:
                 break
             
             all_results.extend(page_results)
+            logger.info(f"      Страница {page}: найдено {len(page_results)} результатов")
             
-            # Проверяем, есть ли следующая страница
             has_next = await loop.run_in_executor(
                 self.thread_pool,
                 self._check_next_page,
@@ -256,6 +275,9 @@ class APISourceManager:
             
             page += 1
         
+        if page > 1:
+            logger.info(f"    Всего найдено результатов: {len(all_results)} на {page-1} страницах")
+        
         return all_results
     
     def _parse_search_page(self, html: str, page_num: int) -> List[Dict]:
@@ -266,30 +288,25 @@ class APISourceManager:
             soup = BeautifulSoup(html, 'html.parser')
             results = []
             
-            # Ищем все ссылки на статьи Википедии
             for link in soup.find_all('a', href=re.compile(r'/dic\.nsf/ruwiki/\d+')):
                 href = link.get('href', '')
                 title_text = link.get_text().strip()
                 
-                # Извлекаем ID
                 match = re.search(r'/dic\.nsf/ruwiki/(\d+)', href)
                 if not match:
                     continue
                     
                 article_id = match.group(1)
                 
-                # Получаем полный текст результата
                 parent = link.find_parent()
                 full_text = ""
                 if parent:
-                    # Ищем описание (обычно после ссылки)
                     description = parent.find_next('span', class_='description')
                     if description:
                         full_text = description.get_text().strip()
                     else:
                         full_text = parent.get_text().strip()
                 
-                # Определяем позицию на странице (по номеру в начале)
                 position_match = re.match(r'^(\d+)', full_text)
                 position = int(position_match.group(1)) if position_match else 0
                 
@@ -313,11 +330,121 @@ class APISourceManager:
         """
         try:
             soup = BeautifulSoup(html, 'html.parser')
-            # Ищем ссылку "далее" или "следующая"
             next_link = soup.find('a', string=re.compile(r'далее|следующая|next', re.I))
             return next_link is not None
         except:
             return False
+    
+    async def _find_master_list_links(self, html: str, district: str) -> List[str]:
+        """
+        Ищет на странице ссылки вида "См. также: Список населённых пунктов ..."
+        Возвращает список ID найденных статей
+        """
+        try:
+            soup = BeautifulSoup(html, 'html.parser')
+            found_ids = []
+            
+            see_also_patterns = ['см. также', 'смотри также', 'см также']
+            
+            for pattern in see_also_patterns:
+                for elem in soup.find_all(['p', 'div', 'span'], string=re.compile(pattern, re.I)):
+                    parent = elem.find_parent()
+                    if parent:
+                        for link in parent.find_all('a', href=re.compile(r'/dic\.nsf/ruwiki/\d+')):
+                            href = link.get('href', '')
+                            text = link.get_text().lower()
+                            
+                            if 'список' in text and 'населённых пунктов' in text:
+                                match = re.search(r'/dic\.nsf/ruwiki/(\d+)', href)
+                                if match:
+                                    article_id = match.group(1)
+                                    found_ids.append(article_id)
+                                    logger.info(f"      Найдена ссылка на список НП: ID {article_id} - {link.get_text()}")
+            
+            return list(set(found_ids))
+            
+        except Exception as e:
+            logger.error(f"Ошибка поиска ссылок на списки: {e}")
+            return []
+    
+    async def _parse_master_list_page(self, article_id: str, district: str) -> List[Dict]:
+        """
+        Парсит страницу со списком населенных пунктов
+        Извлекает названия и типы
+        """
+        url = DIC_ACADEMIC_ARTICLE_URL.format(article_id)
+        html = await self._fetch_page(url)
+        
+        if not html:
+            return []
+        
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            self.thread_pool,
+            self._parse_master_list_html,
+            html,
+            article_id,
+            district
+        )
+    
+    def _parse_master_list_html(self, html: str, article_id: str, district: str) -> List[Dict]:
+        """
+        Парсит HTML страницы со списком населенных пунктов
+        Обрабатывает таблицы с данными
+        """
+        try:
+            soup = BeautifulSoup(html, 'html.parser')
+            results = []
+            
+            tables = soup.find_all('table', class_=['standard', 'sortable', 'wikitable'])
+            
+            for table in tables:
+                rows = table.find_all('tr')
+                if len(rows) < 2:
+                    continue
+                
+                header_cells = rows[0].find_all(['th', 'td'])
+                headers = [h.get_text().strip().lower() for h in header_cells]
+                
+                name_idx = self._find_column_index(headers, ['населённый пункт', 'название', 'наименование'])
+                type_idx = self._find_column_index(headers, ['тип'])
+                
+                for row in rows[1:]:
+                    try:
+                        cells = row.find_all('td')
+                        if len(cells) < max(filter(None, [name_idx, type_idx])) + 1:
+                            continue
+                        
+                        if name_idx is not None and name_idx < len(cells):
+                            name = cells[name_idx].get_text().strip()
+                        else:
+                            continue
+                        
+                        if not name or name in ['ИТОГО', 'Всего']:
+                            continue
+                        
+                        village_type = 'деревня'
+                        if type_idx is not None and type_idx < len(cells):
+                            raw_type = cells[type_idx].get_text().strip()
+                            village_type = self._expand_type(raw_type)
+                        
+                        results.append({
+                            "name": name,
+                            "type": village_type,
+                            "lat": "",
+                            "lon": "",
+                            "district": district
+                        })
+                        
+                    except Exception as e:
+                        continue
+            
+            logger.info(f"      Из списка ID {article_id} получено {len(results)} записей")
+            return results
+            
+        except Exception as e:
+            logger.error(f"Ошибка парсинга страницы списка: {e}")
+            return []
     
     async def _find_district_page(self, district: str) -> Optional[Dict]:
         """
@@ -329,7 +456,6 @@ class APISourceManager:
         
         logger.info(f"  🔍 Поиск страницы района: {district}")
         
-        # Варианты поисковых запросов
         queries = [
             f"{district} район",
             f"{district} район Тверская область",
@@ -339,34 +465,28 @@ class APISourceManager:
         
         all_results = []
         
-        # Собираем результаты по всем запросам
         for query in queries:
-            results = await self._search_with_pagination(query, max_pages=3)
+            results = await self._search_with_pagination(query, max_pages=10)
             all_results.extend(results)
+            await asyncio.sleep(1.0)
         
         if not all_results:
             logger.info(f"    ❌ Страница района не найдена")
             return None
         
-        # Оцениваем релевантность каждого результата
         for result in all_results:
             score = self._score_district_relevance(result, district)
             result['score'] = score
         
-        # Сортируем по убыванию релевантности
         sorted_results = sorted(all_results, key=lambda x: x['score'], reverse=True)
-        
-        # Берем топ-5 наиболее релевантных
-        top_results = sorted_results[:5]
+        top_results = sorted_results[:10]
         
         for result in top_results:
-            if result['score'] >= 50:  # Порог релевантности
-                # Загружаем страницу для проверки
+            if result['score'] >= 50:
                 page_url = DIC_ACADEMIC_ARTICLE_URL.format(result['id'])
                 html = await self._fetch_page(page_url)
                 
                 if html:
-                    # Проверяем, что это действительно страница района
                     loop = asyncio.get_event_loop()
                     is_district = await loop.run_in_executor(
                         self.thread_pool,
@@ -401,28 +521,23 @@ class APISourceManager:
         
         score = 0
         
-        # 1. Название содержит точное название района
         if f"{district_lower} район" in title_lower:
             score += 100
         elif district_lower in title_lower:
             score += 50
         
-        # 2. В названии нет скобок (это не страница конкретного НП)
         if '(' not in result['title']:
             score += 30
         
-        # 3. Приоритет первым результатам
         if result['position'] == 1:
             score += 20
         elif result['position'] <= 3:
             score += 10
         
-        # 4. Ключевые слова в описании
         for keyword in DISTRICT_KEYWORDS:
             if keyword in full_text_lower:
                 score += 15
         
-        # 5. Упоминание области
         if "тверская область" in full_text_lower or "тверской области" in full_text_lower:
             score += 10
         
@@ -434,18 +549,12 @@ class APISourceManager:
         """
         try:
             soup = BeautifulSoup(html, 'html.parser')
-            
-            # Получаем текст страницы
             text = soup.get_text().lower()
-            
-            # Проверяем наличие ключевых признаков страницы района
             district_lower = district.lower()
             
-            # Должно быть упоминание района
             if f"{district_lower} район" not in text:
                 return False
             
-            # Должны быть характерные разделы
             expected_sections = ['география', 'история', 'население', 'состав района']
             found_sections = 0
             
@@ -453,7 +562,6 @@ class APISourceManager:
                 if section in text:
                     found_sections += 1
             
-            # Если нашли хотя бы 2 раздела из списка - это страница района
             return found_sections >= 2
             
         except Exception as e:
@@ -486,26 +594,19 @@ class APISourceManager:
     def _parse_settlements_from_page(self, html: str, district: str) -> List[str]:
         """
         Парсит страницу района для извлечения списка сельских поселений
-        Возвращает только валидные названия из предопределенного списка
         """
         try:
             soup = BeautifulSoup(html, 'html.parser')
             found_settlements = []
             
-            # Получаем известные СП для этого района
             known = KNOWN_SETTLEMENTS.get(district, [])
-            
-            # Ищем все текстовые фрагменты на странице
             text = soup.get_text()
             
-            # Проверяем каждое известное СП
             for settlement in known:
                 if settlement in text:
                     found_settlements.append(settlement)
             
-            # Если не нашли по известному списку, пробуем найти по ключевым словам
             if not found_settlements:
-                # Ищем разделы с сельскими поселениями
                 for keyword in SETTLEMENT_KEYWORDS:
                     for header in soup.find_all(['h2', 'h3', 'h4']):
                         if keyword in header.get_text().lower():
@@ -515,11 +616,9 @@ class APISourceManager:
                                     for li in ul.find_all('li'):
                                         text = li.get_text().strip()
                                         if text and len(text) < 50 and not re.search(r'\d', text):
-                                            # Проверяем, что это похоже на название СП
                                             if any(word in text.lower() for word in ['ское', 'ское сп']):
                                                 found_settlements.append(text)
             
-            # Удаляем дубликаты
             unique_settlements = []
             seen = set()
             for s in found_settlements:
@@ -541,7 +640,6 @@ class APISourceManager:
         if cache_key in self.settlement_pages_cache:
             return self.settlement_pages_cache[cache_key]
         
-        # Варианты поисковых запросов для СП
         queries = [
             f"Список бывших населённых пунктов на территории сельского поселения {settlement} {district} района",
             f"Список бывших населенных пунктов на территории сельского поселения {settlement} {district} района",
@@ -554,18 +652,17 @@ class APISourceManager:
         all_results = []
         
         for query in queries:
-            results = await self._search_with_pagination(query, max_pages=3)
+            results = await self._search_with_pagination(query, max_pages=20)
             all_results.extend(results)
+            await asyncio.sleep(1.0)
         
         if not all_results:
             return None
         
-        # Оцениваем релевантность
         for result in all_results:
             score = self._score_settlement_relevance(result, settlement, district)
             result['score'] = score
         
-        # Берем лучший результат
         best = max(all_results, key=lambda x: x['score'])
         
         if best['score'] >= 40:
@@ -586,25 +683,20 @@ class APISourceManager:
         
         score = 0
         
-        # 1. Название содержит название СП
         if settlement_lower in title_lower:
             score += 50
         
-        # 2. В названии есть ключевые слова
         if "список бывших" in title_lower:
             score += 40
         elif "бывшие населённые" in title_lower:
             score += 30
         
-        # 3. Упоминание района
         if district_lower in title_lower or district_lower in full_text_lower:
             score += 20
         
-        # 4. Упоминание сельского поселения
         if "сельское поселение" in title_lower or "сельского поселения" in title_lower:
             score += 25
         
-        # 5. Приоритет первым результатам
         if result['position'] == 1:
             score += 15
         elif result['position'] <= 3:
@@ -635,16 +727,11 @@ class APISourceManager:
     def _parse_settlement_page_html(self, html: str, article_id: str, district: str, settlement: str) -> List[Dict]:
         """
         Парсит HTML страницы с бывшими НП сельского поселения
-        Возвращает только базовые поля: name, type, lat, lon, district
         """
         try:
             soup = BeautifulSoup(html, 'html.parser')
             results = []
             
-            # Настоящее название СП берем из параметра
-            real_settlement = settlement
-            
-            # Ищем таблицу с данными
             tables = soup.find_all('table', class_=['standard', 'sortable'])
             
             for table in tables:
@@ -652,11 +739,9 @@ class APISourceManager:
                 if len(rows) < 2:
                     continue
                 
-                # Определяем заголовки
                 header_cells = rows[0].find_all(['th', 'td'])
                 headers = [h.get_text().strip().lower() for h in header_cells]
                 
-                # Ищем индексы нужных колонок
                 name_idx = self._find_column_index(headers, ['населённый пункт', 'название'])
                 type_idx = self._find_column_index(headers, ['тип'])
                 coords_idx = self._find_column_index(headers, ['координаты', 'коорд'])
@@ -667,7 +752,6 @@ class APISourceManager:
                         if len(cells) < max(filter(None, [name_idx, type_idx])) + 1:
                             continue
                         
-                        # Название
                         if name_idx is not None and name_idx < len(cells):
                             name = cells[name_idx].get_text().strip()
                         else:
@@ -676,24 +760,19 @@ class APISourceManager:
                         if not name or name in ['ИТОГО', 'Всего']:
                             continue
                         
-                        # Тип
                         village_type = 'деревня'
                         if type_idx is not None and type_idx < len(cells):
                             raw_type = cells[type_idx].get_text().strip()
                             village_type = self._expand_type(raw_type)
                         
-                        # Координаты - ОБЯЗАТЕЛЬНО пытаемся найти
                         lat, lon = None, None
                         if coords_idx is not None and coords_idx < len(cells):
                             lat, lon = self._parse_coordinates_universal('', cells[coords_idx])
                         
-                        # Если координат нет в таблице, пробуем найти в тексте
                         if not lat or not lon:
-                            # Ищем координаты во всей строке
                             row_text = ' '.join([c.get_text() for c in cells])
                             lat, lon = self._parse_coordinates_universal(row_text, None)
                         
-                        # Формируем запись ТОЛЬКО с нужными полями
                         results.append({
                             "name": name,
                             "type": village_type,
@@ -737,18 +816,15 @@ class APISourceManager:
         try:
             soup = BeautifulSoup(html, 'html.parser')
             
-            # Ищем название (обычно в h1)
             title_elem = soup.find('h1')
             if not title_elem:
                 return None
             
             full_title = title_elem.get_text().strip()
             
-            # Пытаемся извлечь название и тип из заголовка
             name = full_title
             village_type = 'деревня'
             
-            # Часто формат: "Название (тип)" или "Название, тип"
             type_match = re.search(r'\(([^)]+)\)$', full_title)
             if type_match:
                 possible_type = type_match.group(1).lower()
@@ -761,10 +837,8 @@ class APISourceManager:
                     name = full_title.replace(f', {possible_type}', '').strip()
                     village_type = self._expand_type(possible_type)
             
-            # Ищем координаты на странице
             lat, lon = None, None
             
-            # Ищем в скрытых span
             geo_span = soup.find('span', class_='geo')
             if geo_span:
                 lat_span = geo_span.find('span', class_='latitude')
@@ -777,7 +851,6 @@ class APISourceManager:
                     except:
                         pass
             
-            # Если не нашли, ищем в тексте
             if not lat or not lon:
                 text = soup.get_text()
                 lat, lon = self._parse_coordinates_universal(text, None)
@@ -800,97 +873,120 @@ class APISourceManager:
     async def fetch_district_data(self, district: str) -> List[Dict]:
         """
         Основной метод: загружает данные для конкретного района
-        Возвращает список словарей только с нужными полями
+        С быстрой проверкой дубликатов через set
         """
         logger.info(f"🌐 Загрузка данных для района: {district}")
         
         all_villages = []
         found_settlements = {}
+        processed_master_lists = set()
+        seen_villages = set()
         
-        # Шаг 1: Находим страницу района
         district_info = await self._find_district_page(district)
         
         if not district_info:
             logger.warning(f"  ⚠️ Страница района не найдена")
             return []
         
-        # Шаг 2: Получаем список сельских поселений
         settlements = await self._extract_settlements(district_info['id'], district)
         
         if not settlements:
             logger.warning(f"  ⚠️ Сельские поселения не найдены на странице района")
-            # Пробуем использовать известный список
             settlements = KNOWN_SETTLEMENTS.get(district, [])
             if settlements:
                 logger.info(f"    Используем известный список СП: {len(settlements)}")
         
-        # Шаг 3: Для каждого сельского поселения ищем страницу с бывшими НП
         logger.info(f"  🔍 Поиск страниц для {len(settlements)} сельских поселений...")
         
         for settlement in settlements:
             try:
-                # Ищем страницу СП
+                await asyncio.sleep(1.0)
+                
                 article_id = await self._find_settlement_page(settlement, district)
                 
                 if article_id:
-                    # Парсим страницу СП
-                    data = await self._parse_settlement_page(article_id, district, settlement)
+                    url = DIC_ACADEMIC_ARTICLE_URL.format(article_id)
+                    html = await self._fetch_page(url)
                     
-                    if data:
-                        found_settlements[settlement] = len(data)
-                        all_villages.extend(data)
-                        logger.info(f"    ✅ СП {settlement}: {len(data)} записей")
+                    if html:
+                        data = await self._parse_settlement_page(article_id, district, settlement)
+                        
+                        new_count = 0
+                        for village in data:
+                            key = f"{village['name']}_{village['district']}"
+                            if key not in seen_villages:
+                                seen_villages.add(key)
+                                all_villages.append(village)
+                                new_count += 1
+                        
+                        if data:
+                            found_settlements[settlement] = len(data)
+                            logger.info(f"    ✅ СП {settlement}: добавлено {new_count} новых записей")
+                        
+                        master_list_ids = await self._find_master_list_links(html, district)
+                        
+                        for list_id in master_list_ids:
+                            if list_id not in processed_master_lists:
+                                processed_master_lists.add(list_id)
+                                logger.info(f"      Обрабатываем дополнительный список ID {list_id}")
+                                
+                                list_data = await self._parse_master_list_page(list_id, district)
+                                
+                                list_new = 0
+                                for village in list_data:
+                                    key = f"{village['name']}_{village['district']}"
+                                    if key not in seen_villages:
+                                        seen_villages.add(key)
+                                        all_villages.append(village)
+                                        list_new += 1
+                                
+                                logger.info(f"        Добавлено {list_new} новых записей из списка")
                     else:
-                        logger.info(f"    ⏭️ СП {settlement}: страница найдена, но нет данных")
+                        logger.info(f"    ⏭️ СП {settlement}: страница найдена, но не загрузилась")
                 else:
                     logger.info(f"    ⏭️ СП {settlement}: страница не найдена")
                     
             except Exception as e:
                 logger.error(f"    ❌ Ошибка обработки СП {settlement}: {e}")
         
-        # Шаг 4: Ищем отдельные страницы населенных пунктов (для координат)
-        logger.info(f"  🔍 Поиск отдельных страниц НП для получения координат...")
-        
-        # Собираем все названия, у которых нет координат
-        villages_without_coords = [v for v in all_villages if not v.get('lat')]
-        
-        if villages_without_coords:
-            logger.info(f"    Найдено {len(villages_without_coords)} записей без координат")
+        if all_villages:
+            logger.info(f"  🔍 Поиск координат для записей без них...")
             
-            # Для каждого ищем отдельную страницу
-            for i, village in enumerate(villages_without_coords[:50]):  # Ограничим для производительности
-                try:
-                    # Ищем страницу по названию
-                    query = f"{village['name']} {district} район"
-                    results = await self._search_with_pagination(query, max_pages=2)
-                    
-                    if results:
-                        # Берем первый результат
-                        article_id = results[0]['id']
-                        village_data = await self._parse_individual_village_page(article_id, district)
+            villages_without_coords = [v for v in all_villages if not v.get('lat')]
+            
+            if villages_without_coords:
+                logger.info(f"    Найдено {len(villages_without_coords)} записей без координат")
+                
+                for i, village in enumerate(villages_without_coords[:100]):
+                    try:
+                        if i > 0:
+                            await asyncio.sleep(1.0)
                         
-                        if village_data and village_data.get('lat'):
-                            # Обновляем запись
-                            for v in all_villages:
-                                if v['name'] == village['name'] and not v.get('lat'):
-                                    v['lat'] = village_data['lat']
-                                    v['lon'] = village_data['lon']
-                                    logger.info(f"      ✅ Найдены координаты для {v['name']}")
-                                    break
-                    
-                    if i % 10 == 0:
-                        logger.info(f"      Обработано {i+1}/{len(villages_without_coords[:50])}")
+                        query = f"{village['name']} {district} район"
+                        results = await self._search_with_pagination(query, max_pages=30, unlimited=False)
                         
-                except Exception as e:
-                    continue
+                        if results:
+                            article_id = results[0]['id']
+                            village_data = await self._parse_individual_village_page(article_id, district)
+                            
+                            if village_data and village_data.get('lat'):
+                                for v in all_villages:
+                                    if v['name'] == village['name'] and not v.get('lat'):
+                                        v['lat'] = village_data['lat']
+                                        v['lon'] = village_data['lon']
+                                        logger.info(f"      ✅ Найдены координаты для {v['name']}")
+                                        break
+                        
+                        if (i + 1) % 10 == 0:
+                            logger.info(f"      Обработано {i+1}/{len(villages_without_coords[:100])}")
+                            
+                    except Exception as e:
+                        continue
         
-        # Удаляем дубликаты с приоритетом записей с координатами
-        unique_villages = self._deduplicate_with_priority(all_villages)
+        logger.info(f"  ✅ Всего уникальных записей: {len(all_villages)}")
+        logger.info(f"  ✅ С координатами: {sum(1 for v in all_villages if v.get('lat'))}")
         
-        logger.info(f"  ✅ Всего уникальных записей: {len(unique_villages)}")
-        logger.info(f"  ✅ С координатами: {sum(1 for v in unique_villages if v.get('lat'))}")
-        
-        return unique_villages
+        return all_villages
     
     def _find_column_index(self, headers: List[str], possible_names: List[str]) -> Optional[int]:
         """Находит индекс колонки по возможным названиям"""
@@ -919,10 +1015,8 @@ class APISourceManager:
     def _parse_coordinates_universal(self, text: str, cell=None) -> Tuple[Optional[float], Optional[float]]:
         """
         Универсальный парсер координат для всех форматов
-        Ищет везде и всеми способами
         """
         try:
-            # 1. Ищем в скрытых span
             if cell:
                 geo_span = cell.find('span', class_='geo')
                 if geo_span:
@@ -938,7 +1032,6 @@ class APISourceManager:
                         except:
                             pass
             
-            # 2. DMS формат (56°13′41.16″ с. ш. 34°08′10.32″ в. д.)
             dms_pattern = r'(\d+)°(\d+)′([\d.]+)″.*?(\d+)°(\d+)′([\d.]+)″'
             match = re.search(dms_pattern, text)
             
@@ -952,7 +1045,6 @@ class APISourceManager:
                 if self._validate_coordinates(lat, lon):
                     return lat, lon
             
-            # 3. Десятичные с пробелом или запятой
             decimal_pattern = r'([0-9]+\.[0-9]+)[,\s]+([0-9]+\.[0-9]+)'
             match = re.search(decimal_pattern, text)
             
@@ -963,7 +1055,6 @@ class APISourceManager:
                 if self._validate_coordinates(lat, lon):
                     return lat, lon
             
-            # 4. Просто два числа через пробел
             numbers = re.findall(r'[\d.]+', text)
             if len(numbers) >= 2:
                 lat = float(numbers[0])
@@ -980,32 +1071,6 @@ class APISourceManager:
     def _validate_coordinates(self, lat: float, lon: float) -> bool:
         """Проверяет координаты (примерные границы для Тверской области)"""
         return (55.0 <= lat <= 58.0 and 30.0 <= lon <= 38.0)
-    
-    def _deduplicate_with_priority(self, items: List[Dict]) -> List[Dict]:
-        """
-        Удаляет дубликаты с приоритетом записей с координатами
-        """
-        unique: Dict[str, Dict] = {}
-        
-        for item in items:
-            # Ключ: название + район
-            key = f"{item['name']}_{item['district']}"
-            
-            if key not in unique:
-                unique[key] = item
-            else:
-                existing = unique[key]
-                
-                # Приоритет: запись с координатами
-                if not existing.get('lat') and item.get('lat'):
-                    unique[key] = item
-                elif existing.get('lat') and not item.get('lat'):
-                    pass  # оставляем существующую
-                elif not existing.get('lat') and not item.get('lat'):
-                    pass  # обе без координат, оставляем первую
-                # Если обе с координатами, оставляем любую (они должны быть одинаковыми)
-        
-        return list(unique.values())
 
-# Экспортируем список районов
+# Экспортируем список районов для использования в bot.py
 AVAILABLE_DISTRICTS = DISTRICTS
