@@ -33,7 +33,7 @@ from shapely.geometry import Polygon, Point
 from bs4 import BeautifulSoup
 
 # Импортируем наш модуль для работы с API
-from api_sources import APISourceManager
+from api_sources import APISourceManager, DISTRICTS
 
 # Токен из переменных окружения
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -394,7 +394,7 @@ class VillageDatabase:
         """Создает пустой файл каталога"""
         os.makedirs(os.path.dirname(self.csv_path), exist_ok=True)
         with open(self.csv_path, 'w', encoding='utf-8') as f:
-            f.write("name,type,lat,lon,source,district\n")
+            f.write("name,type,lat,lon,source,district,status,notes\n")
         self.villages = []
         self.villages_by_name = {}
         self.stats = {'total': 0, 'with_coords': 0, 'last_update': None, 'source_file': None}
@@ -523,7 +523,7 @@ class VillageDatabase:
         if not self.villages:
             return
         
-        fieldnames = ['name', 'type', 'lat', 'lon', 'source', 'district']
+        fieldnames = ['name', 'type', 'lat', 'lon', 'source', 'district', 'status', 'notes']
         
         with open(self.csv_path, 'w', encoding='utf-8', newline='') as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -556,7 +556,9 @@ class VillageDatabase:
                             'lat': row['lat'],
                             'lon': row['lon'],
                             'source': row['source'],
-                            'district': row['district']
+                            'district': row['district'],
+                            'status': row.get('status', 'existing'),
+                            'notes': row.get('notes', '')
                         }
                         new_villages.append(village)
                         
@@ -608,7 +610,6 @@ class VillageDatabase:
         for v in self.villages:
             entry = v.copy()
             entry['photo_count'] = 0
-            entry['historical_name'] = ''
             all_entries.append(entry)
             seen_names.add(v['name'])
             stats['from_catalog'] += 1
@@ -627,7 +628,8 @@ class VillageDatabase:
                         'lon': '',
                         'source': 'multi_keys',
                         'district': 'Ржевский',
-                        'historical_name': '',
+                        'status': 'existing',
+                        'notes': '',
                         'photo_count': 0
                     })
                     seen_names.add(village)
@@ -652,7 +654,7 @@ class VillageDatabase:
         # Генерируем файл
         file_path = os.path.join(export_dir, "villages_full.csv")
         
-        fieldnames = ['name', 'type', 'lat', 'lon', 'source', 'district', 'historical_name', 'photo_count']
+        fieldnames = ['name', 'type', 'lat', 'lon', 'source', 'district', 'status', 'notes', 'photo_count']
         
         with open(file_path, 'w', encoding='utf-8', newline='') as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -668,7 +670,8 @@ class VillageDatabase:
                     'lon': entry.get('lon', ''),
                     'source': entry.get('source', ''),
                     'district': entry.get('district', ''),
-                    'historical_name': entry.get('historical_name', ''),
+                    'status': entry.get('status', 'existing'),
+                    'notes': entry.get('notes', ''),
                     'photo_count': entry.get('photo_count', 0)
                 }
                 writer.writerow(row)
@@ -1161,6 +1164,8 @@ class SearchStates(StatesGroup):
     waiting_for_village = State()
     waiting_for_kml = State()
     waiting_for_csv_upload = State()
+    waiting_for_district_select = State()  # Новое состояние для выбора района
+    waiting_for_merge_action = State()     # Новое состояние для выбора действия с данными
 
 # ========== КЛАВИАТУРЫ ==========
 
@@ -1189,6 +1194,30 @@ def get_settings_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="📋 Сгенерировать полный каталог", callback_data="generate_catalog")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_settings")],
         [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
+    ])
+
+def get_district_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура для выбора района"""
+    keyboard = []
+    
+    # Добавляем кнопки для всех доступных районов
+    for district in DISTRICTS.keys():
+        keyboard.append([InlineKeyboardButton(
+            text=f"📍 {district} район", 
+            callback_data=f"select_district_{district}"
+        )])
+    
+    keyboard.append([InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_settings")])
+    
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+def get_merge_action_keyboard(district: str) -> InlineKeyboardMarkup:
+    """Клавиатура для выбора действия с загруженными данными"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 Полностью заменить каталог", callback_data=f"merge_replace_{district}")],
+        [InlineKeyboardButton(text="➕ Дополнить существующий каталог", callback_data=f"merge_append_{district}")],
+        [InlineKeyboardButton(text="📊 Посмотреть статистику", callback_data=f"merge_stats_{district}")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="back_to_settings")]
     ])
 
 def back_keyboard() -> InlineKeyboardMarkup:
@@ -1300,7 +1329,9 @@ async def menu_instruction(message: types.Message):
         "• Загрузка официального каталога населенных пунктов\n"
         "• Просмотр статистики базы\n"
         "• Генерация полного каталога\n"
-        "• 🌐 Загрузка из интернета (OpenStreetMap, Wikidata, Overpass, EtoMesto)\n\n"
+        "• 🌐 Загрузка из интернета (Google Places, dic.academic.ru)\n"
+        "   - Ржевский, Бельский, Оленинский, Зубцовский районы\n"
+        "   - Возможность дополнить или заменить каталог\n\n"
         
         "🛩️ <b>ПРИЯТНОГО ИСПОЛЬЗОВАНИЯ!</b>"
     )
@@ -1462,7 +1493,10 @@ async def show_village_stats(callback: CallbackQuery):
         text += f"\n📋 <b>Примеры записей:</b>\n"
         for v in village_db.villages[:10]:
             coords = f"({v['lat']}, {v['lon']})" if v['lat'] and v['lon'] and v['lat'].strip() and v['lon'].strip() else "(без координат)"
-            text += f"• {v['name']} ({v['type']}) {coords}\n"
+            status = "🏚️" if v.get('status') == 'abandoned' else "🏡"
+            text += f"• {status} {v['name']} ({v['type']}) {coords}\n"
+            if v.get('notes'):
+                text += f"  <i>{v['notes'][:50]}...</i>\n"
         if len(village_db.villages) > 10:
             text += f"  и ещё {len(village_db.villages) - 10}..."
     
@@ -1477,10 +1511,10 @@ async def update_villages_start(callback: CallbackQuery, state: FSMContext):
         "📤 <b>Загрузка официального каталога населенных пунктов</b>\n\n"
         "⚠️ <b>ВНИМАНИЕ:</b> Это действие ПОЛНОСТЬЮ ЗАМЕНИТ текущую базу данных!\n\n"
         "Пожалуйста, отправьте CSV файл со следующей структурой:\n\n"
-        "<code>name,type,lat,lon,source,district</code>\n\n"
+        "<code>name,type,lat,lon,source,district,status,notes</code>\n\n"
         "Пример:\n"
-        "<code>Горбово,деревня,56.2345,34.1234,osm,Ржевский\n"
-        "Грибеево,урочище,,,overpass,Ржевский</code>\n\n"
+        "<code>Горбово,деревня,56.2345,34.1234,google_places,Ржевский,existing,</code>\n"
+        "<code>Авсюково,деревня,55.8324,33.3499,academic_ru,Бельский,abandoned,&lt;i&gt;Источник: dic.academic.ru&lt;/i&gt;</code>\n\n"
         "Поля <b>lat, lon</b> могут быть пустыми для записей без координат.\n\n"
         "Все существующие данные будут удалены и заменены новыми.",
         parse_mode="HTML"
@@ -1506,86 +1540,110 @@ async def download_villages(callback: CallbackQuery):
 
 @dp.callback_query(lambda c: c.data == "download_from_web_start")
 async def download_from_web_start(callback: CallbackQuery, state: FSMContext):
-    """Начинает загрузку данных из интернета через API"""
+    """Начинает процесс загрузки данных из интернета - выбор района"""
     
-    await callback.answer("⏳ Загрузка начата...")
-    
-    status_msg = await callback.message.answer(
+    await callback.message.edit_text(
         "🌐 <b>Загрузка данных из интернета</b>\n\n"
-        "⏳ Загружаю данные из источников:\n"
-        "• OpenStreetMap (современные НП)\n"
-        "• Wikidata (исторические названия)\n"
-        "• Overpass API (заброшенные деревни)\n"
-        "• EtoMesto (исторические карты)\n\n"
-        "Это может занять до 25 секунд...",
+        "Выберите район, для которого нужно загрузить данные:\n\n"
+        "📌 <b>Доступные районы:</b>\n"
+        "• Ржевский - основной район (Google Places)\n"
+        "• Бельский - бывшие населенные пункты (Google Places + dic.academic.ru)\n"
+        "• Оленинский - соседний район (Google Places)\n"
+        "• Зубцовский - соседний район (Google Places)\n\n"
+        "<i>Данные из разных районов можно комбинировать при дополнении каталога.</i>",
+        parse_mode="HTML",
+        reply_markup=get_district_keyboard()
+    )
+    
+    await state.set_state(SearchStates.waiting_for_district_select)
+    await callback.answer()
+
+# ОБРАБОТЧИК ВЫБОРА РАЙОНА
+@dp.callback_query(lambda c: c.data.startswith("select_district_"))
+async def process_district_select(callback: CallbackQuery, state: FSMContext):
+    """Обрабатывает выбор района"""
+    district = callback.data.replace("select_district_", "")
+    
+    await state.update_data(selected_district=district)
+    
+    await callback.message.edit_text(
+        f"⏳ <b>Загрузка данных для {district} района...</b>\n\n"
+        f"Это может занять до 30 секунд. Я сообщу, когда данные будут готовы.",
         parse_mode="HTML"
     )
+    
+    # Показываем, что бот работает
+    await callback.answer("⏳ Начинаю загрузку...")
     
     try:
         # Создаем менеджер API
         api_manager = APISourceManager()
         
-        # Загружаем данные из всех источников параллельно
-        villages = await asyncio.wait_for(
-            api_manager.fetch_all_sources(),
-            timeout=25.0
+        # Загружаем данные для выбранного района
+        results = await asyncio.wait_for(
+            api_manager.fetch_district_data(district),
+            timeout=35.0
         )
         
         await api_manager.close_session()
         
-        if not villages:
-            await status_msg.edit_text(
-                "❌ <b>Не удалось загрузить данные</b>\n\n"
-                "API источники не вернули данных.\n"
-                "Попробуйте позже.",
-                parse_mode="HTML",
-                reply_markup=back_to_settings_keyboard()
-            )
-            return
+        # Сохраняем результаты в состоянии
+        await state.update_data(
+            downloaded_data=results["total"],
+            google_count=len(results["google_places"]),
+            academic_count=len(results.get("academic_ru", [])),
+            total_count=len(results["total"])
+        )
         
-        # Создаем временный файл
+        # Формируем статистику
+        stats_text = f"📊 <b>Результаты для {district} района:</b>\n\n"
+        
+        if results["google_places"]:
+            stats_text += f"• Google Places: {len(results['google_places'])} записей\n"
+        if results.get("academic_ru"):
+            stats_text += f"• dic.academic.ru: {len(results['academic_ru'])} записей (бывшие НП)\n"
+        
+        stats_text += f"• Всего уникальных: {len(results['total'])} записей\n"
+        
+        # Подсчет по типам
+        type_counts = {}
+        for v in results["total"]:
+            t = v.get('type', 'неизвестно')
+            type_counts[t] = type_counts.get(t, 0) + 1
+        
+        if type_counts:
+            stats_text += f"\n📋 <b>По типам:</b>\n"
+            for t, count in sorted(type_counts.items(), key=lambda x: x[1], reverse=True)[:5]:
+                stats_text += f"• {t}: {count}\n"
+        
+        stats_text += f"\n<i>Источники данных указаны в поле notes мелким шрифтом.</i>"
+        
+        # Создаем временный файл для предпросмотра
         timestamp = time.strftime('%Y%m%d_%H%M%S')
-        temp_file = f"data/temp_catalog_{timestamp}.csv"
+        temp_dir = "data/temp"
+        os.makedirs(temp_dir, exist_ok=True)
+        temp_file = os.path.join(temp_dir, f"{district}_{timestamp}.csv")
         
-        os.makedirs(os.path.dirname(temp_file), exist_ok=True)
         with open(temp_file, 'w', encoding='utf-8', newline='') as f:
             writer = csv.DictWriter(f, fieldnames=['name', 'type', 'lat', 'lon', 'source', 'district', 'status', 'notes'])
             writer.writeheader()
-            writer.writerows(villages)
+            writer.writerows(results["total"])
         
-        # Считаем статистику по источникам
-        source_stats = {}
-        for v in villages:
-            source = v.get('source', 'unknown')
-            source_stats[source] = source_stats.get(source, 0) + 1
+        await state.update_data(temp_file=temp_file)
         
-        await state.update_data(temp_catalog=temp_file, temp_stats=source_stats, temp_total=len(villages))
-        
-        stats_text = "📊 <b>Результаты по источникам:</b>\n"
-        for source, count in sorted(source_stats.items(), key=lambda x: x[1], reverse=True):
-            stats_text += f"• {source}: {count} записей\n"
-        
-        text = (
-            f"✅ <b>Данные загружены!</b>\n\n"
-            f"{stats_text}"
-            f"• Всего: {len(villages)} записей\n"
-            f"• С координатами: {sum(1 for v in villages if v.get('lat') and v.get('lon'))}\n\n"
+        # Показываем меню выбора действия
+        await callback.message.edit_text(
+            f"✅ <b>Данные для {district} района загружены!</b>\n\n"
+            f"{stats_text}\n"
             f"📁 Временный файл: <code>{temp_file}</code>\n\n"
-            f"Что сделать с этими данными?"
+            f"<b>Что сделать с этими данными?</b>",
+            parse_mode="HTML",
+            reply_markup=get_merge_action_keyboard(district)
         )
-        
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📥 Заменить основной каталог", callback_data="use_temp_as_main")],
-            [InlineKeyboardButton(text="💾 Сохранить как отдельный", callback_data="save_temp_separate")],
-            [InlineKeyboardButton(text="📊 Подробная статистика", callback_data="view_temp_stats")],
-            [InlineKeyboardButton(text="❌ Отмена", callback_data="back_to_settings")]
-        ])
-        
-        await status_msg.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
         
     except asyncio.TimeoutError:
         logger.error("Таймаут при загрузке данных")
-        await status_msg.edit_text(
+        await callback.message.edit_text(
             "❌ <b>Ошибка загрузки</b>\n\n"
             "Превышено время ожидания ответа от серверов.\n"
             "Попробуйте позже.",
@@ -1594,7 +1652,7 @@ async def download_from_web_start(callback: CallbackQuery, state: FSMContext):
         )
     except Exception as e:
         logger.error(f"Ошибка при загрузке данных: {e}")
-        await status_msg.edit_text(
+        await callback.message.edit_text(
             f"❌ <b>Ошибка загрузки</b>\n\n{str(e)}",
             parse_mode="HTML",
             reply_markup=back_to_settings_keyboard()
@@ -1603,61 +1661,16 @@ async def download_from_web_start(callback: CallbackQuery, state: FSMContext):
         if 'api_manager' in locals():
             await api_manager.close_session()
 
-@dp.callback_query(lambda c: c.data == "view_temp_stats")
-async def view_temp_stats(callback: CallbackQuery, state: FSMContext):
-    """Показывает подробную статистику временного файла"""
+# ОБРАБОТЧИК ВЫБОРА ДЕЙСТВИЯ С ДАННЫМИ
+@dp.callback_query(lambda c: c.data.startswith("merge_"))
+async def process_merge_action(callback: CallbackQuery, state: FSMContext):
+    """Обрабатывает выбор действия с загруженными данными"""
+    
+    action, district = callback.data.replace("merge_", "").split("_", 1)
+    
     data = await state.get_data()
-    temp_file = data.get('temp_catalog', '')
-    source_stats = data.get('temp_stats', {})
-    total = data.get('temp_total', 0)
-    
-    if not os.path.exists(temp_file):
-        await callback.message.edit_text(
-            "❌ <b>Ошибка</b>\n\nВременный файл не найден.",
-            parse_mode="HTML",
-            reply_markup=back_to_settings_keyboard()
-        )
-        await callback.answer()
-        return
-    
-    # Читаем файл для детальной статистики
-    with_coords = 0
-    by_source = {}
-    
-    with open(temp_file, 'r', encoding='utf-8') as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            if row.get('lat') and row.get('lon') and row['lat'].strip() and row['lon'].strip():
-                with_coords += 1
-            source = row.get('source', 'unknown')
-            by_source[source] = by_source.get(source, 0) + 1
-    
-    text = (
-        f"📊 <b>Детальная статистика временного каталога</b>\n\n"
-        f"• Всего записей: {total}\n"
-        f"• С координатами: {with_coords}\n"
-        f"• Без координат: {total - with_coords}\n\n"
-        f"📁 Файл: <code>{temp_file}</code>\n\n"
-        f"<b>Распределение по источникам:</b>\n"
-    )
-    
-    for source, count in sorted(by_source.items(), key=lambda x: x[1], reverse=True):
-        text += f"• {source}: {count}\n"
-    
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📥 Заменить основной", callback_data="use_temp_as_main")],
-        [InlineKeyboardButton(text="💾 Сохранить отдельно", callback_data="save_temp_separate")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="download_from_web_back")]
-    ])
-    
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
-    await callback.answer()
-
-@dp.callback_query(lambda c: c.data == "use_temp_as_main")
-async def use_temp_as_main(callback: CallbackQuery, state: FSMContext):
-    """Заменяет основной каталог временным файлом"""
-    data = await state.get_data()
-    temp_file = data.get('temp_catalog')
+    temp_file = data.get('temp_file')
+    downloaded_data = data.get('downloaded_data', [])
     
     if not temp_file or not os.path.exists(temp_file):
         await callback.message.edit_text(
@@ -1668,23 +1681,121 @@ async def use_temp_as_main(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
     
+    if action == "stats":
+        # Показываем подробную статистику
+        await show_detailed_stats(callback, state, downloaded_data)
+        return
+    
+    elif action == "replace":
+        # Полная замена каталога
+        await perform_replace_catalog(callback, state, temp_file, downloaded_data, district)
+    
+    elif action == "append":
+        # Дополнение существующего каталога
+        await perform_append_catalog(callback, state, temp_file, downloaded_data, district)
+
+async def show_detailed_stats(callback: CallbackQuery, state: FSMContext, data: List[Dict]):
+    """Показывает детальную статистику по загруженным данным"""
+    
+    with_coords = sum(1 for v in data if v.get('lat') and v.get('lon'))
+    
+    # Статистика по источникам
+    source_stats = {}
+    for v in data:
+        source = v.get('source', 'unknown')
+        source_stats[source] = source_stats.get(source, 0) + 1
+    
+    # Статистика по районам
+    district_stats = {}
+    for v in data:
+        dist = v.get('district', 'неизвестно')
+        district_stats[dist] = district_stats.get(dist, 0) + 1
+    
+    # Статистика по статусам
+    status_stats = {}
+    status_names = {
+        'existing': 'существующие',
+        'abandoned': 'бывшие/исторические',
+        'natural': 'природные',
+        'historical': 'исторические'
+    }
+    for v in data:
+        status = v.get('status', 'unknown')
+        status_stats[status] = status_stats.get(status, 0) + 1
+    
+    text = (
+        f"📊 <b>Детальная статистика</b>\n\n"
+        f"• Всего записей: {len(data)}\n"
+        f"• С координатами: {with_coords}\n"
+        f"• Без координат: {len(data) - with_coords}\n\n"
+        
+        f"📋 <b>По источникам:</b>\n"
+    )
+    
+    for source, count in sorted(source_stats.items(), key=lambda x: x[1], reverse=True):
+        text += f"  • {source}: {count}\n"
+    
+    text += f"\n📍 <b>По районам:</b>\n"
+    for dist, count in sorted(district_stats.items(), key=lambda x: x[1], reverse=True):
+        text += f"  • {dist}: {count}\n"
+    
+    text += f"\n🔄 <b>По статусам:</b>\n"
+    for status, count in status_stats.items():
+        status_text = status_names.get(status, status)
+        text += f"  • {status_text}: {count}\n"
+    
+    # Показываем примеры записей с источниками
+    if data:
+        text += f"\n📝 <b>Пример записи:</b>\n"
+        sample = data[0]
+        text += f"  • {sample.get('name')} ({sample.get('type')})\n"
+        if sample.get('notes'):
+            # Убираем HTML теги для отображения в статистике
+            notes = sample.get('notes', '').replace('<i>', '').replace('</i>', '').replace('<br>', ' ')
+            text += f"    {notes[:100]}...\n"
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 Заменить каталог", callback_data="merge_replace_continue")],
+        [InlineKeyboardButton(text="➕ Дополнить каталог", callback_data="merge_append_continue")],
+        [InlineKeyboardButton(text="🔙 Назад к выбору", callback_data="merge_back_to_action")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="back_to_settings")]
+    ])
+    
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
+    await callback.answer()
+
+async def perform_replace_catalog(callback: CallbackQuery, state: FSMContext, 
+                                   temp_file: str, data: List[Dict], district: str):
+    """Выполняет полную замену каталога"""
+    
+    await callback.message.edit_text(
+        f"⏳ <b>Заменяю каталог данными {district} района...</b>",
+        parse_mode="HTML"
+    )
+    
     try:
-        # Загружаем временный файл как основной
+        # Читаем временный файл
         with open(temp_file, 'r', encoding='utf-8') as f:
             csv_content = f.read()
         
-        stats = village_db.replace_with_catalog(csv_content, "internet_catalog.csv")
+        # Заменяем каталог
+        stats = village_db.replace_with_catalog(csv_content, f"internet_{district}_catalog.csv")
         
         # Удаляем временный файл
         os.unlink(temp_file)
         await state.clear()
         
-        await callback.message.edit_text(
-            f"✅ <b>Основной каталог заменен!</b>\n\n"
+        # Формируем ответ
+        text = (
+            f"✅ <b>Каталог полностью заменен данными {district} района!</b>\n\n"
             f"📊 <b>Результаты:</b>\n"
             f"• Загружено записей: {stats['loaded']}\n"
             f"• С координатами: {stats['with_coords']}\n\n"
-            f"Теперь поиск будет использовать новый каталог.",
+            f"<i>Все старые данные удалены. Теперь поиск использует новый каталог.</i>"
+        )
+        
+        await callback.message.edit_text(
+            text,
             parse_mode="HTML",
             reply_markup=back_to_settings_keyboard()
         )
@@ -1699,86 +1810,152 @@ async def use_temp_as_main(callback: CallbackQuery, state: FSMContext):
     
     await callback.answer()
 
-@dp.callback_query(lambda c: c.data == "save_temp_separate")
-async def save_temp_separate(callback: CallbackQuery, state: FSMContext):
-    """Сохраняет временный файл как отдельный каталог"""
-    data = await state.get_data()
-    temp_file = data.get('temp_catalog')
-    total = data.get('temp_total', 0)
+async def perform_append_catalog(callback: CallbackQuery, state: FSMContext,
+                                  temp_file: str, new_data: List[Dict], district: str):
+    """Дополняет существующий каталог новыми данными"""
     
-    if not temp_file or not os.path.exists(temp_file):
-        await callback.message.edit_text(
-            "❌ <b>Ошибка</b>\n\nВременный файл не найден. Попробуйте загрузить данные заново.",
-            parse_mode="HTML",
-            reply_markup=back_to_settings_keyboard()
-        )
-        await callback.answer()
-        return
+    await callback.message.edit_text(
+        f"⏳ <b>Дополняю каталог данными {district} района...</b>",
+        parse_mode="HTML"
+    )
     
     try:
-        # Создаем постоянный файл с датой
-        timestamp = time.strftime('%Y%m%d_%H%M%S')
-        permanent_file = f"data/catalogs/catalog_{timestamp}.csv"
-        os.makedirs("data/catalogs", exist_ok=True)
+        # Получаем существующие данные
+        existing_villages = village_db.villages.copy()
+        existing_names = {v['name'] for v in existing_villages}
         
-        # Копируем временный файл
-        import shutil
-        shutil.copy2(temp_file, permanent_file)
+        # Счетчики для статистики
+        added = 0
+        updated = 0
+        skipped = 0
+        
+        # Обрабатываем новые данные
+        for new_village in new_data:
+            name = new_village['name']
+            
+            if name not in existing_names:
+                # Добавляем новую запись
+                existing_villages.append(new_village)
+                added += 1
+                existing_names.add(name)
+            else:
+                # Находим существующую запись и обновляем, если у новой есть координаты
+                for i, existing in enumerate(existing_villages):
+                    if existing['name'] == name:
+                        # Если у существующей нет координат, а у новой есть - обновляем
+                        if (not existing.get('lat') or not existing.get('lon') or 
+                            not existing['lat'].strip() or not existing['lon'].strip()) and \
+                           (new_village.get('lat') and new_village.get('lon') and 
+                            new_village['lat'].strip() and new_village['lon'].strip()):
+                            # Сохраняем заметки из обоих источников
+                            if existing.get('notes') and new_village.get('notes'):
+                                new_village['notes'] = existing['notes'] + "<br>" + new_village['notes']
+                            existing_villages[i] = new_village
+                            updated += 1
+                        else:
+                            # Если у новой записи есть дополнительная информация в notes
+                            if new_village.get('notes') and not existing.get('notes'):
+                                existing['notes'] = new_village['notes']
+                                updated += 1
+                            else:
+                                skipped += 1
+                        break
+        
+        # Заменяем каталог объединенными данными
+        village_db.villages = existing_villages
+        village_db._save_to_csv()
+        
+        # Перестраиваем индексы
+        village_db.villages_by_name.clear()
+        for v in village_db.villages:
+            name_lower = v['name'].lower()
+            if name_lower not in village_db.villages_by_name:
+                village_db.villages_by_name[name_lower] = []
+            village_db.villages_by_name[name_lower].append(v)
+        
+        # Обновляем статистику
+        with_coords = sum(1 for v in village_db.villages if v.get('lat') and v.get('lon') and v['lat'].strip() and v['lon'].strip())
+        village_db.stats['total'] = len(village_db.villages)
+        village_db.stats['with_coords'] = with_coords
+        village_db.stats['last_update'] = time.strftime('%Y-%m-%d %H:%M:%S')
+        village_db.stats['source_file'] = f"appended_{district}_catalog.csv"
         
         # Удаляем временный файл
         os.unlink(temp_file)
         await state.clear()
         
+        # Формируем ответ
+        text = (
+            f"✅ <b>Каталог дополнен данными {district} района!</b>\n\n"
+            f"📊 <b>Результаты:</b>\n"
+            f"• Добавлено новых записей: {added}\n"
+            f"• Обновлено существующих: {updated}\n"
+            f"• Пропущено (уже есть): {skipped}\n\n"
+            f"📈 <b>Новая статистика каталога:</b>\n"
+            f"• Всего записей: {village_db.stats['total']}\n"
+            f"• С координатами: {village_db.stats['with_coords']}\n"
+            f"• Источников: {len(set(v['source'] for v in village_db.villages if v.get('source')))}"
+        )
+        
         await callback.message.edit_text(
-            f"✅ <b>Каталог сохранен!</b>\n\n"
-            f"📊 <b>Статистика:</b>\n"
-            f"• Всего записей: {total}\n\n"
-            f"📁 Файл сохранен:\n"
-            f"<code>{permanent_file}</code>\n\n"
-            f"Вы можете загрузить этот файл позже через меню загрузки каталога.",
+            text,
             parse_mode="HTML",
             reply_markup=back_to_settings_keyboard()
         )
         
     except Exception as e:
-        logger.error(f"Ошибка при сохранении каталога: {e}")
+        logger.error(f"Ошибка при дополнении каталога: {e}")
         await callback.message.edit_text(
-            f"❌ <b>Ошибка при сохранении</b>\n\n{str(e)}",
+            f"❌ <b>Ошибка при дополнении каталога</b>\n\n{str(e)}",
             parse_mode="HTML",
             reply_markup=back_to_settings_keyboard()
         )
     
     await callback.answer()
 
-@dp.callback_query(lambda c: c.data == "download_from_web_back")
-async def download_from_web_back(callback: CallbackQuery, state: FSMContext):
-    """Возврат к меню выбора действий с временным файлом"""
+# Дополнительные обработчики для навигации
+@dp.callback_query(lambda c: c.data == "merge_back_to_action")
+async def merge_back_to_action(callback: CallbackQuery, state: FSMContext):
+    """Возврат к выбору действия"""
     data = await state.get_data()
-    temp_file = data.get('temp_catalog')
-    source_stats = data.get('temp_stats', {})
-    total = data.get('temp_total', 0)
-    
-    stats_text = "📊 <b>Результаты по источникам:</b>\n"
-    for source, count in sorted(source_stats.items(), key=lambda x: x[1], reverse=True):
-        stats_text += f"• {source}: {count} записей\n"
+    district = data.get('selected_district', 'Ржевский')
+    temp_file = data.get('temp_file')
+    downloaded_data = data.get('downloaded_data', [])
+    total = len(downloaded_data)
     
     text = (
-        f"✅ <b>Данные загружены!</b>\n\n"
-        f"{stats_text}"
-        f"• Всего: {total} записей\n\n"
-        f"📁 Временный файл: <code>{temp_file}</code>\n\n"
-        f"Что сделать с этими данными?"
+        f"✅ <b>Данные для {district} района загружены!</b>\n\n"
+        f"📊 Всего записей: {total}\n"
+        f"📁 Файл: <code>{temp_file}</code>\n\n"
+        f"<b>Что сделать с этими данными?</b>"
     )
     
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📥 Заменить основной каталог", callback_data="use_temp_as_main")],
-        [InlineKeyboardButton(text="💾 Сохранить как отдельный", callback_data="save_temp_separate")],
-        [InlineKeyboardButton(text="📊 Подробная статистика", callback_data="view_temp_stats")],
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="back_to_settings")]
-    ])
-    
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
+    await callback.message.edit_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=get_merge_action_keyboard(district)
+    )
     await callback.answer()
+
+@dp.callback_query(lambda c: c.data == "merge_replace_continue")
+async def merge_replace_continue(callback: CallbackQuery, state: FSMContext):
+    """Продолжить замену после просмотра статистики"""
+    data = await state.get_data()
+    district = data.get('selected_district', 'Ржевский')
+    temp_file = data.get('temp_file')
+    downloaded_data = data.get('downloaded_data', [])
+    
+    await perform_replace_catalog(callback, state, temp_file, downloaded_data, district)
+
+@dp.callback_query(lambda c: c.data == "merge_append_continue")
+async def merge_append_continue(callback: CallbackQuery, state: FSMContext):
+    """Продолжить дополнение после просмотра статистики"""
+    data = await state.get_data()
+    district = data.get('selected_district', 'Ржевский')
+    temp_file = data.get('temp_file')
+    downloaded_data = data.get('downloaded_data', [])
+    
+    await perform_append_catalog(callback, state, temp_file, downloaded_data, district)
 
 @dp.callback_query(lambda c: c.data == "generate_catalog")
 async def generate_catalog_start(callback: CallbackQuery):
