@@ -13,13 +13,13 @@ class APISourceManager:
         self.session = None
         self.sources = {
             'photon': {
-                'url': 'https://photon.komoot.io/api/',  # Добавлен слеш в конце
+                'url': 'https://photon.komoot.io/api/',
                 'method': 'GET',
                 'params': {
-                    'q': 'Ржевский район',  # Поисковый запрос
-                    'limit': 100,             # Максимум результатов
-                    'lang': 'ru',              # Язык результатов
-                    'osm_tag': 'place'         # Фильтр только для населенных пунктов
+                    'q': 'Ржевский район',
+                    'limit': 100,
+                    # 'lang': 'ru',  # Удаляем - русский не поддерживается
+                    'osm_tag': 'place'
                 },
                 'headers': {
                     'User-Agent': 'WW2AerialPhotoBot/1.0 (research project)',
@@ -47,7 +47,6 @@ class APISourceManager:
         session = await self.get_session()
         
         try:
-            # Логируем полный URL для отладки
             params = source.get('params', {})
             url = source['url']
             logger.info(f"Запрос к Photon: {url} с параметрами {params}")
@@ -64,13 +63,9 @@ class APISourceManager:
                     data = await response.json()
                     return source['parser'](data)
                 else:
-                    # Пробуем получить текст ошибки
-                    try:
-                        error_text = await response.text()
-                        logger.error(f"Ошибка Photon: {error_text[:200]}")
-                    except:
-                        pass
-                    logger.error(f"Ошибка Photon: HTTP {response.status}")
+                    # Читаем текст ошибки
+                    error_text = await response.text()
+                    logger.error(f"Ошибка Photon: {error_text}")
                     return []
         except asyncio.TimeoutError:
             logger.error("Таймаут Photon API")
@@ -97,10 +92,9 @@ class APISourceManager:
                 # Проверяем, что это действительно населенный пункт
                 osm_key = props.get('osm_key', '')
                 if osm_key != 'place':
-                    continue  # Пропускаем не населенные пункты
+                    continue
                 
                 # Определяем тип
-                osm_type = props.get('osm_type', '')
                 osm_value = props.get('osm_value', '')
                 
                 obj_type = 'деревня'
@@ -115,29 +109,18 @@ class APISourceManager:
                 elif osm_value == 'locality':
                     obj_type = 'урочище'
                 
-                # Получаем географическую информацию
-                city = props.get('city', '')
-                state = props.get('state', '')
-                country = props.get('country', '')
-                
-                # Формируем заметку
-                notes = []
-                if city:
-                    notes.append(f"г. {city}")
-                if state:
-                    notes.append(state)
-                if country:
-                    notes.append(country)
+                # Названия на разных языках
+                name_ru = props.get('name:ru', name)  # Русское название если есть
                 
                 villages.append({
-                    'name': name,
+                    'name': name_ru,
                     'type': obj_type,
                     'lat': str(coords[1]) if len(coords) > 1 else '',
                     'lon': str(coords[0]) if coords else '',
                     'source': 'photon',
                     'district': 'Ржевский',
                     'status': 'существует',
-                    'notes': ', '.join(notes) if notes else ''
+                    'notes': f"OSM: {osm_value}"
                 })
             
             logger.info(f"✅ Photon: найдено {len(villages)} населенных пунктов")
