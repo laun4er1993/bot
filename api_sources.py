@@ -13,6 +13,7 @@ from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor
 import json
 from urllib.parse import quote, urljoin, urlparse
+from collections import defaultdict
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +70,19 @@ SETTLEMENT_KEYWORDS = [
     "сельское поселение",
     "сельские поселения",
     "список сельских поселений",
-    "муниципальное образование"
+    "муниципальное образование",
+    "состав района",
+    "муниципальное устройство",
+    "административное деление"
+]
+
+# Ключевые слова для идентификации страницы района
+DISTRICT_KEYWORDS = [
+    "муниципальный район",
+    "административная единица",
+    "районный центр",
+    "расположен на юге",
+    "граничит с"
 ]
 
 class APISourceManager:
@@ -89,8 +102,12 @@ class APISourceManager:
         
         # Кэш для найденных ID
         self.article_cache: Dict[str, str] = {}  # запрос -> ID статьи
-        self.settlement_cache: Dict[str, List[str]] = {}  # район -> список СП
-        self.page_cache: Dict[str, str] = {}  # URL -> HTML
+        self.district_cache: Dict[str, Dict] = {}  # район -> информация о районе
+        self.settlement_pages_cache: Dict[str, str] = {}  # название СП -> ID страницы
+        self.page_cache: Dict[str, Tuple[str, float]] = {}  # URL -> (HTML, timestamp)
+        
+        # Время жизни кэша (в секундах)
+        self.cache_ttl = 3600  # 1 час
         
         # Стандартные заголовки
         self.default_headers = {
@@ -123,8 +140,13 @@ class APISourceManager:
     
     async def _fetch_page(self, url: str) -> Optional[str]:
         """Загружает страницу с кэшированием"""
+        current_time = time.time()
+        
+        # Проверяем кэш
         if url in self.page_cache:
-            return self.page_cache[url]
+            html, timestamp = self.page_cache[url]
+            if current_time - timestamp < self.cache_ttl:
+                return html
         
         try:
             session = await self._get_session()
@@ -133,7 +155,7 @@ class APISourceManager:
             async with session.get(url, headers=self.default_headers, timeout=30) as response:
                 if response.status == 200:
                     html = await response.text()
-                    self.page_cache[url] = html
+                    self.page_cache[url] = (html, current_time)
                     return html
                 else:
                     logger.debug(f"Ошибка загрузки {url}: HTTP {response.status}")
@@ -142,205 +164,310 @@ class APISourceManager:
             logger.debug(f"Ошибка загрузки {url}: {e}")
             return None
     
-    async def _search_article(self, query: str) -> Optional[str]:
+    async def _search_with_pagination(self, query: str, max_pages: int = 3) -> List[Dict]:
         """
-        Ищет статью на dic.academic.ru по запросу
-        Возвращает ID статьи или None
+        Выполняет поиск с обработкой нескольких страниц результатов
+        Возвращает список найденных статей
         """
-        cache_key = f"search_{query}"
-        if cache_key in self.article_cache:
-            return self.article_cache[cache_key]
+        all_results = []
+        page = 1
         
-        try:
-            # Кодируем запрос для URL
+        while page <= max_pages:
+            # Формируем URL с учетом пагинации
             encoded_query = quote(query)
             search_url = f"{DIC_ACADEMIC_SEARCH_URL}?SWord={encoded_query}"
+            if page > 1:
+                search_url += f"&page={page}"
             
             html = await self._fetch_page(search_url)
             if not html:
-                return None
+                break
             
-            # Парсим результаты поиска
+            # Парсим результаты страницы
             loop = asyncio.get_event_loop()
-            article_id = await loop.run_in_executor(
+            page_results = await loop.run_in_executor(
                 self.thread_pool,
-                self._parse_search_results,
+                self._parse_search_page,
                 html,
-                query
+                page
             )
             
-            if article_id:
-                self.article_cache[cache_key] = article_id
+            if not page_results:
+                break
             
-            return article_id
+            all_results.extend(page_results)
             
-        except Exception as e:
-            logger.error(f"Ошибка поиска статьи '{query}': {e}")
-            return None
+            # Проверяем, есть ли следующая страница
+            has_next = await loop.run_in_executor(
+                self.thread_pool,
+                self._check_next_page,
+                html
+            )
+            
+            if not has_next:
+                break
+            
+            page += 1
+        
+        return all_results
     
-    def _parse_search_results(self, html: str, query: str) -> Optional[str]:
+    def _parse_search_page(self, html: str, page_num: int) -> List[Dict]:
         """
-        Парсит страницу результатов поиска
-        Ищет наиболее релевантную статью
+        Парсит одну страницу результатов поиска
         """
         try:
             soup = BeautifulSoup(html, 'html.parser')
+            results = []
             
-            # Ищем ссылки на статьи Википедии
-            links = soup.find_all('a', href=re.compile(r'/dic\.nsf/ruwiki/\d+'))
-            
-            best_match = None
-            best_score = 0
-            
-            for link in links:
+            # Ищем все ссылки на статьи Википедии
+            for link in soup.find_all('a', href=re.compile(r'/dic\.nsf/ruwiki/\d+')):
                 href = link.get('href', '')
-                title = link.get_text().strip().lower()
+                title_text = link.get_text().strip()
                 
-                # Извлекаем ID статьи
+                # Извлекаем ID
                 match = re.search(r'/dic\.nsf/ruwiki/(\d+)', href)
                 if not match:
                     continue
-                
+                    
                 article_id = match.group(1)
                 
-                # Оцениваем релевантность
-                score = 0
-                query_lower = query.lower()
+                # Получаем полный текст результата
+                parent = link.find_parent()
+                full_text = ""
+                if parent:
+                    # Ищем описание (обычно после ссылки)
+                    description = parent.find_next('span', class_='description')
+                    if description:
+                        full_text = description.get_text().strip()
+                    else:
+                        full_text = parent.get_text().strip()
                 
-                # Точное совпадение заголовка
-                if query_lower == title:
-                    score += 100
-                # Заголовок содержит запрос
-                elif query_lower in title:
-                    score += 50
+                # Определяем позицию на странице (по номеру в начале)
+                position_match = re.match(r'^(\d+)', full_text)
+                position = int(position_match.group(1)) if position_match else 0
                 
-                # Дополнительные баллы за ключевые слова
-                for keyword in LIST_KEYWORDS + SETTLEMENT_KEYWORDS:
-                    if keyword in title:
-                        score += 10
-                
-                if score > best_score:
-                    best_score = score
-                    best_match = article_id
+                results.append({
+                    'id': article_id,
+                    'title': title_text,
+                    'full_text': full_text,
+                    'page': page_num,
+                    'position': position
+                })
             
-            return best_match if best_score > 0 else None
+            return results
             
         except Exception as e:
-            logger.error(f"Ошибка парсинга результатов поиска: {e}")
-            return None
+            logger.error(f"Ошибка парсинга страницы поиска: {e}")
+            return []
     
-    async def _get_district_page(self, district: str) -> Optional[Dict]:
+    def _check_next_page(self, html: str) -> bool:
         """
-        Находит страницу района и извлекает из нее информацию
+        Проверяет наличие ссылки на следующую страницу
         """
+        try:
+            soup = BeautifulSoup(html, 'html.parser')
+            # Ищем ссылку "далее" или "следующая"
+            next_link = soup.find('a', string=re.compile(r'далее|следующая|next', re.I))
+            return next_link is not None
+        except:
+            return False
+    
+    async def _find_district_page(self, district: str) -> Optional[Dict]:
+        """
+        Находит страницу района, анализируя результаты поиска
+        """
+        cache_key = f"district_{district}"
+        if cache_key in self.district_cache:
+            return self.district_cache[cache_key]
+        
         logger.info(f"  🔍 Поиск страницы района: {district}")
         
-        # Пробуем разные варианты запроса
+        # Варианты поисковых запросов
         queries = [
             f"{district} район",
             f"{district} район Тверская область",
+            f"{district} муниципальный район",
             district
         ]
         
+        all_results = []
+        
+        # Собираем результаты по всем запросам
         for query in queries:
-            article_id = await self._search_article(query)
-            if article_id:
-                # Загружаем страницу района
-                article_url = DIC_ACADEMIC_ARTICLE_URL.format(article_id)
-                html = await self._fetch_page(article_url)
+            results = await self._search_with_pagination(query, max_pages=2)
+            all_results.extend(results)
+        
+        if not all_results:
+            logger.info(f"    ❌ Страница района не найдена")
+            return None
+        
+        # Оцениваем релевантность каждого результата
+        for result in all_results:
+            score = self._score_district_relevance(result, district)
+            result['score'] = score
+        
+        # Сортируем по убыванию релевантности
+        sorted_results = sorted(all_results, key=lambda x: x['score'], reverse=True)
+        
+        # Берем топ-3 наиболее релевантных
+        top_results = sorted_results[:3]
+        
+        for result in top_results:
+            if result['score'] >= 50:  # Порог релевантности
+                # Загружаем страницу для проверки
+                page_url = DIC_ACADEMIC_ARTICLE_URL.format(result['id'])
+                html = await self._fetch_page(page_url)
                 
                 if html:
-                    # Парсим страницу района
+                    # Проверяем, что это действительно страница района
                     loop = asyncio.get_event_loop()
-                    district_info = await loop.run_in_executor(
+                    is_district = await loop.run_in_executor(
                         self.thread_pool,
-                        self._parse_district_page,
+                        self._verify_district_page,
                         html,
-                        article_id,
                         district
                     )
                     
-                    if district_info:
-                        logger.info(f"    ✅ Найдена страница района (ID: {article_id})")
+                    if is_district:
+                        logger.info(f"    ✅ Найдена страница района (ID: {result['id']}, score: {result['score']})")
+                        
+                        district_info = {
+                            'id': result['id'],
+                            'title': result['title'],
+                            'url': page_url,
+                            'score': result['score']
+                        }
+                        
+                        self.district_cache[cache_key] = district_info
                         return district_info
         
         logger.info(f"    ❌ Страница района не найдена")
         return None
     
-    def _parse_district_page(self, html: str, article_id: str, district: str) -> Optional[Dict]:
+    def _score_district_relevance(self, result: Dict, district: str) -> int:
         """
-        Парсит страницу района, извлекает:
-        - ссылки на списки населенных пунктов
-        - список сельских поселений
-        - область из названия статьи
+        Оценивает релевантность результата для страницы района
+        """
+        title_lower = result['title'].lower()
+        full_text_lower = result['full_text'].lower()
+        district_lower = district.lower()
+        
+        score = 0
+        
+        # 1. Название содержит точное название района
+        if f"{district_lower} район" in title_lower:
+            score += 100
+        elif district_lower in title_lower:
+            score += 50
+        
+        # 2. В названии нет скобок (это не страница конкретного НП)
+        if '(' not in result['title']:
+            score += 30
+        
+        # 3. Приоритет первым результатам
+        if result['position'] == 1:
+            score += 20
+        elif result['position'] <= 3:
+            score += 10
+        
+        # 4. Ключевые слова в описании
+        for keyword in DISTRICT_KEYWORDS:
+            if keyword in full_text_lower:
+                score += 15
+        
+        # 5. Упоминание области
+        if "тверская область" in full_text_lower or "тверской области" in full_text_lower:
+            score += 10
+        
+        # 6. Длина описания (чем подробнее, тем лучше)
+        if len(full_text_lower) > 100:
+            score += 5
+        
+        return score
+    
+    def _verify_district_page(self, html: str, district: str) -> bool:
+        """
+        Проверяет, что страница действительно является страницей района
         """
         try:
             soup = BeautifulSoup(html, 'html.parser')
             
-            # Извлекаем область из названия
-            title_elem = soup.find('h1')
-            title = title_elem.get_text() if title_elem else ""
+            # Получаем текст страницы
+            text = soup.get_text().lower()
             
-            # Ищем область в названии (обычно "Тверская область")
-            region = "Тверская область"  # по умолчанию
-            region_match = re.search(r'([А-Яа-я]+ская область)', title)
-            if region_match:
-                region = region_match.group(1)
+            # Проверяем наличие ключевых признаков страницы района
+            district_lower = district.lower()
             
-            # Ищем ссылки на списки НП
-            list_links = []
+            # Должно быть упоминание района
+            if f"{district_lower} район" not in text:
+                return False
             
-            # Ищем в разделе "См. также"
-            see_also_section = soup.find('span', id=re.compile(r'См\._также|См_также', re.I))
-            if see_also_section:
-                # Ищем все ссылки в этом разделе
-                parent = see_also_section.find_parent()
-                if parent:
-                    for link in parent.find_all('a', href=True):
-                        href = link.get('href', '')
-                        text = link.get_text().strip().lower()
-                        
-                        # Проверяем, что это ссылка на статью Википедии
-                        match = re.search(r'/dic\.nsf/ruwiki/(\d+)', href)
-                        if match and any(keyword in text for keyword in LIST_KEYWORDS):
-                            list_links.append({
-                                'id': match.group(1),
-                                'title': link.get_text().strip(),
-                                'type': 'list'
-                            })
+            # Должны быть характерные разделы
+            expected_sections = ['география', 'история', 'население', 'состав района']
+            found_sections = 0
             
-            # Ищем везде ссылки на списки НП
-            for link in soup.find_all('a', href=re.compile(r'/dic\.nsf/ruwiki/\d+')):
-                href = link.get('href', '')
-                text = link.get_text().strip().lower()
-                
-                match = re.search(r'/dic\.nsf/ruwiki/(\d+)', href)
-                if match and any(keyword in text for keyword in LIST_KEYWORDS):
-                    link_id = match.group(1)
-                    # Проверяем, не добавили ли уже
-                    if not any(l['id'] == link_id for l in list_links):
-                        list_links.append({
-                            'id': link_id,
-                            'title': link.get_text().strip(),
-                            'type': 'list'
-                        })
+            for section in expected_sections:
+                if section in text:
+                    found_sections += 1
             
-            # Ищем сельские поселения
+            # Если нашли хотя бы 2 раздела из списка - это страница района
+            return found_sections >= 2
+            
+        except Exception as e:
+            logger.error(f"Ошибка проверки страницы района: {e}")
+            return False
+    
+    async def _extract_settlements(self, district_id: str, district: str) -> List[str]:
+        """
+        Извлекает список сельских поселений со страницы района
+        """
+        cache_key = f"settlements_{district}"
+        if cache_key in self.settlement_pages_cache:
+            # Возвращаем как есть, это не ID, а список
+            pass
+        
+        url = DIC_ACADEMIC_ARTICLE_URL.format(district_id)
+        html = await self._fetch_page(url)
+        
+        if not html:
+            return []
+        
+        loop = asyncio.get_event_loop()
+        settlements = await loop.run_in_executor(
+            self.thread_pool,
+            self._parse_settlements_from_page,
+            html
+        )
+        
+        if settlements:
+            logger.info(f"    Найдено сельских поселений: {len(settlements)}")
+        
+        return settlements
+    
+    def _parse_settlements_from_page(self, html: str) -> List[str]:
+        """
+        Парсит страницу района для извлечения списка сельских поселений
+        """
+        try:
+            soup = BeautifulSoup(html, 'html.parser')
             settlements = []
             
-            # Ищем по ключевым словам
+            # Ищем разделы с сельскими поселениями
             for keyword in SETTLEMENT_KEYWORDS:
                 # Ищем заголовки
                 for header in soup.find_all(['h2', 'h3', 'h4']):
                     if keyword in header.get_text().lower():
-                        # Ищем список после заголовка
+                        # Ищем списки после заголовка
                         parent = header.find_parent()
                         if parent:
                             # Ищем маркированные списки
                             for ul in parent.find_all('ul'):
                                 for li in ul.find_all('li'):
                                     text = li.get_text().strip()
-                                    if text and len(text) < 100:  # Фильтруем длинные строки
+                                    # Фильтруем: длина от 2 до 50 символов, не содержит цифр
+                                    if (text and 2 <= len(text) <= 50 and 
+                                        not re.search(r'\d', text) and
+                                        not text.startswith('см. также')):
                                         settlements.append(text)
                             
                             # Ищем таблицы
@@ -349,28 +476,113 @@ class APISourceManager:
                                     cells = row.find_all('td')
                                     for cell in cells:
                                         text = cell.get_text().strip()
-                                        if text and len(text) < 100:
+                                        if (text and 2 <= len(text) <= 50 and
+                                            not re.search(r'\d', text) and
+                                            not text.startswith('см. также')):
                                             settlements.append(text)
             
             # Удаляем дубликаты и пустые значения
-            settlements = list(set(s for s in settlements if s and len(s) > 2))
+            unique_settlements = []
+            seen = set()
             
-            logger.info(f"    Найдено ссылок на списки: {len(list_links)}")
-            logger.info(f"    Найдено сельских поселений: {len(settlements)}")
+            for s in settlements:
+                # Нормализуем название (убираем лишние пробелы, приводим к правильному регистру)
+                s_clean = ' '.join(s.split())
+                if s_clean and s_clean not in seen and len(s_clean) > 2:
+                    # Проверяем, что это похоже на название СП
+                    if any(keyword in s_clean.lower() for keyword in ['ское', 'ское сп', 'поселение']):
+                        unique_settlements.append(s_clean)
+                        seen.add(s_clean)
+                    elif not any(word in s_clean.lower() for word in ['всего', 'итого', 'страница']):
+                        unique_settlements.append(s_clean)
+                        seen.add(s_clean)
             
-            return {
-                'id': article_id,
-                'title': title,
-                'region': region,
-                'list_links': list_links,
-                'settlements': settlements
-            }
+            return unique_settlements
             
         except Exception as e:
-            logger.error(f"Ошибка парсинга страницы района: {e}")
-            return None
+            logger.error(f"Ошибка парсинга сельских поселений: {e}")
+            return []
     
-    async def _parse_settlement_page(self, article_id: str, district: str, settlement: str, region: str) -> List[Dict]:
+    async def _find_settlement_page(self, settlement: str, district: str) -> Optional[str]:
+        """
+        Находит страницу с бывшими населенными пунктами для сельского поселения
+        """
+        cache_key = f"settlement_page_{district}_{settlement}"
+        if cache_key in self.settlement_pages_cache:
+            return self.settlement_pages_cache[cache_key]
+        
+        # Варианты поисковых запросов для СП
+        queries = [
+            f"Список бывших населённых пунктов на территории сельского поселения {settlement} {district} района",
+            f"Список бывших населенных пунктов на территории сельского поселения {settlement} {district} района",
+            f"Список бывших населённых пунктов {settlement} {district} района",
+            f"Бывшие населённые пункты {settlement} СП",
+            f"Список бывших населённых пунктов {settlement} сельского поселения",
+            f"{settlement} сельское поселение бывшие населенные пункты"
+        ]
+        
+        all_results = []
+        
+        for query in queries:
+            results = await self._search_with_pagination(query, max_pages=2)
+            all_results.extend(results)
+        
+        if not all_results:
+            return None
+        
+        # Оцениваем релевантность
+        for result in all_results:
+            score = self._score_settlement_relevance(result, settlement, district)
+            result['score'] = score
+        
+        # Берем лучший результат
+        best = max(all_results, key=lambda x: x['score'])
+        
+        if best['score'] >= 40:
+            logger.info(f"      Найдена страница для СП {settlement} (ID: {best['id']}, score: {best['score']})")
+            self.settlement_pages_cache[cache_key] = best['id']
+            return best['id']
+        
+        return None
+    
+    def _score_settlement_relevance(self, result: Dict, settlement: str, district: str) -> int:
+        """
+        Оценивает релевантность результата для страницы сельского поселения
+        """
+        title_lower = result['title'].lower()
+        full_text_lower = result['full_text'].lower()
+        settlement_lower = settlement.lower()
+        district_lower = district.lower()
+        
+        score = 0
+        
+        # 1. Название содержит название СП
+        if settlement_lower in title_lower:
+            score += 50
+        
+        # 2. В названии есть ключевые слова
+        if "список бывших" in title_lower:
+            score += 40
+        elif "бывшие населённые" in title_lower:
+            score += 30
+        
+        # 3. Упоминание района
+        if district_lower in title_lower or district_lower in full_text_lower:
+            score += 20
+        
+        # 4. Упоминание сельского поселения
+        if "сельское поселение" in title_lower or "сельского поселения" in title_lower:
+            score += 25
+        
+        # 5. Приоритет первым результатам
+        if result['position'] == 1:
+            score += 15
+        elif result['position'] <= 3:
+            score += 10
+        
+        return score
+    
+    async def _parse_settlement_page(self, article_id: str, district: str, settlement: str) -> List[Dict]:
         """
         Парсит страницу с бывшими населенными пунктами сельского поселения
         """
@@ -387,11 +599,10 @@ class APISourceManager:
             html,
             article_id,
             district,
-            settlement,
-            region
+            settlement
         )
     
-    def _parse_settlement_page_html(self, html: str, article_id: str, district: str, settlement: str, region: str) -> List[Dict]:
+    def _parse_settlement_page_html(self, html: str, article_id: str, district: str, settlement: str) -> List[Dict]:
         """
         Парсит HTML страницы с бывшими НП сельского поселения
         """
@@ -399,7 +610,7 @@ class APISourceManager:
             soup = BeautifulSoup(html, 'html.parser')
             results = []
             
-            # Ищем таблицу с данными (как на странице Есинки)
+            # Ищем таблицу с данными
             tables = soup.find_all('table', class_=['standard', 'sortable'])
             
             for table in tables:
@@ -451,7 +662,6 @@ class APISourceManager:
                             "source": f"dic.academic.ru (ID: {article_id})",
                             "district": district,
                             "settlement": settlement,
-                            "region": region,
                             "status": "abandoned",
                             "notes": f"<i>Источник: dic.academic.ru, {settlement} СП</i>"
                         })
@@ -479,71 +689,39 @@ class APISourceManager:
         }
         
         # Шаг 1: Находим страницу района
-        district_info = await self._get_district_page(district)
+        district_info = await self._find_district_page(district)
         
         if not district_info:
             logger.warning(f"  ⚠️ Страница района не найдена")
             return results
         
-        results['region'] = district_info.get('region', 'Тверская область')
+        # Шаг 2: Извлекаем список сельских поселений
+        settlements = await self._extract_settlements(district_info['id'], district)
         
-        # Шаг 2: Парсим все найденные ссылки на списки НП
-        for link in district_info.get('list_links', []):
-            try:
-                logger.info(f"  🔍 Парсинг списка: {link['title']}")
-                
-                # Определяем тип списка
-                if 'бывших' in link['title'].lower():
-                    # Это список бывших НП
-                    data = await self._parse_settlement_page(
-                        link['id'], 
-                        district, 
-                        "общий список", 
-                        results['region']
-                    )
-                    
-                    if data:
-                        results["sources"][f"Список бывших НП"] = len(data)
-                        results["total"].extend(data)
-                        logger.info(f"    ✅ Найдено бывших НП: {len(data)}")
-                
-            except Exception as e:
-                logger.error(f"    ❌ Ошибка парсинга списка: {e}")
+        if not settlements:
+            logger.warning(f"  ⚠️ Сельские поселения не найдены на странице района")
+            return results
         
-        # Шаг 3: Ищем страницы для каждого сельского поселения
-        settlements = district_info.get('settlements', [])
+        # Шаг 3: Для каждого сельского поселения ищем страницу с бывшими НП
         logger.info(f"  🔍 Поиск страниц для {len(settlements)} сельских поселений...")
         
         for settlement in settlements:
             try:
-                # Формируем поисковые запросы для СП
-                search_queries = [
-                    f"Список бывших населённых пунктов на территории сельского поселения {settlement} {district} района",
-                    f"Список бывших населенных пунктов на территории сельского поселения {settlement} {district} района",
-                    f"Список бывших населённых пунктов {settlement} {district} района",
-                    f"Бывшие населённые пункты {settlement} СП"
-                ]
+                # Ищем страницу СП
+                article_id = await self._find_settlement_page(settlement, district)
                 
-                found = False
-                for query in search_queries:
-                    article_id = await self._search_article(query)
-                    if article_id:
-                        # Парсим страницу СП
-                        data = await self._parse_settlement_page(
-                            article_id,
-                            district,
-                            settlement,
-                            results['region']
-                        )
-                        
-                        if data:
-                            results["settlements"][settlement] = len(data)
-                            results["total"].extend(data)
-                            logger.info(f"    ✅ СП {settlement}: {len(data)} записей")
-                            found = True
-                            break
-                
-                if not found:
+                if article_id:
+                    # Парсим страницу СП
+                    data = await self._parse_settlement_page(article_id, district, settlement)
+                    
+                    if data:
+                        results["settlements"][settlement] = len(data)
+                        results["total"].extend(data)
+                        logger.info(f"    ✅ СП {settlement}: {len(data)} записей")
+                    else:
+                        logger.info(f"    ⏭️ СП {settlement}: страница найдена, но нет данных")
+                        results["settlements"][settlement] = 0
+                else:
                     logger.info(f"    ⏭️ СП {settlement}: страница не найдена")
                     results["settlements"][settlement] = 0
                     
