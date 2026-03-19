@@ -1,7 +1,6 @@
 # api_sources.py
 # Универсальный парсер для всех районов через dic.academic.ru
-# Версия с раздельным поиском страниц бывших НП и страниц СП
-# Улучшенной фильтрацией и увеличенным временем обработки
+# Версия с правильным поиском страниц бывших НП и исправленной дедупликацией
 
 import aiohttp
 import asyncio
@@ -120,7 +119,7 @@ MAX_NAME_LENGTH = 50
 class APISourceManager:
     """
     Универсальный менеджер для загрузки данных из dic.academic.ru
-    С раздельным поиском страниц бывших НП и страниц СП
+    С правильным поиском страниц бывших НП и исправленной дедупликацией
     """
     
     def __init__(self):
@@ -132,14 +131,14 @@ class APISourceManager:
         self.last_request_time = 0
         self.min_request_interval = 1.5
         
-        # Кэш для найденных ID
-        self.article_cache: Dict[str, str] = {}  # запрос -> ID статьи
-        self.district_cache: Dict[str, Dict] = {}  # район -> информация о районе
-        self.former_np_pages_cache: Dict[str, str] = {}  # название СП -> ID страницы бывших НП
-        self.settlement_pages_cache: Dict[str, str] = {}  # название СП -> ID основной страницы СП
-        self.page_cache: Dict[str, Tuple[str, float]] = {}  # URL -> (HTML, timestamp)
-        self.processed_article_ids: Set[str] = set()  # уже обработанные ID статей
-        self.village_article_ids: Dict[str, str] = {}  # название НП -> ID статьи для поиска координат
+        # Кэш для найденных ID (будет очищаться при каждом новом поиске)
+        self.article_cache: Dict[str, str] = {}
+        self.district_cache: Dict[str, Dict] = {}
+        self.former_np_pages_cache: Dict[str, str] = {}
+        self.settlement_pages_cache: Dict[str, str] = {}
+        self.page_cache: Dict[str, Tuple[str, float]] = {}
+        self.processed_article_ids: Set[str] = set()
+        self.village_article_ids: Dict[str, str] = {}
         
         # Время жизни кэша
         self.cache_ttl = 3600
@@ -166,10 +165,21 @@ class APISourceManager:
         return self.session
     
     async def close_session(self):
-        """Закрывает HTTP сессию"""
+        """Закрывает HTTP сессию и очищает кэш"""
         if self.session and not self.session.closed:
             await self.session.close()
         self.thread_pool.shutdown(wait=False)
+    
+    def clear_cache(self):
+        """Очищает все кэши перед новым поиском"""
+        self.article_cache.clear()
+        self.district_cache.clear()
+        self.former_np_pages_cache.clear()
+        self.settlement_pages_cache.clear()
+        self.page_cache.clear()
+        self.processed_article_ids.clear()
+        self.village_article_ids.clear()
+        logger.info("🧹 Кэш очищен для нового поиска")
     
     async def _rate_limit(self):
         """Соблюдение rate limiting с случайной вариацией"""
@@ -402,12 +412,6 @@ class APISourceManager:
         if name.isdigit():
             return False
         
-        # Должно начинаться с заглавной буквы (для настоящих названий)
-        if name and name[0].isalpha() and not name[0].isupper():
-            # Если первая буква строчная, это скорее всего служебное слово
-            if name_lower not in ['есинка', 'итомля', 'медведево', 'победа', 'успенское', 'хорошево', 'чертолино', 'шолохово']:
-                return False
-        
         return True
     
     async def _find_district_page(self, district: str) -> Optional[Dict]:
@@ -568,15 +572,8 @@ class APISourceManager:
             # Удаляем дубликаты и сортируем
             unique_settlements = sorted(list(set(found_settlements)))
             
-            # Фильтруем только настоящие СП (названия из известного списка или с правильными окончаниями)
-            real_settlements = []
-            for s in unique_settlements:
-                # Проверяем, что это не служебное слово
-                if s.lower() not in ['историческая справка', 'экономическая справка', 'география', 'история']:
-                    real_settlements.append(s)
-            
-            logger.info(f"    Найдено сельских поселений: {len(real_settlements)}")
-            return real_settlements
+            logger.info(f"    Найдено сельских поселений: {len(unique_settlements)}")
+            return unique_settlements
             
         except Exception as e:
             logger.error(f"Ошибка парсинга сельских поселений: {e}")
@@ -611,8 +608,8 @@ class APISourceManager:
         for result in all_results:
             # Для страниц бывших НП приоритет выше, если в названии есть "список бывших"
             title_lower = result['title'].lower()
-            if "список бывших" in title_lower:
-                result['score'] = 150  # Высокий приоритет
+            if "список бывших" in title_lower and settlement.lower() in title_lower:
+                result['score'] = 150
             else:
                 result['score'] = self._score_settlement_relevance(result, settlement, district)
         
@@ -659,7 +656,7 @@ class APISourceManager:
         
         best = max(all_results, key=lambda x: x['score'])
         
-        if best['score'] >= 40 and best['id'] != await self._find_former_np_page(settlement, district):
+        if best['score'] >= 40:
             logger.info(f"      Найдена основная страница СП {settlement} (ID: {best['id']}, score: {best['score']})")
             self.settlement_pages_cache[cache_key] = best['id']
             return best['id']
@@ -776,7 +773,7 @@ class APISourceManager:
                             "lat": str(round(lat, 5)) if lat else "",
                             "lon": str(round(lon, 5)) if lon else "",
                             "district": district,
-                            "has_coords": bool(lat)  # пометка для приоритета
+                            "has_coords": bool(lat)
                         })
                         
                     except Exception as e:
@@ -919,9 +916,8 @@ class APISourceManager:
                         match = re.search(r'/dic\.nsf/ruwiki/(\d+)', href)
                         if match:
                             article_id = match.group(1)
-                            if article_id not in self.processed_article_ids:
-                                found_ids.append(article_id)
-                                logger.info(f"      Найдена ссылка на список НП: ID {article_id} - {link.get_text()}")
+                            found_ids.append(article_id)
+                            logger.info(f"      Найдена ссылка на список НП: ID {article_id} - {link.get_text()}")
                             break
             
             see_also_patterns = ['см. также', 'смотри также', 'см также']
@@ -939,7 +935,7 @@ class APISourceManager:
                                     match = re.search(r'/dic\.nsf/ruwiki/(\d+)', href)
                                     if match:
                                         article_id = match.group(1)
-                                        if article_id not in found_ids and article_id not in self.processed_article_ids:
+                                        if article_id not in found_ids:
                                             found_ids.append(article_id)
                                             logger.info(f"      Найдена ссылка на список НП в 'См. также': ID {article_id} - {link.get_text()}")
                                         break
@@ -1149,17 +1145,16 @@ class APISourceManager:
     async def fetch_district_data(self, district: str) -> List[Dict]:
         """
         Основной метод: загружает данные для конкретного района
-        С раздельным поиском страниц бывших НП и страниц СП
-        Увеличенное время обработки
+        С правильным поиском страниц бывших НП и исправленной дедупликацией
         """
+        # Очищаем кэш перед новым поиском
+        self.clear_cache()
         self.start_time = time.time()
         logger.info(f"🌐 Загрузка данных для района: {district}")
         
         all_villages = []
         processed_master_lists = set()
-        seen_villages: Dict[str, Dict] = {}  # Для умной дедупликации: ключ -> лучшая запись
-        self.processed_article_ids.clear()
-        self.village_article_ids.clear()
+        seen_villages: Dict[str, Dict] = {}  # Для дедупликации: ключ -> лучшая запись
         
         # Шаг 1: Находим страницу района
         district_info = await self._find_district_page(district)
@@ -1181,103 +1176,121 @@ class APISourceManager:
         else:
             logger.warning(f"  ⚠️ Сельские поселения не найдены на странице района")
         
-        # Шаг 3: Для каждого сельского поселения ищем страницы
-        processed_count = 0
+        # Шаг 3: Ищем общие списки на странице района
+        if district_html:
+            master_list_ids = await self._find_master_list_links(district_html, district)
+            for list_id in master_list_ids:
+                if list_id not in processed_master_lists and list_id not in self.processed_article_ids:
+                    processed_master_lists.add(list_id)
+                    self.processed_article_ids.add(list_id)
+                    logger.info(f"  🔍 Обрабатываем общий список ID {list_id}")
+                    
+                    list_data = await self._parse_master_list_page(list_id, district)
+                    
+                    for village in list_data:
+                        key = f"{village['name']}_{village['district']}"
+                        if key not in seen_villages:
+                            seen_villages[key] = village
+                        else:
+                            existing = seen_villages[key]
+                            if not existing.get('has_coords') and village.get('has_coords'):
+                                seen_villages[key] = village
+                    
+                    logger.info(f"    Из общего списка добавлено {len(list_data)} записей")
+        
+        # Шаг 4: Для каждого сельского поселения ищем страницы
         for settlement in settlements:
             try:
                 elapsed = time.time() - self.start_time
-                # Увеличено время до 650 секунд
                 if elapsed > 650:
-                    logger.warning(f"  ⏱️ Время выполнения {elapsed:.1f}с, осталось мало времени. Прерываем обработку СП.")
+                    logger.warning(f"  ⏱️ Время выполнения {elapsed:.1f}с, прерываем обработку СП")
                     break
                 
                 await asyncio.sleep(1.5)
                 
-                # Сначала ищем страницу с бывшими НП (там координаты)
+                # Ищем страницу с бывшими НП
                 former_np_id = await self._find_former_np_page(settlement, district)
                 
                 if former_np_id and former_np_id not in self.processed_article_ids:
                     self.processed_article_ids.add(former_np_id)
                     former_np_data = await self._parse_former_np_page(former_np_id, district, settlement)
                     
-                    former_new_count = 0
+                    former_new = 0
                     for village in former_np_data:
                         key = f"{village['name']}_{village['district']}"
-                        
                         if key not in seen_villages:
                             seen_villages[key] = village
-                            former_new_count += 1
+                            former_new += 1
                         else:
                             existing = seen_villages[key]
-                            # Приоритет записям с координатами
                             if not existing.get('has_coords') and village.get('has_coords'):
                                 seen_villages[key] = village
-                                former_new_count += 1
+                                former_new += 1
                     
-                    if former_new_count > 0:
-                        logger.info(f"    ✅ СП {settlement}: добавлено {former_new_count} записей из списка бывших НП")
+                    if former_new > 0:
+                        logger.info(f"    ✅ СП {settlement}: добавлено {former_new} записей из списка бывших НП")
                 
-                # Затем ищем основную страницу СП (для поиска текущих НП и ссылок)
+                # Ищем основную страницу СП
                 main_page_id = await self._find_settlement_main_page(settlement, district)
                 
                 if main_page_id and main_page_id not in self.processed_article_ids:
                     self.processed_article_ids.add(main_page_id)
                     main_page_data = await self._parse_settlement_main_page(main_page_id, district, settlement)
                     
-                    main_new_count = 0
+                    main_new = 0
                     for village in main_page_data:
                         key = f"{village['name']}_{village['district']}"
                         
-                        # Сохраняем ID статьи для последующего поиска координат
                         if village.get('article_id'):
                             self.village_article_ids[village['name']] = village['article_id']
                         
-                        # Удаляем временное поле article_id перед сохранением
                         village_copy = village.copy()
                         village_copy.pop('article_id', None)
                         
                         if key not in seen_villages:
                             seen_villages[key] = village_copy
-                            main_new_count += 1
+                            main_new += 1
                         else:
                             existing = seen_villages[key]
                             if not existing.get('has_coords') and village_copy.get('has_coords'):
                                 seen_villages[key] = village_copy
-                                main_new_count += 1
+                                main_new += 1
                     
-                    if main_new_count > 0:
-                        logger.info(f"    ✅ СП {settlement}: добавлено {main_new_count} записей из раздела 'Населенные пункты'")
+                    if main_new > 0:
+                        logger.info(f"    ✅ СП {settlement}: добавлено {main_new} записей из раздела 'Населенные пункты'")
                 
-                # Ищем ссылки на дополнительные списки на странице бывших НП (если есть)
+                # Ищем ссылки на дополнительные списки
                 if former_np_id:
                     former_np_url = DIC_ACADEMIC_ARTICLE_URL.format(former_np_id)
                     former_np_html = await self._fetch_page(former_np_url)
                     
                     if former_np_html:
-                        master_list_ids = await self._find_master_list_links(former_np_html, district)
+                        additional_list_ids = await self._find_master_list_links(former_np_html, district)
                         
-                        for list_id in master_list_ids:
+                        for list_id in additional_list_ids:
                             if list_id not in processed_master_lists and list_id not in self.processed_article_ids:
-                                processed_master_lists.add(list_id)
-                                self.processed_article_ids.add(list_id)
-                                logger.info(f"      Обрабатываем дополнительный список ID {list_id}")
-                                
-                                list_data = await self._parse_master_list_page(list_id, district)
-                                
-                                list_new = 0
-                                for village in list_data:
-                                    key = f"{village['name']}_{village['district']}"
+                                # Проверяем, что список относится к нужному району
+                                list_info = await self._get_article_info(list_id)
+                                if list_info and district.lower() in list_info.get('title', '').lower():
+                                    processed_master_lists.add(list_id)
+                                    self.processed_article_ids.add(list_id)
+                                    logger.info(f"      Обрабатываем дополнительный список ID {list_id}")
                                     
-                                    if key not in seen_villages:
-                                        seen_villages[key] = village
-                                        list_new += 1
-                                    else:
-                                        existing = seen_villages[key]
-                                        if not existing.get('has_coords') and village.get('has_coords'):
+                                    list_data = await self._parse_master_list_page(list_id, district)
+                                    
+                                    list_new = 0
+                                    for village in list_data:
+                                        key = f"{village['name']}_{village['district']}"
+                                        if key not in seen_villages:
                                             seen_villages[key] = village
                                             list_new += 1
-                                
-                                logger.info(f"        Добавлено {list_new} новых записей из списка")
+                                        else:
+                                            existing = seen_villages[key]
+                                            if not existing.get('has_coords') and village.get('has_coords'):
+                                                seen_villages[key] = village
+                                                list_new += 1
+                                    
+                                    logger.info(f"        Добавлено {list_new} новых записей из дополнительного списка")
                 
             except Exception as e:
                 logger.error(f"    ❌ Ошибка обработки СП {settlement}: {e}")
@@ -1285,7 +1298,7 @@ class APISourceManager:
         # Преобразуем словарь seen_villages в список
         all_villages = list(seen_villages.values())
         
-        # Шаг 4: Ищем координаты для записей без них
+        # Шаг 5: Ищем координаты для записей без них
         if all_villages:
             logger.info(f"  🔍 Поиск координат для записей без них...")
             
@@ -1294,14 +1307,13 @@ class APISourceManager:
             if villages_without_coords:
                 logger.info(f"    Найдено {len(villages_without_coords)} записей без координат")
                 
-                # Сначала пробуем использовать сохраненные ID из страниц СП
+                # Сначала пробуем использовать сохраненные ID
                 coords_found = 0
                 for village in villages_without_coords[:]:
                     try:
                         if village['name'] in self.village_article_ids:
                             article_id = self.village_article_ids[village['name']]
                             if article_id not in self.processed_article_ids:
-                                logger.info(f"      Поиск координат для {village['name']} по сохраненному ID {article_id}")
                                 village_data = await self._parse_individual_village_page(article_id, district)
                                 
                                 if village_data and village_data.get('has_coords'):
@@ -1322,7 +1334,7 @@ class APISourceManager:
                 # Обновляем список записей без координат
                 villages_without_coords = [v for v in all_villages if not v.get('has_coords')]
                 
-                # Затем ищем через поиск для оставшихся
+                # Ищем через поиск для оставшихся
                 if villages_without_coords:
                     logger.info(f"    Осталось {len(villages_without_coords)} записей, ищем через поиск")
                     
@@ -1333,7 +1345,6 @@ class APISourceManager:
                     for i, village in enumerate(villages_without_coords[:limit]):
                         try:
                             elapsed = time.time() - self.start_time
-                            # Увеличено до 700 секунд
                             if elapsed > 700:
                                 logger.warning(f"    ⏱️ Время выполнения {elapsed:.1f}с, прерываем поиск координат")
                                 break
@@ -1381,6 +1392,25 @@ class APISourceManager:
         logger.info(f"  ⏱️ Общее время обработки: {total_time:.1f} секунд")
         
         return all_villages
+    
+    async def _get_article_info(self, article_id: str) -> Optional[Dict]:
+        """
+        Получает информацию о статье по ID
+        """
+        url = DIC_ACADEMIC_ARTICLE_URL.format(article_id)
+        html = await self._fetch_page(url)
+        
+        if not html:
+            return None
+        
+        soup = BeautifulSoup(html, 'html.parser')
+        title_elem = soup.find('h1')
+        title = title_elem.get_text().strip() if title_elem else ""
+        
+        return {
+            'id': article_id,
+            'title': title
+        }
     
     def _find_column_index(self, headers: List[str], possible_names: List[str]) -> Optional[int]:
         """Находит индекс колонки по возможным названиям"""
