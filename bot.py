@@ -992,15 +992,12 @@ def generate_simple_txt_from_data(data: List[Dict], filename: str) -> str:
     
     file_path = os.path.join(export_dir, filename)
     
-    # Заголовки на русском
     headers = ['Название', 'Тип', 'Широта', 'Долгота', 'Район']
     
     try:
         with open(file_path, 'w', encoding='cp1251', newline='') as f:
-            # Записываем заголовки через табуляцию
             f.write('\t'.join(headers) + '\n')
             
-            # Записываем данные
             for item in data:
                 row = [
                     item.get('name', ''),
@@ -1384,7 +1381,6 @@ async def download_villages_txt(callback: CallbackQuery):
     """Отправляет текущий каталог в формате TXT"""
     if os.path.exists(village_db.csv_path) and village_db.stats['total'] > 0:
         try:
-            # Конвертируем CSV в простой TXT
             with open(village_db.csv_path, 'r', encoding='utf-8') as f:
                 reader = csv.DictReader(f)
                 data = list(reader)
@@ -1435,17 +1431,17 @@ async def download_from_web_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(SearchStates.waiting_for_district_select)
     await callback.answer()
 
-# ОБРАБОТЧИК ВЫБОРА РАЙОНА
 @dp.callback_query(lambda c: c.data.startswith("select_district_"))
 async def process_district_select(callback: CallbackQuery, state: FSMContext):
-    """Обрабатывает выбор района"""
+    """Обрабатывает выбор района с увеличенным таймаутом"""
     district = callback.data.replace("select_district_", "")
     
     await state.update_data(selected_district=district)
     
     await callback.message.edit_text(
         f"⏳ <b>Загрузка данных для {district} района...</b>\n\n"
-        f"Это может занять до 2-3 минут. Я сообщу, когда данные будут готовы.",
+        f"Это может занять до 5-7 минут. Я сообщу, когда данные будут готовы.\n"
+        f"Бот ищет максимальное количество информации: страницы района, сельских поселений, списки населенных пунктов и координаты.",
         parse_mode="HTML"
     )
     
@@ -1454,10 +1450,9 @@ async def process_district_select(callback: CallbackQuery, state: FSMContext):
     try:
         api_manager = APISourceManager()
         
-        # Загружаем данные
         villages = await asyncio.wait_for(
             api_manager.fetch_district_data(district),
-            timeout=180.0  # Увеличиваем таймаут до 3 минут
+            timeout=420.0
         )
         
         await api_manager.close_session()
@@ -1475,7 +1470,6 @@ async def process_district_select(callback: CallbackQuery, state: FSMContext):
         stats_text += f"• С координатами: {with_coords}\n"
         stats_text += f"• Без координат: {len(villages) - with_coords}\n"
         
-        # Создаем CSV файл (внутренний)
         timestamp = time.strftime('%Y%m%d_%H%M%S')
         temp_dir = "data/temp"
         os.makedirs(temp_dir, exist_ok=True)
@@ -1487,7 +1481,6 @@ async def process_district_select(callback: CallbackQuery, state: FSMContext):
             writer.writeheader()
             writer.writerows(villages)
         
-        # Создаем TXT файл для скачивания
         txt_filename = f"населенные_пункты_{district}_{timestamp}.txt"
         txt_path = generate_simple_txt_from_data(villages, txt_filename)
         
@@ -1497,7 +1490,6 @@ async def process_district_select(callback: CallbackQuery, state: FSMContext):
             txt_filename=txt_filename
         )
         
-        # Показываем меню выбора действия
         await callback.message.edit_text(
             f"✅ <b>Данные для {district} района загружены!</b>\n\n"
             f"{stats_text}\n\n"
@@ -1511,7 +1503,7 @@ async def process_district_select(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text(
             "❌ <b>Ошибка загрузки</b>\n\n"
             "Превышено время ожидания ответа от серверов.\n"
-            "Попробуйте позже.",
+            "Попробуйте позже или выберите другой район.",
             parse_mode="HTML",
             reply_markup=back_to_settings_keyboard()
         )
@@ -1526,7 +1518,6 @@ async def process_district_select(callback: CallbackQuery, state: FSMContext):
         if 'api_manager' in locals():
             await api_manager.close_session()
 
-# ОБРАБОТЧИК ВЫБОРА ДЕЙСТВИЯ С ДАННЫМИ
 @dp.callback_query(lambda c: c.data.startswith("merge_"))
 async def process_merge_action(callback: CallbackQuery, state: FSMContext):
     """Обрабатывает выбор действия с загруженными данными"""
@@ -1552,7 +1543,6 @@ async def process_merge_action(callback: CallbackQuery, state: FSMContext):
         return
     
     elif action == "download":
-        # Отправляем TXT файл
         if temp_txt and os.path.exists(temp_txt):
             document = FSInputFile(temp_txt, filename=data.get('txt_filename', 'result.txt'))
             await callback.message.answer_document(
@@ -1578,17 +1568,10 @@ async def show_detailed_stats(callback: CallbackQuery, state: FSMContext, data: 
     
     with_coords = sum(1 for v in data if v.get('lat') and v.get('lon'))
     
-    # Статистика по типам
     type_stats = {}
     for v in data:
         t = v.get('type', 'неизвестно')
         type_stats[t] = type_stats.get(t, 0) + 1
-    
-    # Статистика по районам
-    district_stats = {}
-    for v in data:
-        dist = v.get('district', 'неизвестно')
-        district_stats[dist] = district_stats.get(dist, 0) + 1
     
     text = (
         f"📊 <b>Детальная статистика</b>\n\n"
@@ -1634,7 +1617,6 @@ async def perform_replace_catalog(callback: CallbackQuery, state: FSMContext,
         
         stats = village_db.replace_with_catalog(csv_content, f"internet_{district}_catalog.csv")
         
-        # Удаляем временные файлы
         os.unlink(temp_csv)
         temp_txt = (await state.get_data()).get('temp_txt')
         if temp_txt and os.path.exists(temp_txt):
@@ -1693,7 +1675,6 @@ async def perform_append_catalog(callback: CallbackQuery, state: FSMContext,
             else:
                 for i, existing in enumerate(existing_villages):
                     if existing['name'] == name:
-                        # Если у существующей нет координат, а у новой есть - обновляем
                         if (not existing.get('lat') or not existing.get('lon') or 
                             not existing['lat'].strip() or not existing['lon'].strip()) and \
                            (new_village.get('lat') and new_village.get('lon') and 
@@ -1720,7 +1701,6 @@ async def perform_append_catalog(callback: CallbackQuery, state: FSMContext,
         village_db.stats['last_update'] = time.strftime('%Y-%m-%d %H:%M:%S')
         village_db.stats['source_file'] = f"appended_{district}_catalog.csv"
         
-        # Удаляем временные файлы
         os.unlink(temp_csv)
         temp_txt = (await state.get_data()).get('temp_txt')
         if temp_txt and os.path.exists(temp_txt):
@@ -1755,7 +1735,6 @@ async def perform_append_catalog(callback: CallbackQuery, state: FSMContext,
     
     await callback.answer()
 
-# Дополнительные обработчики для навигации
 @dp.callback_query(lambda c: c.data == "merge_back_to_action")
 async def merge_back_to_action(callback: CallbackQuery, state: FSMContext):
     """Возврат к выбору действия"""
@@ -1819,7 +1798,6 @@ async def merge_download_continue(callback: CallbackQuery, state: FSMContext):
     else:
         await callback.message.answer("❌ Файл для скачивания не найден.")
     
-    # Возвращаемся к меню выбора действия
     await merge_back_to_action(callback, state)
 
 @dp.callback_query(lambda c: c.data == "generate_catalog")
@@ -1864,7 +1842,6 @@ async def generate_catalog_confirm(callback: CallbackQuery):
     try:
         stats = village_db.generate_full_catalog()
         
-        # Создаем TXT версию для скачивания
         with open(stats['file_path'], 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
             data = list(reader)
@@ -1890,7 +1867,6 @@ async def generate_catalog_confirm(callback: CallbackQuery):
             [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_settings")]
         ])
         
-        # Сохраняем путь к TXT в состоянии
         temp_state = FSMContext(storage, callback.from_user.id, callback.from_user.id)
         await temp_state.update_data(generated_txt=txt_path)
         
@@ -1958,7 +1934,6 @@ async def download_generated_txt(callback: CallbackQuery, state: FSMContext):
             parse_mode="HTML"
         )
     else:
-        # Пробуем создать из CSV
         file_path = "data/export/villages_full.csv"
         if os.path.exists(file_path):
             try:
