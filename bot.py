@@ -545,6 +545,7 @@ class VillageDatabase:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
             
+            # Сортируем по алфавиту
             sorted_entries = sorted(all_entries, key=lambda x: x['name'])
             for entry in sorted_entries:
                 row = {
@@ -1003,9 +1004,13 @@ def generate_simple_txt_from_data(data: List[Dict], filename: str) -> str:
     """
     Генерирует простой TXT файл только с нужными колонками
     Формат: Название | Тип | Широта | Долгота | Район
+    Сортировка по названию
     """
     # Очищаем данные от служебных полей
     cleaned_data = clean_village_data(data)
+    
+    # СОРТИРУЕМ ПО АЛФАВИТУ
+    cleaned_data.sort(key=lambda x: x['name'])
     
     export_dir = "data/export"
     os.makedirs(export_dir, exist_ok=True)
@@ -1451,18 +1456,18 @@ async def download_from_web_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(SearchStates.waiting_for_district_select)
     await callback.answer()
 
-# ========== ОБРАБОТЧИК ВЫБОРА РАЙОНА С ТАЙМАУТОМ 12 МИНУТ ==========
+# ========== ОБНОВЛЕННЫЙ ОБРАБОТЧИК ВЫБОРА РАЙОНА С ТАЙМАУТОМ 1200 СЕКУНД ==========
 
 @dp.callback_query(lambda c: c.data.startswith("select_district_"))
 async def process_district_select(callback: CallbackQuery, state: FSMContext):
-    """Обрабатывает выбор района с увеличенным таймаутом до 12 минут"""
+    """Обрабатывает выбор района с увеличенным таймаутом до 1200 секунд (20 минут)"""
     district = callback.data.replace("select_district_", "")
     
     await state.update_data(selected_district=district)
     
     await callback.message.edit_text(
         f"⏳ <b>Загрузка данных для {district} района...</b>\n\n"
-        f"Это может занять до 10-12 минут. Я сообщу, когда данные будут готовы.\n"
+        f"Это может занять до 15-20 минут. Я сообщу, когда данные будут готовы.\n"
         f"Бот ищет максимальное количество информации:\n"
         f"• страницы района\n"
         f"• сельские поселения\n"
@@ -1478,10 +1483,10 @@ async def process_district_select(callback: CallbackQuery, state: FSMContext):
     try:
         api_manager = APISourceManager()
         
-        # Увеличиваем общий таймаут до 720 секунд (12 минут)
+        # Увеличиваем общий таймаут до 1200 секунд (20 минут)
         villages = await asyncio.wait_for(
             api_manager.fetch_district_data(district),
-            timeout=720.0
+            timeout=1200.0
         )
         
         await api_manager.close_session()
@@ -1523,7 +1528,7 @@ async def process_district_select(callback: CallbackQuery, state: FSMContext):
             writer.writeheader()
             writer.writerows(cleaned_villages)
         
-        # Создаем TXT файл для скачивания
+        # Создаем TXT файл для скачивания (уже с сортировкой)
         txt_filename = f"населенные_пункты_{district}_{timestamp}.txt"
         txt_path = generate_simple_txt_from_data(cleaned_villages, txt_filename)
         
@@ -1546,7 +1551,7 @@ async def process_district_select(callback: CallbackQuery, state: FSMContext):
         logger.error("Таймаут при загрузке данных")
         await callback.message.edit_text(
             "❌ <b>Ошибка загрузки</b>\n\n"
-            "Превышено время ожидания ответа от серверов (12 минут).\n"
+            "Превышено время ожидания ответа от серверов (20 минут).\n"
             "Это может быть связано с:\n"
             "• большой нагрузкой на сервер dic.academic.ru\n"
             "• медленным интернет-соединением\n"
@@ -2291,7 +2296,7 @@ async def main() -> None:
     logger.info("🚀 Бот для поиска аэрофотоснимков запускается...")
     logger.info(f"📊 Загружено локаций: {len(db.locations)}")
     logger.info(f"📊 Уникальных деревень: {len(db.all_villages)}")
-    logger.info(f"📊 Описаний снимков: {len(db.photo_details)}")
+    logger.info(f"📊 Описаний снимков: {len(self.photo_details)}")
     logger.info(f"📊 Населенных пунктов в каталоге: {village_db.stats['total']}")
     logger.info(f"✅ Яндекс.Диск токен загружен")
     await delete_webhook()
