@@ -982,11 +982,31 @@ db = PhotosDatabase()
 
 # ========== ФУНКЦИИ ДЛЯ РАБОТЫ С TXT ФАЙЛАМИ ==========
 
+def clean_village_data(villages: List[Dict]) -> List[Dict]:
+    """
+    Очищает данные от служебных полей (has_coords, article_id и т.д.)
+    Оставляет только поля для сохранения: name, type, lat, lon, district
+    """
+    cleaned = []
+    for v in villages:
+        cleaned_village = {
+            'name': v.get('name', ''),
+            'type': v.get('type', ''),
+            'lat': v.get('lat', ''),
+            'lon': v.get('lon', ''),
+            'district': v.get('district', '')
+        }
+        cleaned.append(cleaned_village)
+    return cleaned
+
 def generate_simple_txt_from_data(data: List[Dict], filename: str) -> str:
     """
     Генерирует простой TXT файл только с нужными колонками
     Формат: Название | Тип | Широта | Долгота | Район
     """
+    # Очищаем данные от служебных полей
+    cleaned_data = clean_village_data(data)
+    
     export_dir = "data/export"
     os.makedirs(export_dir, exist_ok=True)
     
@@ -998,7 +1018,7 @@ def generate_simple_txt_from_data(data: List[Dict], filename: str) -> str:
         with open(file_path, 'w', encoding='cp1251', newline='') as f:
             f.write('\t'.join(headers) + '\n')
             
-            for item in data:
+            for item in cleaned_data:
                 row = [
                     item.get('name', ''),
                     item.get('type', ''),
@@ -1431,7 +1451,7 @@ async def download_from_web_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(SearchStates.waiting_for_district_select)
     await callback.answer()
 
-# ========== ОБНОВЛЕННЫЙ ОБРАБОТЧИК ВЫБОРА РАЙОНА С ТАЙМАУТОМ 12 МИНУТ ==========
+# ========== ОБРАБОТЧИК ВЫБОРА РАЙОНА С ТАЙМАУТОМ 12 МИНУТ ==========
 
 @dp.callback_query(lambda c: c.data.startswith("select_district_"))
 async def process_district_select(callback: CallbackQuery, state: FSMContext):
@@ -1466,18 +1486,30 @@ async def process_district_select(callback: CallbackQuery, state: FSMContext):
         
         await api_manager.close_session()
         
+        # Очищаем данные от служебных полей перед сохранением
+        cleaned_villages = []
+        for v in villages:
+            cleaned_village = {
+                'name': v.get('name', ''),
+                'type': v.get('type', ''),
+                'lat': v.get('lat', ''),
+                'lon': v.get('lon', ''),
+                'district': v.get('district', '')
+            }
+            cleaned_villages.append(cleaned_village)
+        
         await state.update_data(
-            downloaded_data=villages,
-            total_count=len(villages),
-            with_coords=sum(1 for v in villages if v.get('lat'))
+            downloaded_data=cleaned_villages,
+            total_count=len(cleaned_villages),
+            with_coords=sum(1 for v in cleaned_villages if v.get('lat'))
         )
         
-        with_coords = sum(1 for v in villages if v.get('lat'))
+        with_coords = sum(1 for v in cleaned_villages if v.get('lat'))
         
         stats_text = f"📊 <b>Результаты для {district} района:</b>\n\n"
-        stats_text += f"• Всего уникальных: {len(villages)} записей\n"
+        stats_text += f"• Всего уникальных: {len(cleaned_villages)} записей\n"
         stats_text += f"• С координатами: {with_coords}\n"
-        stats_text += f"• Без координат: {len(villages) - with_coords}\n"
+        stats_text += f"• Без координат: {len(cleaned_villages) - with_coords}\n"
         
         # Создаем CSV файл (внутренний)
         timestamp = time.strftime('%Y%m%d_%H%M%S')
@@ -1489,11 +1521,11 @@ async def process_district_select(callback: CallbackQuery, state: FSMContext):
             fieldnames = ['name', 'type', 'lat', 'lon', 'district']
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
-            writer.writerows(villages)
+            writer.writerows(cleaned_villages)
         
         # Создаем TXT файл для скачивания
         txt_filename = f"населенные_пункты_{district}_{timestamp}.txt"
-        txt_path = generate_simple_txt_from_data(villages, txt_filename)
+        txt_path = generate_simple_txt_from_data(cleaned_villages, txt_filename)
         
         await state.update_data(
             temp_csv=temp_csv,
