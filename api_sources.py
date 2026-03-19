@@ -1,6 +1,6 @@
 # api_sources.py
 # Универсальный парсер для всех районов через dic.academic.ru
-# Версия с правильным поиском страниц бывших НП и исправленной дедупликацией
+# Версия с улучшенным парсингом для всех сельских поселений
 
 import aiohttp
 import asyncio
@@ -83,13 +83,18 @@ DISTRICT_KEYWORDS = [
     "граничит с"
 ]
 
-# Ключевые слова для поиска раздела с населенными пунктами
+# Ключевые слова для поиска раздела с населенными пунктами - РАСШИРЕННЫЙ СПИСОК
 SETTLEMENTS_SECTION_KEYWORDS = [
     "населенные пункты",
     "населённые пункты",
     "список населенных пунктов",
     "список населённых пунктов",
-    "население"
+    "население",
+    "перечень населенных пунктов",
+    "состав поселения",
+    "деревни",
+    "поселки",
+    "села"
 ]
 
 # Служебные слова для фильтрации названий СП
@@ -116,10 +121,13 @@ SERVICE_VILLAGE_WORDS = [
 MIN_NAME_LENGTH = 2
 MAX_NAME_LENGTH = 50
 
+# Типовые окончания для определения типа в названии
+TYPE_INDICATORS = ['дер.', 'д.', 'пос.', 'п.', 'с.', 'х.', 'ур.', 'ст.', 'разъезд', 'кордон']
+
 class APISourceManager:
     """
     Универсальный менеджер для загрузки данных из dic.academic.ru
-    С правильным поиском страниц бывших НП и исправленной дедупликацией
+    С улучшенным парсингом для всех сельских поселений
     """
     
     def __init__(self):
@@ -382,10 +390,6 @@ class APISourceManager:
         
         # Не должно быть только цифр
         if name.isdigit():
-            return False
-        
-        # Проверка на наличие только допустимых символов
-        if not re.match(r'^[а-яА-ЯёЁ0-9\s\-\.]+$', name):
             return False
         
         return True
@@ -788,7 +792,7 @@ class APISourceManager:
     async def _parse_settlement_main_page(self, article_id: str, district: str, settlement: str) -> List[Dict]:
         """
         Парсит основную страницу сельского поселения
-        Ищет раздел "Населенные пункты" и извлекает НП
+        Ищет раздел "Населенные пункты" и извлекает НП (УЛУЧШЕННАЯ ВЕРСИЯ)
         """
         url = DIC_ACADEMIC_ARTICLE_URL.format(article_id)
         html = await self._fetch_page(url)
@@ -808,88 +812,245 @@ class APISourceManager:
         
         if results:
             logger.info(f"      Из раздела 'Населенные пункты' СП {settlement} получено {len(results)} записей")
+        else:
+            # Если не нашли через обычный парсинг, пробуем альтернативный метод
+            alt_results = await loop.run_in_executor(
+                self.thread_pool,
+                self._parse_settlements_alternative,
+                html,
+                article_id,
+                district,
+                settlement
+            )
+            if alt_results:
+                logger.info(f"      Из альтернативного парсинга СП {settlement} получено {len(alt_results)} записей")
+                results = alt_results
         
         return results
     
     def _parse_settlements_section(self, html: str, article_id: str, district: str, settlement: str) -> List[Dict]:
         """
-        Парсит раздел "Населенные пункты" на странице сельского поселения
-        Извлекает названия, типы и ID для последующего поиска координат
+        УЛУЧШЕННЫЙ парсинг раздела "Населенные пункты" на странице сельского поселения
+        Работает для всех типов таблиц
         """
         try:
             soup = BeautifulSoup(html, 'html.parser')
             results = []
             
-            # Ищем заголовок "Населенные пункты"
+            # Находим все возможные заголовки секций
+            section_headers = []
             for header in soup.find_all(['h2', 'h3', 'h4']):
                 header_text = header.get_text().lower()
-                
-                # Проверяем по ключевым словам
-                is_settlements_section = False
                 for keyword in SETTLEMENTS_SECTION_KEYWORDS:
                     if keyword in header_text:
-                        is_settlements_section = True
+                        section_headers.append(header)
+                        logger.info(f"        Найден заголовок: {header_text}")
                         break
-                
-                if is_settlements_section:
-                    # Ищем таблицу после заголовка
+            
+            # Если не нашли по заголовкам, ищем по тексту
+            if not section_headers:
+                for elem in soup.find_all(['p', 'div', 'span']):
+                    elem_text = elem.get_text().lower()
+                    for keyword in SETTLEMENTS_SECTION_KEYWORDS:
+                        if keyword in elem_text and len(elem_text) < 100:
+                            parent = elem.find_parent()
+                            if parent:
+                                section_headers.append(elem)
+                                logger.info(f"        Найден текстовый маркер: {elem_text[:50]}")
+                                break
+            
+            # Собираем все таблицы для анализа
+            all_tables = soup.find_all('table', class_=['standard', 'sortable', 'wikitable', 'simple'])
+            
+            # Если нашли заголовки, ищем таблицы рядом с ними
+            tables_to_parse = []
+            if section_headers:
+                for header in section_headers:
                     parent = header.find_parent()
                     if parent:
-                        # Ищем таблицы
-                        tables = parent.find_all('table', class_=['standard', 'sortable', 'wikitable'])
+                        nearby_tables = parent.find_all('table', class_=['standard', 'sortable', 'wikitable', 'simple'])
+                        tables_to_parse.extend(nearby_tables)
+            
+            # Если не нашли рядом, используем все таблицы
+            if not tables_to_parse:
+                tables_to_parse = all_tables
+            
+            # Удаляем дубликаты таблиц
+            unique_tables = []
+            seen = set()
+            for table in tables_to_parse:
+                table_id = id(table)
+                if table_id not in seen:
+                    seen.add(table_id)
+                    unique_tables.append(table)
+            
+            # Парсим каждую таблицу
+            for table in unique_tables:
+                rows = table.find_all('tr')
+                if len(rows) < 2:
+                    continue
+                
+                # Анализируем структуру таблицы
+                header_row = rows[0]
+                header_cells = header_row.find_all(['th', 'td'])
+                
+                # Определяем индексы колонок
+                type_idx = None
+                name_idx = None
+                
+                # Сначала пытаемся определить по заголовкам
+                for i, cell in enumerate(header_cells):
+                    cell_text = cell.get_text().strip().lower()
+                    if 'тип' in cell_text:
+                        type_idx = i
+                    elif 'название' in cell_text or 'населённый пункт' in cell_text or 'населенный пункт' in cell_text:
+                        name_idx = i
+                
+                # Если не нашли по заголовкам, анализируем содержимое
+                if type_idx is None or name_idx is None:
+                    # Смотрим на вторую строку для примера
+                    if len(rows) > 1:
+                        sample_row = rows[1]
+                        sample_cells = sample_row.find_all('td')
                         
-                        for table in tables:
-                            rows = table.find_all('tr')
-                            if len(rows) < 2:
-                                continue
-                            
-                            for row in rows[1:]:
-                                try:
-                                    cells = row.find_all('td')
-                                    if len(cells) < 2:
-                                        continue
-                                    
-                                    # Тип (обычно первая колонка)
-                                    type_cell = cells[0]
-                                    raw_type = type_cell.get_text().strip()
-                                    village_type = self._expand_type(raw_type)
-                                    
-                                    # Название (вторая колонка)
-                                    name_cell = cells[1]
-                                    name = name_cell.get_text().strip()
-                                    
-                                    if not name or not self._is_valid_name(name):
-                                        continue
-                                    
-                                    # Проверяем, есть ли ссылка в ячейке с названием
-                                    link = name_cell.find('a')
-                                    village_article_id = None
-                                    if link:
-                                        href = link.get('href', '')
-                                        match = re.search(r'/dic\.nsf/ruwiki/(\d+)', href)
-                                        if match:
-                                            village_article_id = match.group(1)
-                                    
-                                    # Создаем запись
-                                    village_data = {
-                                        "name": name,
-                                        "type": village_type,
-                                        "lat": "",
-                                        "lon": "",
-                                        "district": district,
-                                        "has_coords": False,
-                                        "article_id": village_article_id
-                                    }
-                                    
-                                    results.append(village_data)
-                                    
-                                except Exception as e:
-                                    continue
+                        # Ищем ячейку с типом (короткое слово с точкой)
+                        for i, cell in enumerate(sample_cells):
+                            cell_text = cell.get_text().strip()
+                            if any(indicator in cell_text for indicator in TYPE_INDICATORS):
+                                type_idx = i
+                                # Предполагаем, что название в следующей колонке
+                                if i + 1 < len(sample_cells):
+                                    name_idx = i + 1
+                                break
+                
+                # Если все еще не нашли, используем разумные предположения
+                if name_idx is None:
+                    # Название обычно в первой или второй колонке
+                    if len(header_cells) >= 2:
+                        name_idx = 1  # предположим, что название во второй колонке
+                    else:
+                        name_idx = 0
+                
+                if type_idx is None:
+                    # Тип обычно перед названием
+                    if name_idx > 0:
+                        type_idx = name_idx - 1
+                    else:
+                        type_idx = 0
+                
+                # Парсим строки данных
+                for row in rows[1:]:
+                    try:
+                        cells = row.find_all('td')
+                        if len(cells) <= max(type_idx, name_idx):
+                            continue
+                        
+                        # Тип
+                        type_cell = cells[type_idx]
+                        raw_type = type_cell.get_text().strip()
+                        village_type = self._expand_type(raw_type)
+                        
+                        # Название
+                        name_cell = cells[name_idx]
+                        name = name_cell.get_text().strip()
+                        
+                        # Очищаем название
+                        name = re.sub(r'^\d+\s*', '', name)
+                        name = re.sub(r'\s+', ' ', name).strip()
+                        
+                        if not name or len(name) < 2:
+                            continue
+                        
+                        if not self._is_valid_name(name):
+                            continue
+                        
+                        # Проверяем ссылку
+                        link = name_cell.find('a')
+                        village_article_id = None
+                        if link:
+                            href = link.get('href', '')
+                            match = re.search(r'/dic\.nsf/ruwiki/(\d+)', href)
+                            if match:
+                                village_article_id = match.group(1)
+                        
+                        results.append({
+                            "name": name,
+                            "type": village_type,
+                            "lat": "",
+                            "lon": "",
+                            "district": district,
+                            "has_coords": False,
+                            "article_id": village_article_id
+                        })
+                        
+                    except Exception as e:
+                        continue
             
             return results
             
         except Exception as e:
             logger.error(f"Ошибка парсинга раздела 'Населенные пункты': {e}")
+            return []
+    
+    def _parse_settlements_alternative(self, html: str, article_id: str, district: str, settlement: str) -> List[Dict]:
+        """
+        Альтернативный метод парсинга - ищет все ссылки на страницы НП
+        """
+        try:
+            soup = BeautifulSoup(html, 'html.parser')
+            results = []
+            seen_names = set()
+            
+            # Ищем все ссылки на статьи
+            for link in soup.find_all('a', href=re.compile(r'/dic\.nsf/ruwiki/\d+')):
+                # Проверяем, что ссылка не ведет на страницу самого поселения
+                href = link.get('href', '')
+                if article_id in href:
+                    continue
+                
+                # Текст ссылки
+                name = link.get_text().strip()
+                
+                # Очищаем название
+                name = re.sub(r'^\d+\s*', '', name)
+                name = re.sub(r'\s+', ' ', name).strip()
+                
+                if not name or len(name) < 2 or name in seen_names:
+                    continue
+                
+                if not self._is_valid_name(name):
+                    continue
+                
+                # Пытаемся определить тип из контекста
+                village_type = 'деревня'
+                parent = link.find_parent('td')
+                if parent:
+                    row = parent.find_parent('tr')
+                    if row:
+                        # Ищем тип в соседних ячейках
+                        for cell in row.find_all('td'):
+                            cell_text = cell.get_text().strip().lower()
+                            if cell_text in ['дер.', 'д.', 'пос.', 'п.', 'с.', 'х.', 'ур.']:
+                                village_type = self._expand_type(cell_text)
+                                break
+                
+                match = re.search(r'/dic\.nsf/ruwiki/(\d+)', href)
+                if match:
+                    seen_names.add(name)
+                    results.append({
+                        "name": name,
+                        "type": village_type,
+                        "lat": "",
+                        "lon": "",
+                        "district": district,
+                        "has_coords": False,
+                        "article_id": match.group(1)
+                    })
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Ошибка альтернативного парсинга: {e}")
             return []
     
     async def _find_master_list_links(self, html: str, district: str) -> List[str]:
@@ -1145,7 +1306,7 @@ class APISourceManager:
     async def fetch_district_data(self, district: str) -> List[Dict]:
         """
         Основной метод: загружает данные для конкретного района
-        С правильным поиском страниц бывших НП и исправленной дедупликацией
+        С улучшенным парсингом для всех сельских поселений
         """
         # Очищаем кэш перед новым поиском
         self.clear_cache()
