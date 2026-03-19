@@ -1186,8 +1186,8 @@ class APISourceManager:
         for settlement in settlements:
             try:
                 elapsed = time.time() - self.start_time
-                # Увеличиваем время до 500 секунд (было 350)
-                if elapsed > 500:
+                # Увеличено время до 650 секунд
+                if elapsed > 650:
                     logger.warning(f"  ⏱️ Время выполнения {elapsed:.1f}с, осталось мало времени. Прерываем обработку СП.")
                     break
                 
@@ -1333,7 +1333,8 @@ class APISourceManager:
                     for i, village in enumerate(villages_without_coords[:limit]):
                         try:
                             elapsed = time.time() - self.start_time
-                            if elapsed > 550:  # Увеличено до 550 секунд
+                            # Увеличено до 700 секунд
+                            if elapsed > 700:
                                 logger.warning(f"    ⏱️ Время выполнения {elapsed:.1f}с, прерываем поиск координат")
                                 break
                             
