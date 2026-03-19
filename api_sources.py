@@ -1,6 +1,6 @@
 # api_sources.py
 # Универсальный парсер для всех районов через dic.academic.ru
-# Версия с улучшенным парсингом для всех сельских поселений
+# Версия без ограничений, с сортировкой по имени и без сохраненных ID
 
 import aiohttp
 import asyncio
@@ -127,7 +127,7 @@ TYPE_INDICATORS = ['дер.', 'д.', 'пос.', 'п.', 'с.', 'х.', 'ур.', '�
 class APISourceManager:
     """
     Универсальный менеджер для загрузки данных из dic.academic.ru
-    С улучшенным парсингом для всех сельских поселений
+    Без ограничений, с сортировкой по имени
     """
     
     def __init__(self):
@@ -146,7 +146,6 @@ class APISourceManager:
         self.settlement_pages_cache: Dict[str, str] = {}
         self.page_cache: Dict[str, Tuple[str, float]] = {}
         self.processed_article_ids: Set[str] = set()
-        self.village_article_ids: Dict[str, str] = {}
         
         # Время жизни кэша
         self.cache_ttl = 3600
@@ -157,6 +156,14 @@ class APISourceManager:
         # Статистика времени
         self.start_time = 0
         self.last_log_time = 0
+        
+        # Статистика поиска координат
+        self.coords_stats = {
+            'from_former': 0,
+            'from_search': 0,
+            'total_without': 0,
+            'remaining': 0
+        }
         
         # Стандартные заголовки
         self.default_headers = {
@@ -186,7 +193,12 @@ class APISourceManager:
         self.settlement_pages_cache.clear()
         self.page_cache.clear()
         self.processed_article_ids.clear()
-        self.village_article_ids.clear()
+        self.coords_stats = {
+            'from_former': 0,
+            'from_search': 0,
+            'total_without': 0,
+            'remaining': 0
+        }
         logger.info("🧹 Кэш очищен для нового поиска")
     
     async def _rate_limit(self):
@@ -771,6 +783,9 @@ class APISourceManager:
                             row_text = ' '.join([c.get_text() for c in cells])
                             lat, lon = self._parse_coordinates_universal(row_text, None)
                         
+                        if lat and lon:
+                            self.coords_stats['from_former'] += 1
+                        
                         results.append({
                             "name": name,
                             "type": village_type,
@@ -792,7 +807,7 @@ class APISourceManager:
     async def _parse_settlement_main_page(self, article_id: str, district: str, settlement: str) -> List[Dict]:
         """
         Парсит основную страницу сельского поселения
-        Ищет раздел "Населенные пункты" и извлекает НП (УЛУЧШЕННАЯ ВЕРСИЯ)
+        Ищет раздел "Населенные пункты" и извлекает НП
         """
         url = DIC_ACADEMIC_ARTICLE_URL.format(article_id)
         html = await self._fetch_page(url)
@@ -927,7 +942,7 @@ class APISourceManager:
                 if name_idx is None:
                     # Название обычно в первой или второй колонке
                     if len(header_cells) >= 2:
-                        name_idx = 1  # предположим, что название во второй колонке
+                        name_idx = 1
                     else:
                         name_idx = 0
                 
@@ -964,23 +979,13 @@ class APISourceManager:
                         if not self._is_valid_name(name):
                             continue
                         
-                        # Проверяем ссылку
-                        link = name_cell.find('a')
-                        village_article_id = None
-                        if link:
-                            href = link.get('href', '')
-                            match = re.search(r'/dic\.nsf/ruwiki/(\d+)', href)
-                            if match:
-                                village_article_id = match.group(1)
-                        
                         results.append({
                             "name": name,
                             "type": village_type,
                             "lat": "",
                             "lon": "",
                             "district": district,
-                            "has_coords": False,
-                            "article_id": village_article_id
+                            "has_coords": False
                         })
                         
                     except Exception as e:
@@ -1034,18 +1039,15 @@ class APISourceManager:
                                 village_type = self._expand_type(cell_text)
                                 break
                 
-                match = re.search(r'/dic\.nsf/ruwiki/(\d+)', href)
-                if match:
-                    seen_names.add(name)
-                    results.append({
-                        "name": name,
-                        "type": village_type,
-                        "lat": "",
-                        "lon": "",
-                        "district": district,
-                        "has_coords": False,
-                        "article_id": match.group(1)
-                    })
+                seen_names.add(name)
+                results.append({
+                    "name": name,
+                    "type": village_type,
+                    "lat": "",
+                    "lon": "",
+                    "district": district,
+                    "has_coords": False
+                })
             
             return results
             
@@ -1303,10 +1305,66 @@ class APISourceManager:
             logger.error(f"Ошибка парсинга отдельной страницы НП: {e}")
             return None
     
+    async def _find_coordinates_for_village(self, village: Dict, district: str) -> Optional[Dict]:
+        """
+        Улучшенный поиск координат для одного населенного пункта
+        Возвращает словарь с координатами или None
+        """
+        try:
+            # Вариант 1: Точный поиск с кавычками
+            exact_query = f'"{village["name"]}" {district} район'
+            results = await self._search_with_pagination(exact_query, max_pages=5, unlimited=False)
+            
+            for result in results[:3]:  # Проверяем первые 3 результата
+                if result['score'] > 50:  # Только релевантные
+                    article_id = result['id']
+                    if article_id not in self.processed_article_ids:
+                        village_data = await self._parse_individual_village_page(article_id, district)
+                        if village_data and village_data.get('has_coords'):
+                            return village_data
+            
+            # Вариант 2: Поиск с типом (для распространенных типов)
+            if village['type'] in ['деревня', 'село', 'посёлок']:
+                type_short = {
+                    'деревня': 'дер.',
+                    'село': 'с.',
+                    'посёлок': 'пос.'
+                }.get(village['type'], '')
+                
+                if type_short:
+                    query = f"{village['name']} {type_short} {district} район"
+                    results = await self._search_with_pagination(query, max_pages=3, unlimited=False)
+                    
+                    for result in results[:2]:
+                        if result['score'] > 40:
+                            article_id = result['id']
+                            if article_id not in self.processed_article_ids:
+                                village_data = await self._parse_individual_village_page(article_id, district)
+                                if village_data and village_data.get('has_coords'):
+                                    return village_data
+            
+            # Вариант 3: Простой поиск (без кавычек)
+            simple_query = f"{village['name']} {district} район"
+            results = await self._search_with_pagination(simple_query, max_pages=3, unlimited=False)
+            
+            for result in results[:2]:
+                if result['score'] > 30:
+                    article_id = result['id']
+                    if article_id not in self.processed_article_ids:
+                        village_data = await self._parse_individual_village_page(article_id, district)
+                        if village_data and village_data.get('has_coords'):
+                            return village_data
+            
+            return None
+            
+        except Exception as e:
+            logger.debug(f"Ошибка поиска координат для {village['name']}: {e}")
+            return None
+    
     async def fetch_district_data(self, district: str) -> List[Dict]:
         """
         Основной метод: загружает данные для конкретного района
-        С улучшенным парсингом для всех сельских поселений
+        Без ограничений, с сортировкой по имени
         """
         # Очищаем кэш перед новым поиском
         self.clear_cache()
@@ -1402,19 +1460,13 @@ class APISourceManager:
                     for village in main_page_data:
                         key = f"{village['name']}_{village['district']}"
                         
-                        if village.get('article_id'):
-                            self.village_article_ids[village['name']] = village['article_id']
-                        
-                        village_copy = village.copy()
-                        village_copy.pop('article_id', None)
-                        
                         if key not in seen_villages:
-                            seen_villages[key] = village_copy
+                            seen_villages[key] = village
                             main_new += 1
                         else:
                             existing = seen_villages[key]
-                            if not existing.get('has_coords') and village_copy.get('has_coords'):
-                                seen_villages[key] = village_copy
+                            if not existing.get('has_coords') and village.get('has_coords'):
+                                seen_villages[key] = village
                                 main_new += 1
                     
                     if main_new > 0:
@@ -1459,97 +1511,92 @@ class APISourceManager:
         # Преобразуем словарь seen_villages в список
         all_villages = list(seen_villages.values())
         
-        # Шаг 5: Ищем координаты для записей без них
+        # Шаг 5: Поиск координат для записей без них (БЕЗ ОГРАНИЧЕНИЙ)
         if all_villages:
-            logger.info(f"  🔍 Поиск координат для записей без них...")
+            logger.info(f"  🔍 ПОИСК КООРДИНАТ ДЛЯ ЗАПИСЕЙ БЕЗ НИХ...")
             
             villages_without_coords = [v for v in all_villages if not v.get('has_coords')]
+            total_without = len(villages_without_coords)
+            self.coords_stats['total_without'] = total_without
             
             if villages_without_coords:
-                logger.info(f"    Найдено {len(villages_without_coords)} записей без координат")
+                logger.info(f"  📊 Статистика поиска координат:")
+                logger.info(f"    • Всего записей без координат: {total_without}")
+                logger.info(f"    • Будет обработано ВСЕ (без ограничений)")
                 
-                # Сначала пробуем использовать сохраненные ID
-                coords_found = 0
-                for village in villages_without_coords[:]:
+                # Сортируем по приоритету: сначала деревни, потом остальные
+                priority_villages = []
+                other_villages = []
+                
+                for v in villages_without_coords:
+                    if v['type'] in ['деревня', 'село', 'посёлок']:
+                        priority_villages.append(v)
+                    else:
+                        other_villages.append(v)
+                
+                # Объединяем с приоритетом
+                sorted_villages = priority_villages + other_villages
+                
+                logger.info(f"    • Приоритетных записей: {len(priority_villages)}")
+                
+                search_found = 0
+                processed = 0
+                total_to_process = len(sorted_villages)
+                
+                for i, village in enumerate(sorted_villages):
                     try:
-                        if village['name'] in self.village_article_ids:
-                            article_id = self.village_article_ids[village['name']]
-                            if article_id not in self.processed_article_ids:
-                                village_data = await self._parse_individual_village_page(article_id, district)
-                                
-                                if village_data and village_data.get('has_coords'):
-                                    for v in all_villages:
-                                        if v['name'] == village['name'] and not v.get('has_coords'):
-                                            v['lat'] = village_data['lat']
-                                            v['lon'] = village_data['lon']
-                                            v['has_coords'] = True
-                                            coords_found += 1
-                                            logger.info(f"      ✅ Найдены координаты для {v['name']} по ссылке")
-                                            break
+                        elapsed = time.time() - self.start_time
+                        if elapsed > 700:
+                            logger.warning(f"    ⏱️ Время выполнения {elapsed:.1f}с, прерываем поиск координат")
+                            break
+                        
+                        if i > 0 and i % 5 == 0:
+                            await asyncio.sleep(2.0)
+                        
+                        village_data = await self._find_coordinates_for_village(village, district)
+                        
+                        if village_data and village_data.get('has_coords'):
+                            for v in all_villages:
+                                if v['name'] == village['name'] and not v.get('has_coords'):
+                                    v['lat'] = village_data['lat']
+                                    v['lon'] = village_data['lon']
+                                    v['has_coords'] = True
+                                    search_found += 1
+                                    logger.info(f"      ✅ Найдены координаты для {v['name']} через поиск")
+                                    break
+                        
+                        processed += 1
+                        
+                        if (i + 1) % 50 == 0:
+                            progress_pct = (i + 1) / total_to_process * 100
+                            logger.info(f"      Обработано {i+1}/{total_to_process} записей ({progress_pct:.1f}%), найдено {search_found}")
+                        
+                        await asyncio.sleep(0.5)
+                        
                     except Exception as e:
                         continue
                 
-                if coords_found > 0:
-                    logger.info(f"    Найдено координат по ссылкам: {coords_found}")
+                self.coords_stats['from_search'] = search_found
+                self.coords_stats['remaining'] = total_without - (self.coords_stats['from_former'] + search_found)
                 
-                # Обновляем список записей без координат
-                villages_without_coords = [v for v in all_villages if not v.get('has_coords')]
-                
-                # Ищем через поиск для оставшихся
-                if villages_without_coords:
-                    logger.info(f"    Осталось {len(villages_without_coords)} записей, ищем через поиск")
-                    
-                    limit = min(300, len(villages_without_coords))
-                    logger.info(f"    Будет обработано {limit} записей через поиск")
-                    
-                    search_found = 0
-                    for i, village in enumerate(villages_without_coords[:limit]):
-                        try:
-                            elapsed = time.time() - self.start_time
-                            if elapsed > 700:
-                                logger.warning(f"    ⏱️ Время выполнения {elapsed:.1f}с, прерываем поиск координат")
-                                break
-                            
-                            if i > 0 and i % 5 == 0:
-                                await asyncio.sleep(2.0)
-                            
-                            query = f"{village['name']} {district} район"
-                            results = await self._search_with_pagination(query, max_pages=20, unlimited=False)
-                            
-                            if results:
-                                article_id = results[0]['id']
-                                if article_id not in self.processed_article_ids:
-                                    village_data = await self._parse_individual_village_page(article_id, district)
-                                    
-                                    if village_data and village_data.get('has_coords'):
-                                        for v in all_villages:
-                                            if v['name'] == village['name'] and not v.get('has_coords'):
-                                                v['lat'] = village_data['lat']
-                                                v['lon'] = village_data['lon']
-                                                v['has_coords'] = True
-                                                search_found += 1
-                                                logger.info(f"      ✅ Найдены координаты для {v['name']} через поиск")
-                                                break
-                            
-                            if (i + 1) % 50 == 0:
-                                logger.info(f"      Обработано {i+1}/{limit} записей, найдено {search_found}")
-                                
-                            await asyncio.sleep(0.5)
-                            
-                        except Exception as e:
-                            continue
-                    
-                    logger.info(f"    Найдено координат через поиск: {search_found}")
+                logger.info(f"    ✅ Поиск завершен. Найдено координат: {search_found}")
+                logger.info(f"    📊 ИТОГО ПО КООРДИНАТАМ:")
+                logger.info(f"      • Было без координат: {total_without}")
+                logger.info(f"      • Из списков бывших НП: {self.coords_stats['from_former']}")
+                logger.info(f"      • Найдено через поиск: {search_found}")
+                logger.info(f"      • Всего найдено: {self.coords_stats['from_former'] + search_found}")
+                logger.info(f"      • Осталось без координат: {self.coords_stats['remaining']}")
         
         # Подсчитываем итоговое количество с координатами
         final_with_coords = sum(1 for v in all_villages if v.get('has_coords'))
         
-        # Сортируем по алфавиту
+        # СОРТИРУЕМ ПО АЛФАВИТУ
         all_villages.sort(key=lambda x: x['name'])
         
         total_time = time.time() - self.start_time
         logger.info(f"  ✅ Всего уникальных записей: {len(all_villages)}")
         logger.info(f"  ✅ С координатами: {final_with_coords}")
+        logger.info(f"  ✅ Сортировка: по алфавиту")
         logger.info(f"  ⏱️ Общее время обработки: {total_time:.1f} секунд")
         
         return all_villages
