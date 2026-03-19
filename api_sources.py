@@ -1,7 +1,7 @@
 # api_sources.py
 # Универсальный парсер для всех районов через dic.academic.ru
-# Версия с улучшенной обработкой ошибок 429, поиском дополнительных списков
-# и быстрой проверкой дубликатов
+# Версия с улучшенным поиском списков, увеличенными лимитами
+# Только автоматический поиск, без жестко заданных ID
 
 import aiohttp
 import asyncio
@@ -87,7 +87,7 @@ DISTRICT_KEYWORDS = [
     "граничит с"
 ]
 
-# Известные сельские поселения для фильтрации
+# Известные сельские поселения для фильтрации (только названия, без ID)
 KNOWN_SETTLEMENTS = {
     "Ржевский": [
         "Есинка", "Итомля", "Медведево", "Победа", 
@@ -110,7 +110,7 @@ KNOWN_SETTLEMENTS = {
 class APISourceManager:
     """
     Универсальный менеджер для загрузки данных из dic.academic.ru
-    Автоматически ищет страницы районов, сельских поселений и населенных пунктов
+    Только автоматический поиск, без жестко заданных ID
     """
     
     def __init__(self):
@@ -337,29 +337,57 @@ class APISourceManager:
     
     async def _find_master_list_links(self, html: str, district: str) -> List[str]:
         """
-        Ищет на странице ссылки вида "См. также: Список населённых пунктов ..."
-        Возвращает список ID найденных статей
+        Автоматический поиск ссылок на списки населенных пунктов
+        Ищет по ключевым словам во всей странице
         """
         try:
             soup = BeautifulSoup(html, 'html.parser')
             found_ids = []
             
+            # Ищем все ссылки на странице
+            for link in soup.find_all('a', href=re.compile(r'/dic\.nsf/ruwiki/\d+')):
+                href = link.get('href', '')
+                text = link.get_text().lower().strip()
+                surrounding = ''
+                
+                # Получаем окружающий текст для контекста
+                parent = link.find_parent(['p', 'div', 'li'])
+                if parent:
+                    surrounding = parent.get_text().lower()
+                
+                # Проверяем текст ссылки и окружающий текст
+                full_context = text + ' ' + surrounding
+                
+                # Ищем по ключевым словам списков
+                for keyword in LIST_KEYWORDS:
+                    if keyword in full_context:
+                        match = re.search(r'/dic\.nsf/ruwiki/(\d+)', href)
+                        if match:
+                            article_id = match.group(1)
+                            found_ids.append(article_id)
+                            logger.info(f"      Найдена ссылка на список НП: ID {article_id} - {link.get_text()}")
+                            break
+            
+            # Также ищем в разделе "См. также"
             see_also_patterns = ['см. также', 'смотри также', 'см также']
             
             for pattern in see_also_patterns:
-                for elem in soup.find_all(['p', 'div', 'span'], string=re.compile(pattern, re.I)):
+                for elem in soup.find_all(['p', 'div', 'span', 'li'], string=re.compile(pattern, re.I)):
                     parent = elem.find_parent()
                     if parent:
                         for link in parent.find_all('a', href=re.compile(r'/dic\.nsf/ruwiki/\d+')):
                             href = link.get('href', '')
                             text = link.get_text().lower()
                             
-                            if 'список' in text and 'населённых пунктов' in text:
-                                match = re.search(r'/dic\.nsf/ruwiki/(\d+)', href)
-                                if match:
-                                    article_id = match.group(1)
-                                    found_ids.append(article_id)
-                                    logger.info(f"      Найдена ссылка на список НП: ID {article_id} - {link.get_text()}")
+                            for keyword in LIST_KEYWORDS:
+                                if keyword in text:
+                                    match = re.search(r'/dic\.nsf/ruwiki/(\d+)', href)
+                                    if match:
+                                        article_id = match.group(1)
+                                        if article_id not in found_ids:
+                                            found_ids.append(article_id)
+                                            logger.info(f"      Найдена ссылка на список НП в 'См. также': ID {article_id} - {link.get_text()}")
+                                            break
             
             return list(set(found_ids))
             
@@ -379,54 +407,123 @@ class APISourceManager:
             return []
         
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
+        results = await loop.run_in_executor(
             self.thread_pool,
             self._parse_master_list_html,
             html,
             article_id,
             district
         )
+        
+        # Логируем результаты для отладки
+        if results:
+            logger.info(f"      Из списка ID {article_id} получено {len(results)} записей")
+            if len(results) > 0:
+                sample = results[:min(5, len(results))]
+                logger.info(f"        Примеры: {[(v['name'], v['type']) for v in sample]}")
+        else:
+            logger.warning(f"      Из списка ID {article_id} не получено записей")
+        
+        return results
     
     def _parse_master_list_html(self, html: str, article_id: str, district: str) -> List[Dict]:
         """
         Парсит HTML страницы со списком населенных пунктов
-        Обрабатывает таблицы с данными
+        Обрабатывает разные форматы таблиц
         """
         try:
             soup = BeautifulSoup(html, 'html.parser')
             results = []
             
-            tables = soup.find_all('table', class_=['standard', 'sortable', 'wikitable'])
+            # Ищем все возможные таблицы
+            tables = soup.find_all('table', class_=['standard', 'sortable', 'wikitable', 'simple'])
+            
+            if not tables:
+                # Если нет таблиц, ищем списки
+                lists = soup.find_all(['ul', 'ol'])
+                for lst in lists:
+                    for li in lst.find_all('li'):
+                        text = li.get_text().strip()
+                        if text and len(text) < 100 and not text.startswith('См.'):
+                            # Пытаемся определить тип из текста
+                            name = text
+                            village_type = 'деревня'
+                            
+                            # Часто формат: "Название (тип)" или "тип Название"
+                            type_match = re.search(r'\(([^)]+)\)$', text)
+                            if type_match:
+                                possible_type = type_match.group(1).lower()
+                                name = text.replace(f'({possible_type})', '').strip()
+                                village_type = self._expand_type(possible_type)
+                            
+                            results.append({
+                                "name": name,
+                                "type": village_type,
+                                "lat": "",
+                                "lon": "",
+                                "district": district
+                            })
+                return results
             
             for table in tables:
                 rows = table.find_all('tr')
                 if len(rows) < 2:
                     continue
                 
+                # Определяем заголовки
                 header_cells = rows[0].find_all(['th', 'td'])
                 headers = [h.get_text().strip().lower() for h in header_cells]
                 
-                name_idx = self._find_column_index(headers, ['населённый пункт', 'название', 'наименование'])
-                type_idx = self._find_column_index(headers, ['тип'])
+                # Если в первой строке нет заголовков, пробуем вторую
+                if len(headers) < 2 and len(rows) > 2:
+                    header_cells = rows[1].find_all(['th', 'td'])
+                    headers = [h.get_text().strip().lower() for h in header_cells]
+                    start_row = 2
+                else:
+                    start_row = 1
                 
-                for row in rows[1:]:
+                # Ищем индексы нужных колонок
+                name_idx = self._find_column_index(headers, [
+                    'населённый пункт', 'название', 'наименование', 
+                    'населенный пункт', 'пункт', 'нп'
+                ])
+                
+                type_idx = self._find_column_index(headers, [
+                    'тип', 'тип нп', 'категория'
+                ])
+                
+                # Если не нашли индексы, используем стандартные предположения
+                if name_idx is None:
+                    name_idx = 0
+                
+                for row in rows[start_row:]:
                     try:
                         cells = row.find_all('td')
-                        if len(cells) < max(filter(None, [name_idx, type_idx])) + 1:
+                        if len(cells) <= name_idx:
                             continue
                         
-                        if name_idx is not None and name_idx < len(cells):
-                            name = cells[name_idx].get_text().strip()
-                        else:
+                        # Название
+                        name = cells[name_idx].get_text().strip()
+                        
+                        if not name or name in ['ИТОГО', 'Всего', 'Итого']:
                             continue
                         
-                        if not name or name in ['ИТОГО', 'Всего']:
-                            continue
+                        # Очищаем название от лишних символов
+                        name = re.sub(r'^\d+\s*', '', name)
+                        name = re.sub(r'\s+', ' ', name).strip()
                         
+                        # Тип
                         village_type = 'деревня'
                         if type_idx is not None and type_idx < len(cells):
                             raw_type = cells[type_idx].get_text().strip()
                             village_type = self._expand_type(raw_type)
+                        else:
+                            # Пробуем найти тип в названии
+                            for short, full in TYPE_MAPPING.items():
+                                if short in name.lower():
+                                    village_type = full
+                                    name = name.replace(short, '').strip()
+                                    break
                         
                         results.append({
                             "name": name,
@@ -439,7 +536,6 @@ class APISourceManager:
                     except Exception as e:
                         continue
             
-            logger.info(f"      Из списка ID {article_id} получено {len(results)} записей")
             return results
             
         except Exception as e:
@@ -873,7 +969,7 @@ class APISourceManager:
     async def fetch_district_data(self, district: str) -> List[Dict]:
         """
         Основной метод: загружает данные для конкретного района
-        С быстрой проверкой дубликатов через set
+        Только автоматический поиск, без жестко заданных ID
         """
         logger.info(f"🌐 Загрузка данных для района: {district}")
         
@@ -882,12 +978,14 @@ class APISourceManager:
         processed_master_lists = set()
         seen_villages = set()
         
+        # Шаг 1: Находим страницу района
         district_info = await self._find_district_page(district)
         
         if not district_info:
             logger.warning(f"  ⚠️ Страница района не найдена")
             return []
         
+        # Шаг 2: Получаем список сельских поселений
         settlements = await self._extract_settlements(district_info['id'], district)
         
         if not settlements:
@@ -896,6 +994,7 @@ class APISourceManager:
             if settlements:
                 logger.info(f"    Используем известный список СП: {len(settlements)}")
         
+        # Шаг 3: Для каждого сельского поселения ищем страницу
         logger.info(f"  🔍 Поиск страниц для {len(settlements)} сельских поселений...")
         
         for settlement in settlements:
@@ -923,6 +1022,7 @@ class APISourceManager:
                             found_settlements[settlement] = len(data)
                             logger.info(f"    ✅ СП {settlement}: добавлено {new_count} новых записей")
                         
+                        # Ищем ссылки на дополнительные списки
                         master_list_ids = await self._find_master_list_links(html, district)
                         
                         for list_id in master_list_ids:
@@ -949,6 +1049,7 @@ class APISourceManager:
             except Exception as e:
                 logger.error(f"    ❌ Ошибка обработки СП {settlement}: {e}")
         
+        # Шаг 4: Ищем координаты для записей без них
         if all_villages:
             logger.info(f"  🔍 Поиск координат для записей без них...")
             
@@ -957,9 +1058,13 @@ class APISourceManager:
             if villages_without_coords:
                 logger.info(f"    Найдено {len(villages_without_coords)} записей без координат")
                 
-                for i, village in enumerate(villages_without_coords[:100]):
+                # Обрабатываем до 500 записей
+                limit = min(500, len(villages_without_coords))
+                logger.info(f"    Будет обработано {limit} записей")
+                
+                for i, village in enumerate(villages_without_coords[:limit]):
                     try:
-                        if i > 0:
+                        if i > 0 and i % 10 == 0:
                             await asyncio.sleep(1.0)
                         
                         query = f"{village['name']} {district} район"
@@ -977,8 +1082,8 @@ class APISourceManager:
                                         logger.info(f"      ✅ Найдены координаты для {v['name']}")
                                         break
                         
-                        if (i + 1) % 10 == 0:
-                            logger.info(f"      Обработано {i+1}/{len(villages_without_coords[:100])}")
+                        if (i + 1) % 50 == 0:
+                            logger.info(f"      Обработано {i+1}/{limit} записей")
                             
                     except Exception as e:
                         continue
