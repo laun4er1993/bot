@@ -1431,17 +1431,25 @@ async def download_from_web_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(SearchStates.waiting_for_district_select)
     await callback.answer()
 
+# ========== ОБНОВЛЕННЫЙ ОБРАБОТЧИК ВЫБОРА РАЙОНА С ТАЙМАУТОМ 12 МИНУТ ==========
+
 @dp.callback_query(lambda c: c.data.startswith("select_district_"))
 async def process_district_select(callback: CallbackQuery, state: FSMContext):
-    """Обрабатывает выбор района с увеличенным таймаутом"""
+    """Обрабатывает выбор района с увеличенным таймаутом до 12 минут"""
     district = callback.data.replace("select_district_", "")
     
     await state.update_data(selected_district=district)
     
     await callback.message.edit_text(
         f"⏳ <b>Загрузка данных для {district} района...</b>\n\n"
-        f"Это может занять до 5-7 минут. Я сообщу, когда данные будут готовы.\n"
-        f"Бот ищет максимальное количество информации: страницы района, сельских поселений, списки населенных пунктов и координаты.",
+        f"Это может занять до 10-12 минут. Я сообщу, когда данные будут готовы.\n"
+        f"Бот ищет максимальное количество информации:\n"
+        f"• страницы района\n"
+        f"• сельские поселения\n"
+        f"• списки бывших населенных пунктов\n"
+        f"• текущие населенные пункты\n"
+        f"• координаты для каждого НП\n\n"
+        f"<i>Пожалуйста, подождите...</i>",
         parse_mode="HTML"
     )
     
@@ -1450,9 +1458,10 @@ async def process_district_select(callback: CallbackQuery, state: FSMContext):
     try:
         api_manager = APISourceManager()
         
+        # Увеличиваем общий таймаут до 720 секунд (12 минут)
         villages = await asyncio.wait_for(
             api_manager.fetch_district_data(district),
-            timeout=420.0
+            timeout=720.0
         )
         
         await api_manager.close_session()
@@ -1470,6 +1479,7 @@ async def process_district_select(callback: CallbackQuery, state: FSMContext):
         stats_text += f"• С координатами: {with_coords}\n"
         stats_text += f"• Без координат: {len(villages) - with_coords}\n"
         
+        # Создаем CSV файл (внутренний)
         timestamp = time.strftime('%Y%m%d_%H%M%S')
         temp_dir = "data/temp"
         os.makedirs(temp_dir, exist_ok=True)
@@ -1481,6 +1491,7 @@ async def process_district_select(callback: CallbackQuery, state: FSMContext):
             writer.writeheader()
             writer.writerows(villages)
         
+        # Создаем TXT файл для скачивания
         txt_filename = f"населенные_пункты_{district}_{timestamp}.txt"
         txt_path = generate_simple_txt_from_data(villages, txt_filename)
         
@@ -1490,6 +1501,7 @@ async def process_district_select(callback: CallbackQuery, state: FSMContext):
             txt_filename=txt_filename
         )
         
+        # Показываем меню выбора действия
         await callback.message.edit_text(
             f"✅ <b>Данные для {district} района загружены!</b>\n\n"
             f"{stats_text}\n\n"
@@ -1502,8 +1514,15 @@ async def process_district_select(callback: CallbackQuery, state: FSMContext):
         logger.error("Таймаут при загрузке данных")
         await callback.message.edit_text(
             "❌ <b>Ошибка загрузки</b>\n\n"
-            "Превышено время ожидания ответа от серверов.\n"
-            "Попробуйте позже или выберите другой район.",
+            "Превышено время ожидания ответа от серверов (12 минут).\n"
+            "Это может быть связано с:\n"
+            "• большой нагрузкой на сервер dic.academic.ru\n"
+            "• медленным интернет-соединением\n"
+            "• слишком большим объемом данных\n\n"
+            "Попробуйте:\n"
+            "• выбрать другой район\n"
+            "• повторить попытку позже\n"
+            "• загрузить данные вручную через CSV",
             parse_mode="HTML",
             reply_markup=back_to_settings_keyboard()
         )
@@ -1518,6 +1537,7 @@ async def process_district_select(callback: CallbackQuery, state: FSMContext):
         if 'api_manager' in locals():
             await api_manager.close_session()
 
+# ОБРАБОТЧИК ВЫБОРА ДЕЙСТВИЯ С ДАННЫМИ
 @dp.callback_query(lambda c: c.data.startswith("merge_"))
 async def process_merge_action(callback: CallbackQuery, state: FSMContext):
     """Обрабатывает выбор действия с загруженными данными"""
