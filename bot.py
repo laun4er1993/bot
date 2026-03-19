@@ -2296,7 +2296,7 @@ async def main() -> None:
     logger.info("🚀 Бот для поиска аэрофотоснимков запускается...")
     logger.info(f"📊 Загружено локаций: {len(db.locations)}")
     logger.info(f"📊 Уникальных деревень: {len(db.all_villages)}")
-    logger.info(f"📊 Описаний снимков: {len(self.photo_details)}")
+    logger.info(f"📊 Описаний снимков: {len(db.photo_details)}")  # ИСПРАВЛЕНО: self.photo_details -> db.photo_details
     logger.info(f"📊 Населенных пунктов в каталоге: {village_db.stats['total']}")
     logger.info(f"✅ Яндекс.Диск токен загружен")
     await delete_webhook()
