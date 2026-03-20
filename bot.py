@@ -59,6 +59,7 @@ storage = MemoryStorage()
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=storage)
 
+
 # ========== КЛАСС ДЛЯ РАБОТЫ С ЯНДЕКС.ДИСКОМ ==========
 
 class YandexDiskClient:
@@ -174,9 +175,7 @@ class YandexDiskClient:
             return False
     
     def get_file_download_link(self, file_path: str) -> Optional[str]:
-        """
-        Получает временную ссылку на скачивание файла
-        """
+        """Получает временную ссылку на скачивание файла"""
         file_name = os.path.basename(file_path)
         
         if ' ' in file_name:
@@ -324,8 +323,10 @@ class YandexDiskClient:
         
         return versions
 
+
 # Инициализация клиента Яндекс.Диска
 yd_client = YandexDiskClient(YANDEX_DISK_TOKEN)
+
 
 # ========== КЛАСС ДЛЯ РАБОТЫ С БАЗОЙ НАСЕЛЕННЫХ ПУНКТОВ ==========
 
@@ -481,6 +482,44 @@ class VillageDatabase:
             logger.error(f"Ошибка загрузки каталога: {e}")
             raise
     
+    def update_village_coordinates(self, village_name: str, lat: str, lon: str) -> bool:
+        """Обновляет координаты существующего населенного пункта"""
+        try:
+            updated = False
+            for v in self.villages:
+                if v['name'].lower() == village_name.lower():
+                    if not v.get('lat') or not v.get('lon') or not v['lat'].strip() or not v['lon'].strip():
+                        v['lat'] = lat
+                        v['lon'] = lon
+                        updated = True
+                        logger.info(f"  ✅ Обновлены координаты для {village_name}: {lat}, {lon}")
+                        break
+            
+            if updated:
+                self._save_to_csv()
+                
+                # Обновляем статистику
+                with_coords = sum(1 for v in self.villages if v.get('lat') and v.get('lon') and v['lat'].strip() and v['lon'].strip())
+                self.stats['with_coords'] = with_coords
+            
+            return updated
+            
+        except Exception as e:
+            logger.error(f"Ошибка обновления координат {village_name}: {e}")
+            return False
+    
+    def use_generated_catalog(self, file_path: str) -> Dict:
+        """Использует сгенерированный каталог как основной"""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                csv_content = f.read()
+            
+            stats = self.replace_with_catalog(csv_content, "generated_full_catalog.csv")
+            return stats
+        except Exception as e:
+            logger.error(f"Ошибка при использовании сгенерированного каталога: {e}")
+            raise
+    
     def _save_to_csv(self):
         """Сохраняет данные в CSV файл"""
         if not self.villages:
@@ -560,8 +599,10 @@ class VillageDatabase:
         stats['file_path'] = file_path
         return stats
 
+
 # Инициализация базы данных НП
 village_db = VillageDatabase()
+
 
 # ========== КЛАСС ДЛЯ ОБРАБОТКИ KML ФАЙЛОВ ==========
 
@@ -736,8 +777,10 @@ class KMLProcessor:
         self.logger.info(f"✅ Обработка завершена. Обработано {len(results)} снимков")
         return results
 
+
 # Инициализация KML процессора
 kml_processor = KMLProcessor()
+
 
 # ========== КЛАСС ДЛЯ РАБОТЫ С ДАННЫМИ ==========
 
@@ -979,15 +1022,14 @@ class PhotosDatabase:
         logger.info(f"   • Файловых записей: {len(self.photo_files)}")
         logger.info(f"   • Населенных пунктов в каталоге: {village_db.stats['total']}")
 
+
 db = PhotosDatabase()
+
 
 # ========== ФУНКЦИИ ДЛЯ РАБОТЫ С TXT ФАЙЛАМИ ==========
 
 def clean_village_data(villages: List[Dict]) -> List[Dict]:
-    """
-    Очищает данные от служебных полей (has_coords, article_id и т.д.)
-    Оставляет только поля для сохранения: name, type, lat, lon, district
-    """
+    """Очищает данные от служебных полей"""
     cleaned = []
     for v in villages:
         cleaned_village = {
@@ -1000,16 +1042,14 @@ def clean_village_data(villages: List[Dict]) -> List[Dict]:
         cleaned.append(cleaned_village)
     return cleaned
 
+
 def generate_simple_txt_from_data(data: List[Dict], filename: str) -> str:
     """
     Генерирует простой TXT файл только с нужными колонками
     Формат: Название | Тип | Широта | Долгота | Район
     Сортировка по названию
     """
-    # Очищаем данные от служебных полей
     cleaned_data = clean_village_data(data)
-    
-    # СОРТИРУЕМ ПО АЛФАВИТУ
     cleaned_data.sort(key=lambda x: x['name'])
     
     export_dir = "data/export"
@@ -1039,6 +1079,7 @@ def generate_simple_txt_from_data(data: List[Dict], filename: str) -> str:
         logger.error(f"Ошибка при создании TXT файла: {e}")
         raise
 
+
 # ========== СОСТОЯНИЯ ==========
 
 class SearchStates(StatesGroup):
@@ -1047,6 +1088,7 @@ class SearchStates(StatesGroup):
     waiting_for_csv_upload = State()
     waiting_for_district_select = State()
     waiting_for_merge_action = State()
+
 
 # ========== КЛАВИАТУРЫ ==========
 
@@ -1059,12 +1101,14 @@ def get_main_keyboard() -> ReplyKeyboardMarkup:
     ]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
+
 def get_locus_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📖 Инструкция", callback_data="locus_instruction")],
         [InlineKeyboardButton(text="📥 Скачать Locus Maps", callback_data="locus_download_app")],
         [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
     ])
+
 
 def get_settings_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -1076,6 +1120,7 @@ def get_settings_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_settings")],
         [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
     ])
+
 
 def get_district_keyboard() -> InlineKeyboardMarkup:
     """Клавиатура для выбора района"""
@@ -1091,6 +1136,7 @@ def get_district_keyboard() -> InlineKeyboardMarkup:
     
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
+
 def get_merge_action_keyboard(district: str) -> InlineKeyboardMarkup:
     """Клавиатура для выбора действия с загруженными данными"""
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -1101,16 +1147,19 @@ def get_merge_action_keyboard(district: str) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="❌ Отмена", callback_data="back_to_settings")]
     ])
 
+
 def back_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
     ])
+
 
 def back_to_photos_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔙 Назад к списку", callback_data="back_to_photos")],
         [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
     ])
+
 
 def photos_keyboard(photos: List[str]) -> InlineKeyboardMarkup:
     keyboard = []
@@ -1123,11 +1172,13 @@ def photos_keyboard(photos: List[str]) -> InlineKeyboardMarkup:
     keyboard.append([InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")])
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
+
 def back_to_settings_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔙 Назад в настройки", callback_data="back_to_settings")],
         [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
     ])
+
 
 # ========== ОБРАБОТЧИКИ КОМАНД ==========
 
@@ -1153,6 +1204,7 @@ async def cmd_start(message: types.Message) -> None:
         reply_markup=get_main_keyboard()
     )
 
+
 # ========== ОБРАБОТЧИКИ МЕНЮ ==========
 
 @dp.message(F.text == "🔍 ПОИСК")
@@ -1164,6 +1216,7 @@ async def menu_search(message: types.Message, state: FSMContext):
         parse_mode="HTML"
     )
     await state.set_state(SearchStates.waiting_for_village)
+
 
 @dp.message(F.text == "📋 СПИСОК ДЕРЕВЕНЬ")
 async def menu_villages(message: types.Message):
@@ -1181,6 +1234,7 @@ async def menu_villages(message: types.Message):
         "💡 Чтобы найти снимки по деревне, нажмите 🔍 ПОИСК",
         reply_markup=back_keyboard()
     )
+
 
 @dp.message(F.text == "📖 ИНСТРУКЦИЯ")
 async def menu_instruction(message: types.Message):
@@ -1225,6 +1279,7 @@ async def menu_instruction(message: types.Message):
     
     await message.answer(instruction_text, parse_mode="HTML", reply_markup=keyboard)
 
+
 @dp.message(F.text == "🗺️ КАРТА РЖЕВ")
 async def menu_map(message: types.Message):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -1238,6 +1293,7 @@ async def menu_map(message: types.Message):
         reply_markup=keyboard
     )
 
+
 @dp.message(F.text == "🗺️ LOCUS MAPS")
 async def menu_locus(message: types.Message):
     await message.answer(
@@ -1245,6 +1301,7 @@ async def menu_locus(message: types.Message):
         "Выберите действие:",
         reply_markup=get_locus_keyboard()
     )
+
 
 @dp.message(F.text == "🔄 ОБРАБОТАТЬ KML")
 async def menu_process_kml(message: types.Message, state: FSMContext):
@@ -1256,6 +1313,7 @@ async def menu_process_kml(message: types.Message, state: FSMContext):
         parse_mode="HTML"
     )
     await state.set_state(SearchStates.waiting_for_kml)
+
 
 @dp.message(F.text == "⚙️ НАСТРОЙКИ")
 async def menu_settings(message: types.Message):
@@ -1280,6 +1338,7 @@ async def menu_settings(message: types.Message):
     
     await message.answer(text, parse_mode="HTML", reply_markup=get_settings_keyboard())
 
+
 # ========== ОБРАБОТЧИКИ LOCUS ==========
 
 @dp.callback_query(lambda c: c.data == "locus_instruction")
@@ -1298,6 +1357,7 @@ async def locus_instruction(callback: CallbackQuery):
     )
     await callback.answer()
 
+
 @dp.callback_query(lambda c: c.data == "locus_download_app")
 async def locus_download_app(callback: CallbackQuery):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -1314,6 +1374,7 @@ async def locus_download_app(callback: CallbackQuery):
     )
     await callback.answer()
 
+
 @dp.callback_query(lambda c: c.data == "back_to_locus")
 async def back_to_locus(callback: CallbackQuery):
     await callback.message.edit_text(
@@ -1321,6 +1382,7 @@ async def back_to_locus(callback: CallbackQuery):
         reply_markup=get_locus_keyboard()
     )
     await callback.answer()
+
 
 @dp.callback_query(lambda c: c.data == "download_locus_instruction")
 async def download_locus_instruction(callback: CallbackQuery):
@@ -1337,6 +1399,7 @@ async def download_locus_instruction(callback: CallbackQuery):
     )
     await callback.answer()
 
+
 @dp.callback_query(lambda c: c.data == "download_locus_app")
 async def download_locus_app(callback: CallbackQuery):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -1351,6 +1414,7 @@ async def download_locus_app(callback: CallbackQuery):
         reply_markup=keyboard
     )
     await callback.answer()
+
 
 # ========== ОБРАБОТЧИКИ НАСТРОЕК ==========
 
@@ -1383,6 +1447,7 @@ async def show_village_stats(callback: CallbackQuery):
                                     reply_markup=back_to_settings_keyboard())
     await callback.answer()
 
+
 @dp.callback_query(lambda c: c.data == "update_villages")
 async def update_villages_start(callback: CallbackQuery, state: FSMContext):
     """Начинает процесс загрузки нового каталога"""
@@ -1400,6 +1465,7 @@ async def update_villages_start(callback: CallbackQuery, state: FSMContext):
     )
     await state.set_state(SearchStates.waiting_for_csv_upload)
     await callback.answer()
+
 
 @dp.callback_query(lambda c: c.data == "download_villages_txt")
 async def download_villages_txt(callback: CallbackQuery):
@@ -1433,6 +1499,7 @@ async def download_villages_txt(callback: CallbackQuery):
     
     await callback.answer()
 
+
 @dp.callback_query(lambda c: c.data == "download_from_web_start")
 async def download_from_web_start(callback: CallbackQuery, state: FSMContext):
     """Начинает процесс загрузки данных из интернета - выбор района"""
@@ -1456,23 +1523,22 @@ async def download_from_web_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(SearchStates.waiting_for_district_select)
     await callback.answer()
 
-# ========== ОБНОВЛЕННЫЙ ОБРАБОТЧИК ВЫБОРА РАЙОНА С ТАЙМАУТОМ 1500 СЕКУНД ==========
+
+# ========== ОБНОВЛЕННЫЙ ОБРАБОТЧИК ВЫБОРА РАЙОНА ==========
 
 @dp.callback_query(lambda c: c.data.startswith("select_district_"))
 async def process_district_select(callback: CallbackQuery, state: FSMContext):
-    """Обрабатывает выбор района с увеличенным таймаутом до 1500 секунд (25 минут)"""
+    """Обрабатывает выбор района с увеличенным таймаутом"""
     district = callback.data.replace("select_district_", "")
     
     await state.update_data(selected_district=district)
     
     await callback.message.edit_text(
         f"⏳ <b>Загрузка данных для {district} района...</b>\n\n"
-        f"Это может занять до 20-25 минут. Я сообщу, когда данные будут готовы.\n"
-        f"Бот ищет максимальное количество информации:\n"
+        f"Это может занять 10-15 минут. Я сообщу, когда данные будут готовы.\n"
+        f"Бот ищет:\n"
         f"• страницы района\n"
-        f"• сельские поселения\n"
-        f"• списки бывших населенных пунктов\n"
-        f"• текущие населенные пункты\n"
+        f"• списки населенных пунктов\n"
         f"• координаты для каждого НП\n\n"
         f"<i>Пожалуйста, подождите...</i>",
         parse_mode="HTML"
@@ -1483,15 +1549,30 @@ async def process_district_select(callback: CallbackQuery, state: FSMContext):
     try:
         api_manager = APISourceManager()
         
-        # Увеличиваем общий таймаут до 1500 секунд (25 минут)
+        # Увеличиваем общий таймаут до 1200 секунд (20 минут)
         villages = await asyncio.wait_for(
             api_manager.fetch_district_data(district),
-            timeout=1500.0
+            timeout=1200.0
         )
         
         await api_manager.close_session()
         
-        # Очищаем данные от служебных полей перед сохранением
+        if not villages:
+            await callback.message.edit_text(
+                f"❌ <b>Не удалось загрузить данные для {district} района</b>\n\n"
+                f"Причины:\n"
+                f"• Страница района не найдена на dic.academic.ru\n"
+                f"• Нет доступных списков населенных пунктов\n\n"
+                f"Попробуйте:\n"
+                f"• Выбрать другой район\n"
+                f"• Загрузить данные вручную через CSV",
+                parse_mode="HTML",
+                reply_markup=back_to_settings_keyboard()
+            )
+            await callback.answer()
+            return
+        
+        # Очищаем данные от служебных полей
         cleaned_villages = []
         for v in villages:
             cleaned_village = {
@@ -1516,7 +1597,7 @@ async def process_district_select(callback: CallbackQuery, state: FSMContext):
         stats_text += f"• С координатами: {with_coords}\n"
         stats_text += f"• Без координат: {len(cleaned_villages) - with_coords}\n"
         
-        # Создаем CSV файл (внутренний)
+        # Создаем CSV файл
         timestamp = time.strftime('%Y%m%d_%H%M%S')
         temp_dir = "data/temp"
         os.makedirs(temp_dir, exist_ok=True)
@@ -1528,7 +1609,7 @@ async def process_district_select(callback: CallbackQuery, state: FSMContext):
             writer.writeheader()
             writer.writerows(cleaned_villages)
         
-        # Создаем TXT файл для скачивания (уже с сортировкой)
+        # Создаем TXT файл для скачивания
         txt_filename = f"населенные_пункты_{district}_{timestamp}.txt"
         txt_path = generate_simple_txt_from_data(cleaned_villages, txt_filename)
         
@@ -1551,11 +1632,7 @@ async def process_district_select(callback: CallbackQuery, state: FSMContext):
         logger.error("Таймаут при загрузке данных")
         await callback.message.edit_text(
             "❌ <b>Ошибка загрузки</b>\n\n"
-            "Превышено время ожидания ответа от серверов (25 минут).\n"
-            "Это может быть связано с:\n"
-            "• большой нагрузкой на сервер dic.academic.ru\n"
-            "• медленным интернет-соединением\n"
-            "• слишком большим объемом данных\n\n"
+            "Превышено время ожидания ответа от серверов (20 минут).\n"
             "Попробуйте:\n"
             "• выбрать другой район\n"
             "• повторить попытку позже\n"
@@ -1574,7 +1651,9 @@ async def process_district_select(callback: CallbackQuery, state: FSMContext):
         if 'api_manager' in locals():
             await api_manager.close_session()
 
-# ОБРАБОТЧИК ВЫБОРА ДЕЙСТВИЯ С ДАННЫМИ
+
+# ========== ОБРАБОТЧИК ВЫБОРА ДЕЙСТВИЯ С ДАННЫМИ ==========
+
 @dp.callback_query(lambda c: c.data.startswith("merge_"))
 async def process_merge_action(callback: CallbackQuery, state: FSMContext):
     """Обрабатывает выбор действия с загруженными данными"""
@@ -1620,6 +1699,7 @@ async def process_merge_action(callback: CallbackQuery, state: FSMContext):
     elif action == "append":
         await perform_append_catalog(callback, state, temp_csv, downloaded_data, district)
 
+
 async def show_detailed_stats(callback: CallbackQuery, state: FSMContext, data: List[Dict]):
     """Показывает детальную статистику по загруженным данным"""
     
@@ -1658,6 +1738,7 @@ async def show_detailed_stats(callback: CallbackQuery, state: FSMContext, data: 
     
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
     await callback.answer()
+
 
 async def perform_replace_catalog(callback: CallbackQuery, state: FSMContext, 
                                    temp_csv: str, data: List[Dict], district: str):
@@ -1704,6 +1785,7 @@ async def perform_replace_catalog(callback: CallbackQuery, state: FSMContext,
         )
     
     await callback.answer()
+
 
 async def perform_append_catalog(callback: CallbackQuery, state: FSMContext,
                                   temp_csv: str, new_data: List[Dict], district: str):
@@ -1792,6 +1874,7 @@ async def perform_append_catalog(callback: CallbackQuery, state: FSMContext,
     
     await callback.answer()
 
+
 @dp.callback_query(lambda c: c.data == "merge_back_to_action")
 async def merge_back_to_action(callback: CallbackQuery, state: FSMContext):
     """Возврат к выбору действия"""
@@ -1816,6 +1899,7 @@ async def merge_back_to_action(callback: CallbackQuery, state: FSMContext):
     )
     await callback.answer()
 
+
 @dp.callback_query(lambda c: c.data == "merge_replace_continue")
 async def merge_replace_continue(callback: CallbackQuery, state: FSMContext):
     """Продолжить замену после просмотра статистики"""
@@ -1826,6 +1910,7 @@ async def merge_replace_continue(callback: CallbackQuery, state: FSMContext):
     
     await perform_replace_catalog(callback, state, temp_csv, downloaded_data, district)
 
+
 @dp.callback_query(lambda c: c.data == "merge_append_continue")
 async def merge_append_continue(callback: CallbackQuery, state: FSMContext):
     """Продолжить дополнение после просмотра статистики"""
@@ -1835,6 +1920,7 @@ async def merge_append_continue(callback: CallbackQuery, state: FSMContext):
     downloaded_data = data.get('downloaded_data', [])
     
     await perform_append_catalog(callback, state, temp_csv, downloaded_data, district)
+
 
 @dp.callback_query(lambda c: c.data == "merge_download_continue")
 async def merge_download_continue(callback: CallbackQuery, state: FSMContext):
@@ -1856,6 +1942,7 @@ async def merge_download_continue(callback: CallbackQuery, state: FSMContext):
         await callback.message.answer("❌ Файл для скачивания не найден.")
     
     await merge_back_to_action(callback, state)
+
 
 @dp.callback_query(lambda c: c.data == "generate_catalog")
 async def generate_catalog_start(callback: CallbackQuery):
@@ -1885,6 +1972,7 @@ async def generate_catalog_start(callback: CallbackQuery):
     
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
     await callback.answer()
+
 
 @dp.callback_query(lambda c: c.data == "generate_catalog_confirm")
 async def generate_catalog_confirm(callback: CallbackQuery):
@@ -1939,6 +2027,7 @@ async def generate_catalog_confirm(callback: CallbackQuery):
     
     await callback.answer()
 
+
 @dp.callback_query(lambda c: c.data == "use_generated_catalog")
 async def use_generated_catalog(callback: CallbackQuery):
     """Использует сгенерированный каталог как основной"""
@@ -1977,6 +2066,7 @@ async def use_generated_catalog(callback: CallbackQuery):
     
     await callback.answer()
 
+
 @dp.callback_query(lambda c: c.data == "download_generated_txt")
 async def download_generated_txt(callback: CallbackQuery, state: FSMContext):
     """Отправляет сгенерированный каталог в TXT"""
@@ -2014,6 +2104,7 @@ async def download_generated_txt(callback: CallbackQuery, state: FSMContext):
     
     await callback.answer()
 
+
 @dp.callback_query(lambda c: c.data == "back_to_settings")
 async def back_to_settings(callback: CallbackQuery):
     """Возврат в меню настроек"""
@@ -2037,6 +2128,7 @@ async def back_to_settings(callback: CallbackQuery):
     
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=get_settings_keyboard())
     await callback.answer()
+
 
 # ========== ОБРАБОТЧИК ПОИСКА ==========
 
@@ -2079,6 +2171,7 @@ async def process_search(message: types.Message, state: FSMContext):
             f"❌ Ничего не найдено для '{text}'",
             reply_markup=keyboard
         )
+
 
 # ========== ОБРАБОТЧИК ЗАГРУЗКИ KML ==========
 
@@ -2142,6 +2235,7 @@ async def process_kml_upload(message: types.Message, state: FSMContext):
     
     await state.clear()
 
+
 @dp.message(SearchStates.waiting_for_kml)
 async def process_kml_upload_invalid(message: types.Message, state: FSMContext):
     await message.answer(
@@ -2150,6 +2244,7 @@ async def process_kml_upload_invalid(message: types.Message, state: FSMContext):
         parse_mode="HTML"
     )
     await state.clear()
+
 
 # ========== ОБРАБОТЧИК ЗАГРУЗКИ CSV ==========
 
@@ -2209,6 +2304,7 @@ async def process_csv_upload(message: types.Message, state: FSMContext):
     
     await state.clear()
 
+
 @dp.message(SearchStates.waiting_for_csv_upload)
 async def process_csv_upload_invalid(message: types.Message, state: FSMContext):
     """Обрабатывает неверный ввод при ожидании CSV"""
@@ -2218,6 +2314,7 @@ async def process_csv_upload_invalid(message: types.Message, state: FSMContext):
         parse_mode="HTML"
     )
     await state.clear()
+
 
 # ========== ОБРАБОТЧИКИ КНОПОК ==========
 
@@ -2238,6 +2335,7 @@ async def process_photo(callback: CallbackQuery):
     )
     await callback.answer()
 
+
 @dp.callback_query(lambda c: c.data == "back_to_photos")
 async def back_to_photos(callback: CallbackQuery):
     user_id = callback.from_user.id
@@ -2256,12 +2354,14 @@ async def back_to_photos(callback: CallbackQuery):
         )
     await callback.answer()
 
+
 @dp.callback_query(lambda c: c.data == "try_again")
 async def try_again(callback: CallbackQuery, state: FSMContext):
     await callback.message.delete()
     await callback.message.answer("🔍 Введите название деревни:")
     await state.set_state(SearchStates.waiting_for_village)
     await callback.answer()
+
 
 @dp.callback_query(lambda c: c.data == "show_villages")
 async def show_villages(callback: CallbackQuery):
@@ -2275,12 +2375,14 @@ async def show_villages(callback: CallbackQuery):
     await callback.message.answer("💡 Нажмите 🔍 ПОИСК для поиска", reply_markup=back_keyboard())
     await callback.answer()
 
+
 @dp.callback_query(lambda c: c.data == "back_to_main")
 async def back_to_main(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.message.delete()
     await cmd_start(callback.message)
     await callback.answer()
+
 
 # ========== ЗАПУСК ==========
 
@@ -2292,6 +2394,7 @@ async def delete_webhook() -> None:
     except Exception as e:
         logger.error(f"Ошибка удаления webhook: {e}")
 
+
 async def main() -> None:
     logger.info("🚀 Бот для поиска аэрофотоснимков запускается...")
     logger.info(f"📊 Загружено локаций: {len(db.locations)}")
@@ -2302,6 +2405,7 @@ async def main() -> None:
     await delete_webhook()
     logger.info("🔄 Polling...")
     await dp.start_polling(bot, skip_updates=True)
+
 
 if __name__ == "__main__":
     try:
