@@ -34,6 +34,24 @@ DIC_ACADEMIC_ARTICLE_URL = "https://dic.academic.ru/dic.nsf/ruwiki/{}"
 # Wikipedia URL
 WIKIPEDIA_BASE_URL = "https://ru.wikipedia.org/wiki/"
 
+# Соответствие районов областям
+DISTRICT_TO_REGION = {
+    "Ржевский": "Тверская область",
+    "Оленинский": "Тверская область",
+    "Зубцовский": "Тверская область",
+    "Бельский": "Тверская область"
+}
+
+# Ключевые слова для определения правильной области
+REGION_KEYWORDS = [
+    "Тверская область",
+    "Тверской области",
+    "Тверская обл",
+    "Тверской обл",
+    "Тверская губерния",
+    "Калининская область"
+]
+
 # Соответствие сокращений полным названиям типов
 TYPE_MAPPING = {
     'дер.': 'деревня',
@@ -162,7 +180,7 @@ class APISourceManager:
         # Словарь для хранения ссылок на отдельные страницы НП (с dic.academic.ru)
         self.village_links: Dict[str, str] = {}  # название НП -> ID статьи
         
-        # Словарь для хранения Wikipedia ссылок
+        # Словарь для хранения Wikipedia ссылок (правильные)
         self.wikipedia_links: Dict[str, str] = {}  # название НП -> URL статьи
         
         # ВРЕМЕННЫЙ КЭШ КООРДИНАТ (ТОЛЬКО ДЛЯ ТЕКУЩЕГО ПОИСКА)
@@ -185,6 +203,7 @@ class APISourceManager:
             'from_search': 0,
             'from_temp_cache': 0,
             'from_wikipedia': 0,
+            'from_wikipedia_disambig': 0,
             'total_without': 0,
             'remaining': 0
         }
@@ -226,6 +245,7 @@ class APISourceManager:
             'from_search': 0,
             'from_temp_cache': 0,
             'from_wikipedia': 0,
+            'from_wikipedia_disambig': 0,
             'total_without': 0,
             'remaining': 0
         }
@@ -1378,7 +1398,7 @@ class APISourceManager:
         try:
             soup = BeautifulSoup(html, 'html.parser')
             
-            # Вариант 1: Ищем geo class (как на dic.academic.ru)
+            # Вариант 1: Ищем geo class
             geo_span = soup.find('span', class_='geo')
             if geo_span:
                 lat_span = geo_span.find('span', class_='latitude')
@@ -1401,11 +1421,10 @@ class APISourceManager:
                     if header and 'координаты' in header.get_text().lower():
                         coord_cell = row.find('td')
                         if coord_cell:
-                            # Ищем ссылку на GeoHack или координаты
+                            # Ищем ссылку на GeoHack
                             for link in coord_cell.find_all('a'):
                                 href = link.get('href', '')
                                 if 'geohack' in href:
-                                    # Координаты в URL GeoHack
                                     match = re.search(r'params=([0-9._]+)_([NS])_([0-9._]+)_([EW])', href)
                                     if match:
                                         try:
@@ -1443,28 +1462,88 @@ class APISourceManager:
                 except:
                     pass
             
-            # Вариант 4: Ищем десятичные координаты
-            decimal_pattern = r'([0-9]{2}\.[0-9]{4,})[,\s]+([0-9]{2,3}\.[0-9]{4,})'
-            match = re.search(decimal_pattern, text)
-            if match:
-                try:
-                    lat = float(match.group(1))
-                    lon = float(match.group(2))
-                    if self._validate_coordinates(lat, lon):
-                        logger.info(f"        ✅ Wikipedia: найдены координаты через десятичные: {lat:.5f}, {lon:.5f}")
-                        return (str(round(lat, 5)), str(round(lon, 5)))
-                except:
-                    pass
-            
             return None
             
         except Exception as e:
             logger.debug(f"Ошибка парсинга координат Wikipedia: {e}")
             return None
     
-    async def _search_wikipedia(self, village_name: str, village_type: str) -> Optional[Tuple[str, str]]:
+    async def _check_wikipedia_disambiguation(self, html: str, village_name: str, district: str) -> Optional[str]:
+        """
+        Проверяет, является ли страница страницей многозначности (дизамбиг),
+        и находит правильную ссылку для нужного района/области
+        """
+        try:
+            soup = BeautifulSoup(html, 'html.parser')
+            
+            # Проверяем, есть ли метка дизамбига
+            disambig_templates = [
+                'disambig',
+                'неоднозначность',
+                'значения'
+            ]
+            
+            is_disambig = False
+            for template in disambig_templates:
+                if soup.find('div', class_=template) or soup.find('table', class_=template):
+                    is_disambig = True
+                    break
+            
+            # Также проверяем заголовок
+            title_elem = soup.find('h1')
+            if title_elem:
+                title_text = title_elem.get_text().lower()
+                if 'значения' in title_text or 'неоднозначность' in title_text:
+                    is_disambig = True
+            
+            if not is_disambig:
+                return None
+            
+            logger.info(f"        🔍 Обнаружена страница многозначности для {village_name}")
+            
+            # Ищем ссылки на статьи
+            region = DISTRICT_TO_REGION.get(district, "Тверская область")
+            region_keywords_lower = [kw.lower() for kw in REGION_KEYWORDS]
+            
+            # Проходим по всем ссылкам
+            for link in soup.find_all('a', href=True):
+                href = link.get('href', '')
+                if not href.startswith('/wiki/') or ':' in href:
+                    continue
+                
+                link_text = link.get_text().strip().lower()
+                parent_text = ""
+                parent = link.find_parent(['li', 'p', 'div'])
+                if parent:
+                    parent_text = parent.get_text().lower()
+                
+                full_context = f"{link_text} {parent_text}"
+                
+                # Проверяем, относится ли ссылка к Тверской области
+                if region.lower() in full_context:
+                    for kw in region_keywords_lower:
+                        if kw in full_context:
+                            # Нашли нужную ссылку
+                            wiki_url = f"https://ru.wikipedia.org{href}"
+                            logger.info(f"        ✅ Найдена правильная ссылка для {village_name}: {wiki_url}")
+                            return wiki_url
+                
+                # Также проверяем наличие района в тексте
+                if district.lower() in full_context:
+                    wiki_url = f"https://ru.wikipedia.org{href}"
+                    logger.info(f"        ✅ Найдена ссылка с районом {district} для {village_name}: {wiki_url}")
+                    return wiki_url
+            
+            return None
+            
+        except Exception as e:
+            logger.debug(f"Ошибка проверки дизамбига: {e}")
+            return None
+    
+    async def _search_wikipedia(self, village_name: str, village_type: str, district: str) -> Optional[Tuple[str, str]]:
         """
         Поиск координат в Wikipedia по названию населенного пункта
+        с обработкой страниц многозначности
         """
         try:
             # Формируем URL для прямой статьи
@@ -1475,20 +1554,31 @@ class APISourceManager:
             if not html:
                 return None
             
-            # Проверяем, что страница существует (не перенаправление на страницу поиска)
+            # Проверяем, что страница существует
             soup = BeautifulSoup(html, 'html.parser')
             no_article_div = soup.find('div', class_='noarticletext')
             if no_article_div:
                 logger.debug(f"        ❌ Wikipedia: страница для {village_name} не найдена")
                 return None
             
+            # Проверяем, не страница ли это многозначности
+            correct_url = await self._check_wikipedia_disambiguation(html, village_name, district)
+            
+            if correct_url and correct_url != url:
+                logger.info(f"        🔄 Перенаправление на правильную страницу: {correct_url}")
+                html = await self._fetch_page(correct_url)
+                if not html:
+                    return None
+                self.wikipedia_links[village_name] = correct_url
+            
             # Парсим координаты
             coords = await self._parse_wikipedia_coordinates(html)
             if coords:
                 logger.info(f"        ✅ Wikipedia: найдены координаты для {village_name}: {coords[0]}, {coords[1]}")
+                self.coords_stats['from_wikipedia'] += 1
                 return coords
             
-            # Если не нашли координаты, пробуем альтернативные названия
+            # Если не нашли координаты, пробуем альтернативные названия с типом
             if village_type in TYPE_SHORT:
                 type_short = TYPE_SHORT[village_type]
                 alt_name = f"{village_name} {type_short}"
@@ -1501,10 +1591,22 @@ class APISourceManager:
                     soup = BeautifulSoup(html, 'html.parser')
                     no_article_div = soup.find('div', class_='noarticletext')
                     if not no_article_div:
-                        coords = await self._parse_wikipedia_coordinates(html)
-                        if coords:
-                            logger.info(f"        ✅ Wikipedia: найдены координаты для {alt_name}: {coords[0]}, {coords[1]}")
-                            return coords
+                        # Проверяем дизамбиг для альтернативного названия
+                        correct_alt_url = await self._check_wikipedia_disambiguation(html, alt_name, district)
+                        if correct_alt_url and correct_alt_url != alt_url:
+                            html = await self._fetch_page(correct_alt_url)
+                            if html:
+                                coords = await self._parse_wikipedia_coordinates(html)
+                                if coords:
+                                    logger.info(f"        ✅ Wikipedia: найдены координаты для {alt_name}: {coords[0]}, {coords[1]}")
+                                    self.coords_stats['from_wikipedia'] += 1
+                                    return coords
+                        else:
+                            coords = await self._parse_wikipedia_coordinates(html)
+                            if coords:
+                                logger.info(f"        ✅ Wikipedia: найдены координаты для {alt_name}: {coords[0]}, {coords[1]}")
+                                self.coords_stats['from_wikipedia'] += 1
+                                return coords
             
             return None
             
@@ -1520,7 +1622,7 @@ class APISourceManager:
         1. Временный кэш
         2. Ссылка на dic.academic.ru
         3. Поиск на dic.academic.ru (только один точный запрос)
-        4. Wikipedia
+        4. Wikipedia с обработкой дизамбига
         """
         try:
             village_name = village['name']
@@ -1552,11 +1654,10 @@ class APISourceManager:
                     else:
                         # Координаты не найдены по ссылке, переходим к Wikipedia
                         logger.info(f"        🔄 Координаты не найдены на dic.academic.ru, пробуем Wikipedia")
-                        wiki_coords = await self._search_wikipedia(village_name, village['type'])
+                        wiki_coords = await self._search_wikipedia(village_name, village['type'], district)
                         if wiki_coords:
                             lat, lon = wiki_coords
                             self.temp_coords_cache[village_name] = (lat, lon)
-                            self.coords_stats['from_wikipedia'] += 1
                             return {
                                 "name": village_name,
                                 "type": village['type'],
@@ -1589,12 +1690,11 @@ class APISourceManager:
             
             # ВАРИАНТ 3: Wikipedia (если dic.academic.ru не дал результата)
             logger.info(f"        🔍 Поиск в Wikipedia для {village_name} (dic.academic.ru не дал результата)")
-            wiki_coords = await self._search_wikipedia(village_name, village['type'])
+            wiki_coords = await self._search_wikipedia(village_name, village['type'], district)
             
             if wiki_coords:
                 lat, lon = wiki_coords
                 self.temp_coords_cache[village_name] = (lat, lon)
-                self.coords_stats['from_wikipedia'] += 1
                 return {
                     "name": village_name,
                     "type": village['type'],
