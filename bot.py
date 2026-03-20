@@ -1456,18 +1456,18 @@ async def download_from_web_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(SearchStates.waiting_for_district_select)
     await callback.answer()
 
-# ========== ОБНОВЛЕННЫЙ ОБРАБОТЧИК ВЫБОРА РАЙОНА С ТАЙМАУТОМ 1200 СЕКУНД ==========
+# ========== ОБНОВЛЕННЫЙ ОБРАБОТЧИК ВЫБОРА РАЙОНА С ТАЙМАУТОМ 1500 СЕКУНД ==========
 
 @dp.callback_query(lambda c: c.data.startswith("select_district_"))
 async def process_district_select(callback: CallbackQuery, state: FSMContext):
-    """Обрабатывает выбор района с увеличенным таймаутом до 1200 секунд (20 минут)"""
+    """Обрабатывает выбор района с увеличенным таймаутом до 1500 секунд (25 минут)"""
     district = callback.data.replace("select_district_", "")
     
     await state.update_data(selected_district=district)
     
     await callback.message.edit_text(
         f"⏳ <b>Загрузка данных для {district} района...</b>\n\n"
-        f"Это может занять до 15-20 минут. Я сообщу, когда данные будут готовы.\n"
+        f"Это может занять до 20-25 минут. Я сообщу, когда данные будут готовы.\n"
         f"Бот ищет максимальное количество информации:\n"
         f"• страницы района\n"
         f"• сельские поселения\n"
@@ -1483,10 +1483,10 @@ async def process_district_select(callback: CallbackQuery, state: FSMContext):
     try:
         api_manager = APISourceManager()
         
-        # Увеличиваем общий таймаут до 1200 секунд (20 минут)
+        # Увеличиваем общий таймаут до 1500 секунд (25 минут)
         villages = await asyncio.wait_for(
             api_manager.fetch_district_data(district),
-            timeout=1200.0
+            timeout=1500.0
         )
         
         await api_manager.close_session()
@@ -1551,7 +1551,7 @@ async def process_district_select(callback: CallbackQuery, state: FSMContext):
         logger.error("Таймаут при загрузке данных")
         await callback.message.edit_text(
             "❌ <b>Ошибка загрузки</b>\n\n"
-            "Превышено время ожидания ответа от серверов (20 минут).\n"
+            "Превышено время ожидания ответа от серверов (25 минут).\n"
             "Это может быть связано с:\n"
             "• большой нагрузкой на сервер dic.academic.ru\n"
             "• медленным интернет-соединением\n"
@@ -2296,7 +2296,7 @@ async def main() -> None:
     logger.info("🚀 Бот для поиска аэрофотоснимков запускается...")
     logger.info(f"📊 Загружено локаций: {len(db.locations)}")
     logger.info(f"📊 Уникальных деревень: {len(db.all_villages)}")
-    logger.info(f"📊 Описаний снимков: {len(db.photo_details)}")  # ИСПРАВЛЕНО: self.photo_details -> db.photo_details
+    logger.info(f"📊 Описаний снимков: {len(db.photo_details)}")
     logger.info(f"📊 Населенных пунктов в каталоге: {village_db.stats['total']}")
     logger.info(f"✅ Яндекс.Диск токен загружен")
     await delete_webhook()
