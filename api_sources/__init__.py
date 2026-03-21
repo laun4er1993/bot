@@ -96,9 +96,9 @@ class APISourceManager:
             'total_unique': 0
         }
         
-        # Параллельные запросы (уменьшено для избежания 429)
-        self.max_concurrent_requests = 3   # к Wikipedia (было 10)
-        self.max_concurrent_dic = 2        # к dic.academic.ru (было 3)
+        # Параллельные запросы
+        self.max_concurrent_requests = 3   # к Wikipedia
+        self.max_concurrent_dic = 2        # к dic.academic.ru
         
         # Стандартные заголовки
         self.default_headers = {
@@ -1109,12 +1109,12 @@ class APISourceManager:
             return []
     
     async def _find_master_list_links(self, html: str, district: str) -> List[str]:
-        """Автоматический поиск ссылок на списки населенных пунктов"""
+        """Автоматический поиск ссылок на списки населенных пунктов (усиленный)"""
         try:
             soup = BeautifulSoup(html, 'html.parser')
-            found_ids = []
+            found_ids = set()
             
-            # Расширенные ключевые слова для поиска
+            # Расширенные ключевые слова
             master_keywords = LIST_KEYWORDS + [
                 "список населённых пунктов района",
                 "список населенных пунктов района",
@@ -1138,18 +1138,26 @@ class APISourceManager:
                 
                 full_context = text + ' ' + title + ' ' + surrounding
                 
+                found = False
                 for keyword in master_keywords:
                     if keyword in full_context:
-                        match = re.search(r'/dic\.nsf/ruwiki/(\d+)', href)
-                        if match:
-                            article_id = match.group(1)
-                            found_ids.append(article_id)
-                            logger.info(f"      Найдена ссылка на список НП: ID {article_id} - {link.get_text()}")
-                            break
+                        found = True
+                        break
+                
+                if not found:
+                    # Проверяем по простым словам
+                    if ('список' in full_context and ('населённых' in full_context or 'населенных' in full_context)):
+                        found = True
+                
+                if found:
+                    match = re.search(r'/dic\.nsf/ruwiki/(\d+)', href)
+                    if match:
+                        article_id = match.group(1)
+                        found_ids.add(article_id)
+                        logger.info(f"      Найдена ссылка на список НП: ID {article_id} - {link.get_text()}")
             
             # Поиск в разделе "См. также"
             see_also_patterns = ['см. также', 'смотри также', 'см также', 'примечания', 'ссылки']
-            
             for pattern in see_also_patterns:
                 for elem in soup.find_all(['p', 'div', 'span', 'li'], string=re.compile(pattern, re.I)):
                     parent = elem.find_parent()
@@ -1158,16 +1166,13 @@ class APISourceManager:
                             href = link.get('href', '')
                             text = link.get_text().lower()
                             title = link.get('title', '').lower()
-                            
-                            for keyword in master_keywords:
-                                if keyword in text or keyword in title:
-                                    match = re.search(r'/dic\.nsf/ruwiki/(\d+)', href)
-                                    if match:
-                                        article_id = match.group(1)
-                                        if article_id not in found_ids:
-                                            found_ids.append(article_id)
-                                            logger.info(f"      Найдена ссылка на список НП в 'См. также': ID {article_id} - {link.get_text()}")
-                                        break
+                            if ('список' in text or 'список' in title) and ('населённых' in text or 'населенных' in text or 'населённых' in title or 'населенных' in title):
+                                match = re.search(r'/dic\.nsf/ruwiki/(\d+)', href)
+                                if match:
+                                    article_id = match.group(1)
+                                    if article_id not in found_ids:
+                                        found_ids.add(article_id)
+                                        logger.info(f"      Найдена ссылка на список НП в 'См. также': ID {article_id} - {link.get_text()}")
             
             # Поиск в боковых панелях
             for div in soup.find_all('div', class_=['sidebox', 'navbox', 'toccolours', 'noprint', 'toc', 'metadata']):
@@ -1175,36 +1180,29 @@ class APISourceManager:
                     href = link.get('href', '')
                     text = link.get_text().lower()
                     title = link.get('title', '').lower()
-                    
-                    for keyword in master_keywords:
-                        if keyword in text or keyword in title:
-                            match = re.search(r'/dic\.nsf/ruwiki/(\d+)', href)
-                            if match:
-                                article_id = match.group(1)
-                                if article_id not in found_ids:
-                                    found_ids.append(article_id)
-                                    logger.info(f"      Найдена ссылка на список НП в боковой панели: ID {article_id} - {link.get_text()}")
-                                break
+                    if ('список' in text or 'список' in title) and ('населённых' in text or 'населенных' in text or 'населённых' in title or 'населенных' in title):
+                        match = re.search(r'/dic\.nsf/ruwiki/(\d+)', href)
+                        if match:
+                            article_id = match.group(1)
+                            if article_id not in found_ids:
+                                found_ids.add(article_id)
+                                logger.info(f"      Найдена ссылка на список НП в боковой панели: ID {article_id} - {link.get_text()}")
             
             # Поиск по прямым ссылкам с числами в названии
             for link in soup.find_all('a', href=re.compile(r'/dic\.nsf/ruwiki/\d+')):
                 href = link.get('href', '')
                 text = link.get_text().lower()
                 title = link.get('title', '').lower()
-                
                 if ('список' in text or 'список' in title) and ('населённых' in text or 'населенных' in text or 'населённых' in title or 'населенных' in title):
                     match = re.search(r'/dic\.nsf/ruwiki/(\d+)', href)
                     if match:
                         article_id = match.group(1)
                         if article_id not in found_ids:
-                            found_ids.append(article_id)
+                            found_ids.add(article_id)
                             logger.info(f"      Найдена ссылка на список НП по прямому совпадению: ID {article_id} - {link.get_text()}")
             
-            # Убираем дубликаты
-            found_ids = list(set(found_ids))
             logger.info(f"    Всего найдено ссылок на списки НП: {len(found_ids)}")
-            
-            return found_ids
+            return list(found_ids)
             
         except Exception as e:
             logger.error(f"Ошибка поиска ссылок на списки: {e}")
