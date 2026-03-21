@@ -35,13 +35,6 @@ logger = logging.getLogger(__name__)
 class APISourceManager:
     """
     Универсальный менеджер для загрузки данных из dic.academic.ru и Wikipedia
-    
-    Алгоритм:
-    1. Сбор НП с dic.academic.ru (общие списки, бывшие НП, сельские поселения)
-    2. Поиск координат на dic.academic.ru:
-       - Из страниц бывших НП (сразу с координатами)
-       - По ссылкам из страниц СП
-    3. Для НП без координат - поиск на Wikipedia
     """
     
     def __init__(self):
@@ -97,6 +90,10 @@ class APISourceManager:
             'from_settlements': 0,
             'total_unique': 0
         }
+        
+        # Параллельные запросы
+        self.max_concurrent_requests = 10  # к Wikipedia
+        self.max_concurrent_dic = 3        # к dic.academic.ru
         
         # Стандартные заголовки
         self.default_headers = {
@@ -544,7 +541,6 @@ class APISourceManager:
             return []
     
     async def _find_former_np_page(self, settlement: str, district: str) -> Optional[str]:
-        """Находит страницу с бывшими населенными пунктами для сельского поселения"""
         cache_key = f"former_np_{district}_{settlement}"
         if cache_key in self.former_np_pages_cache:
             return self.former_np_pages_cache[cache_key]
@@ -554,7 +550,8 @@ class APISourceManager:
             f"Список бывших населенных пунктов на территории сельского поселения {settlement} {district} района",
             f"Список бывших населённых пунктов {settlement} {district} района",
             f"Бывшие населённые пункты {settlement} СП",
-            f"Список бывших населённых пунктов {settlement} сельского поселения"
+            f"Список бывших населённых пунктов {settlement} сельского поселения",
+            f"{settlement} бывшие населенные пункты"
         ]
         
         all_results = []
@@ -571,20 +568,31 @@ class APISourceManager:
             title_lower = result['title'].lower()
             full_text_lower = result['full_text'].lower()
             district_lower = district.lower()
+            settlement_lower = settlement.lower()
             
             if district_lower not in full_text_lower and district_lower not in title_lower:
                 result['score'] = 0
                 continue
             
-            if "список бывших" in title_lower and settlement.lower() in title_lower:
+            if "список бывших" in title_lower and settlement_lower in title_lower:
+                result['score'] = 200
+            elif "бывшие" in title_lower and settlement_lower in title_lower:
                 result['score'] = 150
             else:
                 result['score'] = self._score_settlement_relevance(result, settlement, district)
             
             if district_lower in full_text_lower:
                 result['score'] += 20
+            
+            if "населённых пунктов" in full_text_lower or "населенных пунктов" in full_text_lower:
+                result['score'] += 15
         
-        filtered_results = [r for r in all_results if r['score'] >= 50 and district.lower() in (r['full_text'].lower() + r['title'].lower())]
+        filtered_results = [r for r in all_results if r['score'] >= 60 and district.lower() in (r['full_text'].lower() + r['title'].lower())]
+        
+        if not filtered_results:
+            for result in all_results:
+                if result['score'] >= 40 and district.lower() in (result['full_text'].lower() + result['title'].lower()):
+                    filtered_results.append(result)
         
         if not filtered_results:
             return None
@@ -599,7 +607,6 @@ class APISourceManager:
         return None
     
     async def _find_settlement_main_page(self, settlement: str, district: str) -> Optional[str]:
-        """Находит основную страницу сельского поселения"""
         cache_key = f"settlement_main_{district}_{settlement}"
         if cache_key in self.settlement_pages_cache:
             return self.settlement_pages_cache[cache_key]
@@ -627,14 +634,12 @@ class APISourceManager:
         best = max(all_results, key=lambda x: x['score'])
         
         if best['score'] >= 40:
-            # Дополнительная проверка: загружаем страницу и убеждаемся, что это не страница района
             page_url = DIC_ACADEMIC_ARTICLE_URL.format(best['id'])
             html = await self._fetch_page(page_url)
             if html:
                 soup = BeautifulSoup(html, 'html.parser')
                 title_elem = soup.find('h1')
                 title_text = title_elem.get_text().lower() if title_elem else ""
-                # Если в заголовке есть "район" и нет "сельское поселение" — это страница района
                 if "район" in title_text and "сельское поселение" not in title_text:
                     logger.debug(f"      Пропускаем страницу района: {best['id']} - {title_text}")
                     return None
@@ -1101,7 +1106,6 @@ class APISourceManager:
             return []
     
     async def _find_master_list_links(self, html: str, district: str) -> List[str]:
-        """Автоматический поиск ссылок на списки населенных пунктов"""
         try:
             soup = BeautifulSoup(html, 'html.parser')
             found_ids = []
@@ -1145,6 +1149,21 @@ class APISourceManager:
                                             found_ids.append(article_id)
                                             logger.info(f"      Найдена ссылка на список НП в 'См. также': ID {article_id} - {link.get_text()}")
                                         break
+            
+            for div in soup.find_all('div', class_=['sidebox', 'navbox', 'toccolours', 'noprint']):
+                for link in div.find_all('a', href=re.compile(r'/dic\.nsf/ruwiki/\d+')):
+                    href = link.get('href', '')
+                    text = link.get_text().lower()
+                    
+                    for keyword in LIST_KEYWORDS:
+                        if keyword in text:
+                            match = re.search(r'/dic\.nsf/ruwiki/(\d+)', href)
+                            if match:
+                                article_id = match.group(1)
+                                if article_id not in found_ids:
+                                    found_ids.append(article_id)
+                                    logger.info(f"      Найдена ссылка на список НП в боковой панели: ID {article_id} - {link.get_text()}")
+                                break
             
             return list(set(found_ids))
             
@@ -1593,6 +1612,32 @@ class APISourceManager:
         title = title_elem.get_text().strip() if title_elem else ""
         return {'id': article_id, 'title': title}
     
+    # ========== ПАРАЛЛЕЛЬНЫЙ ПОИСК КООРДИНАТ НА WIKIPEDIA ==========
+    
+    async def _fetch_wikipedia_coordinates_batch(self, villages: List[Dict], district: str, wikipedia_links: Dict[str, str]) -> Dict[str, Dict]:
+        """Параллельно загружает координаты из Wikipedia для списка деревень"""
+        semaphore = asyncio.Semaphore(self.max_concurrent_requests)
+        
+        async def fetch_one(village):
+            async with semaphore:
+                name = village['name']
+                if name in wikipedia_links:
+                    wiki_url = wikipedia_links[name]
+                    logger.debug(f"      🔍 Загружаем Wikipedia: {name}")
+                    coords_data = await self._get_wikipedia_coordinates(wiki_url, name, district)
+                    if coords_data and coords_data.get('has_coords'):
+                        return name, coords_data
+                return None, None
+        
+        tasks = [fetch_one(v) for v in villages]
+        results = await asyncio.gather(*tasks)
+        
+        found = {}
+        for name, data in results:
+            if data:
+                found[name] = data
+        return found
+    
     # ========== ОСНОВНОЙ МЕТОД ==========
     
     async def fetch_district_data(self, district: str) -> List[Dict]:
@@ -1754,184 +1799,94 @@ class APISourceManager:
         logger.info(f"  • Из СП: {self.collection_stats['from_settlements']}")
         logger.info(f"  • Всего уникальных: {self.collection_stats['total_unique']}")
         
-        # Шаг 5: Поиск координат для записей без них
+        # ========== НОВАЯ СТРАТЕГИЯ ПОИСКА КООРДИНАТ ==========
         if all_villages:
-            logger.info(f"  🔍 ПОИСК КООРДИНАТ ДЛЯ ЗАПИСЕЙ БЕЗ НИХ...")
+            logger.info(f"  🔍 ПОИСК КООРДИНАТ...")
             
-            # Отделяем записи, у которых уже есть координаты
-            villages_with_coords = [v for v in all_villages if v.get('has_coords')]
+            # 1. Сначала ищем на Wikipedia (быстро, параллельно)
+            logger.info(f"  🌐 Поиск координат на Wikipedia...")
+            
+            # Находим страницу района на Wikipedia
+            wikipedia_page_url = await self._find_wikipedia_district_page(district)
+            wikipedia_links = {}
+            if wikipedia_page_url:
+                wikipedia_links = await self._extract_wikipedia_village_links(wikipedia_page_url, district)
+                logger.info(f"  📊 Получено {len(wikipedia_links)} ссылок на НП из Wikipedia")
+            else:
+                logger.warning(f"  ⚠️ Страница района на Wikipedia не найдена")
+            
+            # Сортируем НП без координат: сначала те, у кого есть ссылки в Wikipedia
             villages_without_coords = [v for v in all_villages if not v.get('has_coords')]
+            logger.info(f"  📊 Всего НП без координат: {len(villages_without_coords)}")
             
-            total_without = len(villages_without_coords)
-            self.coords_stats['total_without'] = total_without
-            
-            logger.info(f"  📊 Статистика перед поиском координат:")
-            logger.info(f"    • Всего НП: {len(all_villages)}")
-            logger.info(f"    • Уже с координатами: {len(villages_with_coords)}")
-            logger.info(f"    • Без координат: {total_without}")
-            logger.info(f"    • Сохраненных ссылок на dic.academic.ru: {len(self.village_links)}")
-            
-            # ========== СНАЧАЛА ИЩЕМ КООРДИНАТЫ ПО ССЫЛКАМ ИЗ СП (DIC.ACADEMIC.RU) ==========
-            # Сортируем НП без координат: сначала те, у кого есть ссылка на dic.academic.ru
-            with_links = [v for v in villages_without_coords if v['name'] in self.village_links]
-            without_links = [v for v in villages_without_coords if v['name'] not in self.village_links]
-            
-            logger.info(f"  📊 Поиск координат на dic.academic.ru по сохранённым ссылкам:")
-            logger.info(f"    • С ссылками: {len(with_links)}")
-            logger.info(f"    • Без ссылок: {len(without_links)}")
-            
-            # Обрабатываем сначала деревни/села/посёлки, потом остальные
-            priority_with = [v for v in with_links if v['type'] in ['деревня', 'село', 'посёлок']]
-            other_with = [v for v in with_links if v['type'] not in ['деревня', 'село', 'посёлок']]
-            priority_without = [v for v in without_links if v['type'] in ['деревня', 'село', 'посёлок']]
-            other_without = [v for v in without_links if v['type'] not in ['деревня', 'село', 'посёлок']]
-            
-            sorted_for_coords = priority_with + other_with + priority_without + other_without
-            
-            link_found = 0
-            total_to_process = len(sorted_for_coords)
-            
-            for i, village in enumerate(sorted_for_coords):
-                try:
-                    elapsed = time.time() - self.start_time
-                    if elapsed > 1500:
-                        logger.warning(f"    ⏱️ Время выполнения {elapsed:.1f}с, прерываем поиск координат")
-                        break
-                    
-                    if i > 0 and i % 5 == 0:
-                        await asyncio.sleep(2.0)
-                    
-                    village_name = village['name']
-                    coords_data = None
-                    
-                    # Пробуем получить координаты по ссылке из dic.academic.ru
-                    if village_name in self.village_links:
-                        article_id = self.village_links[village_name]
-                        logger.info(f"    📍 [{i+1}/{total_to_process}] {village_name}: поиск координат на dic.academic.ru (ID {article_id})")
-                        coords_data = await self._parse_individual_village_page(article_id, district)
-                        if coords_data:
-                            self.coords_stats['from_links'] += 1
-                            logger.info(f"    ✅ Найдены координаты на dic.academic.ru: {village_name} -> {coords_data['lat']}, {coords_data['lon']}")
-                    
-                    if coords_data and coords_data.get('has_coords'):
-                        for v in all_villages:
-                            if v['name'] == village_name and not v.get('has_coords'):
-                                v['lat'] = coords_data['lat']
-                                v['lon'] = coords_data['lon']
-                                v['has_coords'] = True
-                                link_found += 1
-                                break
-                    
-                    if (i + 1) % 50 == 0:
-                        progress_pct = (i + 1) / total_to_process * 100
-                        logger.info(f"      Обработано {i+1}/{total_to_process} записей ({progress_pct:.1f}%), найдено {link_found}")
-                    
-                    await asyncio.sleep(0.5)
-                    
-                except Exception as e:
-                    logger.error(f"      Ошибка обработки {village.get('name', 'unknown')}: {e}")
-                    continue
-            
-            # ========== WIKIPEDIA - ПОИСК КООРДИНАТ ДЛЯ ОСТАВШИХСЯ ==========
-            # Обновляем список НП без координат после поиска на dic.academic.ru
-            villages_without_coords = [v for v in all_villages if not v.get('has_coords')]
-            total_without = len(villages_without_coords)
-            
-            if total_without > 0:
-                logger.info(f"  📊 Осталось без координат после поиска на dic.academic.ru: {total_without}")
+            # Загружаем координаты из Wikipedia параллельно
+            if wikipedia_links:
+                wiki_coords = await self._fetch_wikipedia_coordinates_batch(villages_without_coords, district, wikipedia_links)
+                logger.info(f"  ✅ Найдено координат на Wikipedia: {len(wiki_coords)}")
                 
-                # Находим страницу района на Wikipedia
-                wikipedia_page_url = await self._find_wikipedia_district_page(district)
-                wikipedia_links = {}
-                
-                if wikipedia_page_url:
-                    wikipedia_links = await self._extract_wikipedia_village_links(wikipedia_page_url, district)
-                    logger.info(f"  📊 Получено {len(wikipedia_links)} ссылок из Wikipedia")
-                else:
-                    logger.warning(f"  ⚠️ Страница района на Wikipedia не найдена")
-                
-                # Сортируем НП без координат: сначала те, у кого есть ссылки в Wikipedia
-                with_wiki_links = [v for v in villages_without_coords if v['name'] in wikipedia_links]
-                without_wiki_links = [v for v in villages_without_coords if v['name'] not in wikipedia_links]
-                
-                priority_wiki = [v for v in with_wiki_links if v['type'] in ['деревня', 'село', 'посёлок']]
-                other_wiki = [v for v in with_wiki_links if v['type'] not in ['деревня', 'село', 'посёлок']]
-                priority_other = [v for v in without_wiki_links if v['type'] in ['деревня', 'село', 'посёлок']]
-                other_other = [v for v in without_wiki_links if v['type'] not in ['деревня', 'село', 'посёлок']]
-                
-                sorted_for_wiki = priority_wiki + other_wiki + priority_other + other_other
-                
-                logger.info(f"  📊 Поиск координат на Wikipedia:")
-                logger.info(f"    • С приоритетом по Wikipedia: {len(with_wiki_links)}")
-                logger.info(f"    • Приоритетных записей: {len(priority_wiki) + len(priority_other)}")
-                
-                wiki_found = 0
-                total_to_process = len(sorted_for_wiki)
-                
-                for i, village in enumerate(sorted_for_wiki):
-                    try:
-                        elapsed = time.time() - self.start_time
-                        if elapsed > 1500:
-                            logger.warning(f"    ⏱️ Время выполнения {elapsed:.1f}с, прерываем поиск координат")
+                # Обновляем найденные координаты в основном списке
+                for name, data in wiki_coords.items():
+                    for v in all_villages:
+                        if v['name'] == name and not v.get('has_coords'):
+                            v['lat'] = data['lat']
+                            v['lon'] = data['lon']
+                            v['has_coords'] = True
+                            self.coords_stats['from_wikipedia'] += 1
                             break
-                        
-                        if i > 0 and i % 5 == 0:
-                            await asyncio.sleep(2.0)
-                        
-                        village_name = village['name']
-                        coords_data = None
-                        
-                        if village_name in self.wikipedia_coords_cache:
-                            lat, lon = self.wikipedia_coords_cache[village_name]
-                            coords_data = {
-                                "name": village_name,
-                                "type": village['type'],
-                                "lat": lat,
-                                "lon": lon,
-                                "district": district,
-                                "has_coords": True
-                            }
-                            logger.info(f"    📍 [{i+1}/{total_to_process}] {village_name}: координаты из кэша Wikipedia")
-                        elif village_name in wikipedia_links:
-                            wiki_url = wikipedia_links[village_name]
-                            logger.info(f"    🔍 [{i+1}/{total_to_process}] {village_name}: поиск в Wikipedia по ссылке")
-                            coords_data = await self._get_wikipedia_coordinates(wiki_url, village_name, district)
-                            if coords_data:
-                                self.wikipedia_coords_cache[village_name] = (coords_data['lat'], coords_data['lon'])
-                        
-                        if coords_data and coords_data.get('has_coords'):
-                            for v in all_villages:
-                                if v['name'] == village_name and not v.get('has_coords'):
-                                    v['lat'] = coords_data['lat']
-                                    v['lon'] = coords_data['lon']
-                                    v['has_coords'] = True
-                                    wiki_found += 1
-                                    self.coords_stats['from_wikipedia'] += 1
-                                    logger.info(f"    ✅ ДОБАВЛЕНЫ КООРДИНАТЫ ИЗ WIKIPEDIA: {village_name} -> {coords_data['lat']}, {coords_data['lon']}")
-                                    break
-                        
-                        if (i + 1) % 50 == 0:
-                            progress_pct = (i + 1) / total_to_process * 100
-                            logger.info(f"      Обработано {i+1}/{total_to_process} записей ({progress_pct:.1f}%), найдено {wiki_found}")
-                        
-                        await asyncio.sleep(0.5)
-                        
-                    except Exception as e:
-                        logger.error(f"      Ошибка обработки {village.get('name', 'unknown')}: {e}")
-                        continue
                 
-                logger.info(f"    ✅ Поиск координат на Wikipedia завершен. Найдено координат: {wiki_found}")
+                # Добавляем новые НП, которые есть на Wikipedia, но отсутствуют в нашем списке
+                for name, data in wiki_coords.items():
+                    if not any(v['name'] == name for v in all_villages):
+                        all_villages.append({
+                            "name": name,
+                            "type": "деревня",
+                            "lat": data['lat'],
+                            "lon": data['lon'],
+                            "district": district,
+                            "has_coords": True
+                        })
+                        logger.info(f"  ➕ Добавлен новый НП из Wikipedia: {name}")
             
-            self.coords_stats['found'] = self.coords_stats['from_former'] + self.coords_stats['from_links'] + self.coords_stats['from_wikipedia']
-            self.coords_stats['remaining'] = len([v for v in all_villages if not v.get('has_coords')])
+            # 2. Для оставшихся без координат, у кого есть ссылка на dic.academic.ru, пробуем там
+            villages_without_coords = [v for v in all_villages if not v.get('has_coords')]
+            if villages_without_coords:
+                logger.info(f"  📊 Осталось без координат после Wikipedia: {len(villages_without_coords)}")
+                with_links = [v for v in villages_without_coords if v['name'] in self.village_links]
+                logger.info(f"  🔍 Поиск координат на dic.academic.ru по {len(with_links)} ссылкам")
+                
+                if with_links:
+                    # Параллельно обрабатываем dic.academic.ru
+                    semaphore = asyncio.Semaphore(self.max_concurrent_dic)
+                    async def fetch_dic(village):
+                        async with semaphore:
+                            name = village['name']
+                            if name in self.village_links:
+                                article_id = self.village_links[name]
+                                logger.info(f"    📍 {name}: поиск на dic.academic.ru (ID {article_id})")
+                                coords_data = await self._parse_individual_village_page(article_id, district)
+                                if coords_data and coords_data.get('has_coords'):
+                                    return name, coords_data
+                            return None, None
+                    
+                    tasks = [fetch_dic(v) for v in with_links]
+                    results = await asyncio.gather(*tasks)
+                    
+                    dic_found = 0
+                    for name, data in results:
+                        if data:
+                            for v in all_villages:
+                                if v['name'] == name and not v.get('has_coords'):
+                                    v['lat'] = data['lat']
+                                    v['lon'] = data['lon']
+                                    v['has_coords'] = True
+                                    dic_found += 1
+                                    self.coords_stats['from_links'] += 1
+                                    break
+                    logger.info(f"  ✅ Найдено координат на dic.academic.ru: {dic_found}")
             
-            logger.info(f"    📊 ИТОГО ПО КООРДИНАТАМ:")
-            logger.info(f"      • Было без координат: {total_without}")
-            logger.info(f"      • Из бывших НП (dic.academic.ru): {self.coords_stats['from_former']}")
-            logger.info(f"      • По ссылкам из СП (dic.academic.ru): {self.coords_stats['from_links']}")
-            logger.info(f"      • Из Wikipedia: {self.coords_stats['from_wikipedia']}")
-            logger.info(f"      • Всего найдено: {self.coords_stats['from_former'] + self.coords_stats['from_links'] + self.coords_stats['from_wikipedia']}")
-            logger.info(f"      • Осталось без координат: {self.coords_stats['remaining']}")
+            # 3. Остались без координат – просто логируем
+            remaining = [v for v in all_villages if not v.get('has_coords')]
+            logger.info(f"  📊 Осталось без координат: {len(remaining)}")
         
         final_with_coords = sum(1 for v in all_villages if v.get('has_coords'))
         all_villages.sort(key=lambda x: x['name'])
