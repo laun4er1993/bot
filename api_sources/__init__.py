@@ -107,19 +107,16 @@ class APISourceManager:
         }
     
     async def _get_session(self) -> aiohttp.ClientSession:
-        """Получает или создает HTTP сессию"""
         if self.session is None or self.session.closed:
             self.session = aiohttp.ClientSession()
         return self.session
     
     async def close_session(self):
-        """Закрывает HTTP сессию и очищает кэш"""
         if self.session and not self.session.closed:
             await self.session.close()
         self.thread_pool.shutdown(wait=False)
     
     def clear_cache(self):
-        """Очищает все кэши перед новым поиском"""
         self.article_cache.clear()
         self.district_cache.clear()
         self.former_np_pages_cache.clear()
@@ -146,7 +143,6 @@ class APISourceManager:
         logger.info("🧹 Кэш очищен для нового поиска")
     
     async def _rate_limit(self):
-        """Соблюдение rate limiting с случайной вариацией"""
         current_time = time.time()
         time_since_last = current_time - self.last_request_time
         
@@ -163,7 +159,6 @@ class APISourceManager:
             logger.info(f"    Выполнено {self.request_count} запросов за {elapsed:.1f}с")
     
     async def _fetch_page_with_retry(self, url: str, retry_count: int = 0) -> Optional[str]:
-        """Загружает страницу с повторными попытками при ошибках"""
         if retry_count >= self.max_retries:
             logger.error(f"Превышено максимальное количество попыток для {url}")
             return None
@@ -202,7 +197,6 @@ class APISourceManager:
             return None
     
     async def _fetch_page(self, url: str) -> Optional[str]:
-        """Загружает страницу с кэшированием и повторными попытками"""
         current_time = time.time()
         
         if url in self.page_cache:
@@ -218,7 +212,6 @@ class APISourceManager:
         return html
     
     async def _search_with_pagination(self, query: str, max_pages: int = 10, unlimited: bool = False) -> List[Dict]:
-        """Выполняет поиск с обработкой нескольких страниц результатов"""
         all_results = []
         page = 1
         
@@ -269,7 +262,6 @@ class APISourceManager:
         return all_results
     
     def _parse_search_page(self, html: str, page_num: int) -> List[Dict]:
-        """Парсит одну страницу результатов поиска"""
         try:
             soup = BeautifulSoup(html, 'html.parser')
             results = []
@@ -311,7 +303,6 @@ class APISourceManager:
             return []
     
     def _check_next_page(self, html: str) -> bool:
-        """Проверяет наличие ссылки на следующую страницу"""
         try:
             soup = BeautifulSoup(html, 'html.parser')
             next_link = soup.find('a', string=re.compile(r'далее|следующая|next', re.I))
@@ -320,7 +311,6 @@ class APISourceManager:
             return False
     
     def _is_valid_name(self, name: str) -> bool:
-        """Проверяет, является ли текст валидным названием населенного пункта"""
         if not name or len(name) < MIN_NAME_LENGTH or len(name) > MAX_NAME_LENGTH:
             return False
         
@@ -335,48 +325,48 @@ class APISourceManager:
         if name.isdigit():
             return False
         
+        # Дополнительная фильтрация мусора
+        for marker in INVALID_VILLAGE_MARKERS:
+            if marker in name_lower:
+                return False
+        
+        for pattern in INVALID_LINK_PATTERNS:
+            if re.search(pattern, name_lower):
+                return False
+        
         return True
     
     def _is_valid_settlement_name(self, name: str) -> bool:
-        """Проверяет, является ли текст валидным названием сельского поселения"""
         if not name or len(name) < 2 or len(name) > 30:
             return False
         
         name_lower = name.lower()
         
-        # Проверка на служебные слова
         for word in SERVICE_SETTLEMENT_WORDS:
             if word in name_lower:
                 return False
         
-        # Проверка на недопустимые маркеры
         for marker in INVALID_SETTLEMENT_MARKERS:
             if marker in name_lower:
                 return False
         
-        # Проверка на паттерны
         for pattern in INVALID_LINK_PATTERNS:
             if re.search(pattern, name):
                 return False
         
-        # Проверка на известных личностей
         for personality in KNOWN_PERSONALITIES:
             if personality.lower() in name_lower or name == personality:
                 return False
         
-        # Проверка на наличие русских букв
         if not re.search(r'[а-яА-ЯёЁ]', name):
             return False
         
-        # Проверка на цифры в начале
         if name[0].isdigit():
             return False
         
-        # Проверка на инициалы (Ф.И.)
         if re.search(r'[А-Я]\.\s*[А-Я]\.', name):
             return False
         
-        # Проверка на фамилии (Фамилия И.О.)
         if re.search(r'[А-Я][а-я]+\s+[А-Я]\.', name):
             return False
         
@@ -388,7 +378,6 @@ class APISourceManager:
     # ========== МЕТОДЫ ДЛЯ РАБОТЫ С DIC.ACADEMIC.RU ==========
     
     async def _find_district_page(self, district: str) -> Optional[Dict]:
-        """Находит страницу района, анализируя результаты поиска"""
         cache_key = f"district_{district}"
         if cache_key in self.district_cache:
             return self.district_cache[cache_key]
@@ -452,7 +441,6 @@ class APISourceManager:
         return None
     
     def _score_district_relevance(self, result: Dict, district: str) -> int:
-        """Оценивает релевантность результата для страницы района"""
         title_lower = result['title'].lower()
         full_text_lower = result['full_text'].lower()
         district_lower = district.lower()
@@ -482,7 +470,6 @@ class APISourceManager:
         return score
     
     def _verify_district_page(self, html: str, district: str) -> bool:
-        """Проверяет, что страница действительно является страницей района"""
         try:
             soup = BeautifulSoup(html, 'html.parser')
             text = soup.get_text().lower()
@@ -505,12 +492,12 @@ class APISourceManager:
             return False
     
     async def _extract_settlements_from_page(self, html: str, district: str) -> List[str]:
-        """Извлекает список сельских поселений со страницы района с усиленной фильтрацией"""
+        """Извлекает список сельских поселений со страницы района (как в исходном коде)"""
         try:
             soup = BeautifulSoup(html, 'html.parser')
             found_settlements = []
             
-            # Ищем заголовки с ключевыми словами
+            # Ищем заголовок "Сельские поселения" или "Состав района"
             for header in soup.find_all(['h2', 'h3', 'h4']):
                 header_text = header.get_text().lower()
                 if any(keyword in header_text for keyword in SETTLEMENT_KEYWORDS):
@@ -523,7 +510,7 @@ class APISourceManager:
                                 if link:
                                     text = link.get_text().strip()
                                     # Проверяем, что это ссылка на сельское поселение
-                                    if 'сельское поселение' in text.lower() or 'сельсовет' in text.lower():
+                                    if 'сельское поселение' in text.lower():
                                         # Извлекаем название
                                         match = re.search(r'«([^»]+)»', text)
                                         if match:
@@ -533,62 +520,15 @@ class APISourceManager:
                                             settlement = re.sub(r'^сельское\s+поселение\s*', '', text, flags=re.IGNORECASE)
                                             settlement = re.sub(r'\s+\(.*?\)', '', settlement).strip()
                                         
-                                        # Фильтрация
                                         if settlement and len(settlement) > 2:
-                                            # Пропускаем мусорные маркеры
-                                            skip = False
-                                            for marker in INVALID_SETTLEMENT_MARKERS:
-                                                if marker in settlement.lower():
-                                                    skip = True
-                                                    break
-                                            if skip:
-                                                continue
-                                            
-                                            # Пропускаем цифры в начале
-                                            if re.match(r'^\d+', settlement):
-                                                continue
-                                            
-                                            # Пропускаем даты
-                                            if re.match(r'\d+\s+(мая|января|февраля|марта|апреля|июня|июля|августа|сентября|октября|ноября|декабря)', settlement, re.IGNORECASE):
-                                                continue
-                                            
                                             if self._is_valid_settlement_name(settlement):
                                                 found_settlements.append(settlement)
-                        
-                        # Ищем таблицы
-                        for table in parent.find_all('table', class_=['standard', 'wikitable', 'sortable']):
-                            for row in table.find_all('tr'):
-                                cells = row.find_all('td')
-                                if cells:
-                                    for cell in cells:
-                                        cell_text = cell.get_text().strip()
-                                        if 'сельское поселение' in cell_text.lower() or 'сельсовет' in cell_text.lower():
-                                            # Извлекаем название
-                                            match = re.search(r'«([^»]+)»', cell_text)
-                                            if match:
-                                                settlement = match.group(1).strip()
-                                            else:
-                                                settlement = re.sub(r'^сельское\s+поселение\s*', '', cell_text, flags=re.IGNORECASE)
-                                                settlement = re.sub(r'\s+\(.*?\)', '', settlement).strip()
-                                            
-                                            if settlement and len(settlement) > 2:
-                                                skip = False
-                                                for marker in INVALID_SETTLEMENT_MARKERS:
-                                                    if marker in settlement.lower():
-                                                        skip = True
-                                                        break
-                                                if skip:
-                                                    continue
-                                                if re.match(r'^\d+', settlement):
-                                                    continue
-                                                if self._is_valid_settlement_name(settlement):
-                                                    found_settlements.append(settlement)
             
             # Если не нашли через заголовки, ищем прямые ссылки на СП
             if not found_settlements:
                 for link in soup.find_all('a', href=re.compile(r'/dic\.nsf/ruwiki/\d+')):
                     link_text = link.get_text().strip()
-                    if 'сельское поселение' in link_text.lower() or 'сельсовет' in link_text.lower():
+                    if 'сельское поселение' in link_text.lower():
                         match = re.search(r'«([^»]+)»', link_text)
                         if match:
                             settlement = match.group(1).strip()
@@ -597,22 +537,13 @@ class APISourceManager:
                             settlement = re.sub(r'\s+\(.*?\)', '', settlement).strip()
                         
                         if settlement and len(settlement) > 2:
-                            skip = False
-                            for marker in INVALID_SETTLEMENT_MARKERS:
-                                if marker in settlement.lower():
-                                    skip = True
-                                    break
-                            if skip:
-                                continue
-                            if re.match(r'^\d+', settlement):
-                                continue
                             if self._is_valid_settlement_name(settlement):
                                 found_settlements.append(settlement)
             
             unique_settlements = sorted(list(set(found_settlements)))
             logger.info(f"    Найдено сельских поселений: {len(unique_settlements)}")
             if unique_settlements:
-                logger.debug(f"    Список СП после фильтрации: {', '.join(unique_settlements[:20])}")
+                logger.debug(f"    Список СП: {', '.join(unique_settlements[:20])}")
             
             return unique_settlements
             
@@ -626,6 +557,7 @@ class APISourceManager:
         if cache_key in self.former_np_pages_cache:
             return self.former_np_pages_cache[cache_key]
         
+        # Используем запросы как в исходном коде
         queries = [
             f"Список бывших населённых пунктов на территории сельского поселения {settlement} {district} района",
             f"Список бывших населенных пунктов на территории сельского поселения {settlement} {district} района",
@@ -644,11 +576,13 @@ class APISourceManager:
         if not all_results:
             return None
         
+        # Оцениваем релевантность
         for result in all_results:
             title_lower = result['title'].lower()
             full_text_lower = result['full_text'].lower()
-            
             district_lower = district.lower()
+            
+            # Проверяем, что страница относится к нужному району
             if district_lower not in full_text_lower and district_lower not in title_lower:
                 result['score'] = 0
                 continue
@@ -658,9 +592,11 @@ class APISourceManager:
             else:
                 result['score'] = self._score_settlement_relevance(result, settlement, district)
             
+            # Дополнительный бонус за район
             if district_lower in full_text_lower:
                 result['score'] += 20
         
+        # Фильтруем результаты, оставляем только те, где есть упоминание района
         filtered_results = [r for r in all_results if r['score'] >= 50 and district.lower() in (r['full_text'].lower() + r['title'].lower())]
         
         if not filtered_results:
@@ -681,10 +617,13 @@ class APISourceManager:
         if cache_key in self.settlement_pages_cache:
             return self.settlement_pages_cache[cache_key]
         
+        # Используем запросы как в исходном коде
         queries = [
             f"Сельское поселение {settlement}",
             f"{settlement} сельское поселение",
-            f"{settlement} СП"
+            f"{settlement} СП",
+            f"Сельское поселение {settlement} {district} района",
+            f"{settlement} {district} района"
         ]
         
         all_results = []
@@ -697,11 +636,13 @@ class APISourceManager:
         if not all_results:
             return None
         
+        # Оцениваем релевантность
         for result in all_results:
             title_lower = result['title'].lower()
             full_text_lower = result['full_text'].lower()
-            
             district_lower = district.lower()
+            
+            # Проверяем, что страница относится к нужному району
             if district_lower not in full_text_lower and district_lower not in title_lower:
                 result['score'] = 0
                 continue
@@ -711,17 +652,45 @@ class APISourceManager:
             else:
                 result['score'] = self._score_settlement_relevance(result, settlement, district)
             
+            # Дополнительный бонус за район
             if district_lower in full_text_lower:
                 result['score'] += 20
+            
+            # Штраф, если в заголовке есть "район" или "муниципальный"
+            if "район" in title_lower or "муниципальный" in title_lower:
+                result['score'] -= 30
         
-        filtered_results = [r for r in all_results if r['score'] >= 40 and district.lower() in (r['full_text'].lower() + r['title'].lower())]
+        # Фильтруем результаты, оставляем только те, где есть упоминание района и score >= 50
+        filtered_results = [r for r in all_results if r['score'] >= 50 and district.lower() in (r['full_text'].lower() + r['title'].lower())]
         
         if not filtered_results:
             return None
         
         best = max(filtered_results, key=lambda x: x['score'])
         
-        if best['score'] >= 40:
+        if best['score'] >= 50:
+            # Дополнительная проверка: загружаем страницу и убеждаемся, что это не страница района
+            page_url = DIC_ACADEMIC_ARTICLE_URL.format(best['id'])
+            html = await self._fetch_page(page_url)
+            if html:
+                soup = BeautifulSoup(html, 'html.parser')
+                # Проверяем, что в тексте нет "район" в заголовке и есть "сельское поселение"
+                title_elem = soup.find('h1')
+                title_text = title_elem.get_text().lower() if title_elem else ""
+                if "район" in title_text or "муниципальный" in title_text:
+                    logger.debug(f"      Пропускаем страницу района: {best['id']}")
+                    return None
+                # Проверяем наличие раздела "Населенные пункты" или таблиц с НП
+                tables = soup.find_all('table', class_=['standard', 'sortable', 'wikitable', 'simple'])
+                has_settlement_section = False
+                for header in soup.find_all(['h2', 'h3', 'h4']):
+                    if any(kw in header.get_text().lower() for kw in SETTLEMENTS_SECTION_KEYWORDS):
+                        has_settlement_section = True
+                        break
+                if not has_settlement_section and not tables:
+                    logger.debug(f"      Страница {best['id']} не содержит раздела с населенными пунктами, пропускаем")
+                    return None
+            
             logger.info(f"      Найдена основная страница СП {settlement} (ID: {best['id']}, score: {best['score']})")
             self.settlement_pages_cache[cache_key] = best['id']
             return best['id']
@@ -742,6 +711,8 @@ class APISourceManager:
         
         if "сельское поселение" in title_lower:
             score += 40
+        elif "сельское поселение" in full_text_lower:
+            score += 20
         
         if district_lower in title_lower or district_lower in full_text_lower:
             score += 20
@@ -754,7 +725,6 @@ class APISourceManager:
         return score
     
     async def _parse_former_np_page(self, article_id: str, district: str, settlement: str) -> List[Dict]:
-        """Парсит страницу с бывшими населенными пунктами"""
         url = DIC_ACADEMIC_ARTICLE_URL.format(article_id)
         html = await self._fetch_page(url)
         
@@ -786,7 +756,6 @@ class APISourceManager:
         return results
     
     def _parse_former_np_html(self, html: str, article_id: str, district: str, settlement: str) -> List[Dict]:
-        """Парсит HTML страницы с бывшими НП (с координатами)"""
         try:
             soup = BeautifulSoup(html, 'html.parser')
             results = []
@@ -822,7 +791,7 @@ class APISourceManager:
                         if not self._is_valid_name(name):
                             continue
                         
-                        # Фильтрация мусорных названий
+                        # Фильтрация мусора
                         skip = False
                         for marker in INVALID_VILLAGE_MARKERS:
                             if marker in name.lower():
@@ -868,7 +837,6 @@ class APISourceManager:
             return []
     
     async def _parse_settlement_main_page(self, article_id: str, district: str, settlement: str) -> List[Dict]:
-        """Парсит основную страницу сельского поселения"""
         url = DIC_ACADEMIC_ARTICLE_URL.format(article_id)
         html = await self._fetch_page(url)
         
@@ -912,7 +880,6 @@ class APISourceManager:
         return results
     
     def _parse_settlements_section(self, html: str, article_id: str, district: str, settlement: str) -> List[Dict]:
-        """Парсит раздел 'Населенные пункты' на странице сельского поселения"""
         try:
             soup = BeautifulSoup(html, 'html.parser')
             results = []
@@ -1023,18 +990,10 @@ class APISourceManager:
                         if not self._is_valid_name(name):
                             continue
                         
-                        # Фильтрация мусорных названий
+                        # Фильтрация мусора
                         skip = False
                         for marker in INVALID_VILLAGE_MARKERS:
                             if marker in name.lower():
-                                skip = True
-                                break
-                        if skip:
-                            continue
-                        
-                        # Фильтрация по паттернам
-                        for pattern in INVALID_LINK_PATTERNS:
-                            if re.search(pattern, name.lower()):
                                 skip = True
                                 break
                         if skip:
@@ -1080,7 +1039,7 @@ class APISourceManager:
                                 if not self._is_valid_name(name):
                                     continue
                                 
-                                # Фильтрация мусорных названий
+                                # Фильтрация мусора
                                 skip = False
                                 for marker in INVALID_VILLAGE_MARKERS:
                                     if marker in name.lower():
@@ -1122,7 +1081,6 @@ class APISourceManager:
             return []
     
     def _parse_settlements_alternative(self, html: str, article_id: str, district: str, settlement: str) -> List[Dict]:
-        """Альтернативный метод парсинга с усиленной фильтрацией мусора"""
         try:
             soup = BeautifulSoup(html, 'html.parser')
             results = []
@@ -1143,7 +1101,7 @@ class APISourceManager:
                 if name in seen_names:
                     continue
                 
-                # Жесткая фильтрация мусорных названий
+                # Жесткая фильтрация мусора
                 skip = False
                 for marker in INVALID_VILLAGE_MARKERS:
                     if marker in name.lower():
@@ -1152,7 +1110,6 @@ class APISourceManager:
                 if skip:
                     continue
                 
-                # Проверка на паттерны мусора
                 for pattern in INVALID_LINK_PATTERNS:
                     if re.search(pattern, name.lower()):
                         skip = True
@@ -1160,7 +1117,6 @@ class APISourceManager:
                 if skip:
                     continue
                 
-                # Проверка на известных личностей
                 for personality in KNOWN_PERSONALITIES:
                     if personality.lower() in name.lower():
                         skip = True
@@ -1171,7 +1127,7 @@ class APISourceManager:
                 if not self._is_valid_name(name):
                     continue
                 
-                # Определяем тип населенного пункта
+                # Определяем тип
                 village_type = 'деревня'
                 parent = link.find_parent('td')
                 if parent:
@@ -1208,12 +1164,11 @@ class APISourceManager:
             return []
     
     async def _find_master_list_links(self, html: str, district: str) -> List[str]:
-        """Автоматический поиск ссылок на списки населенных пунктов"""
+        """Автоматический поиск ссылок на списки населенных пунктов (как в исходном коде)"""
         try:
             soup = BeautifulSoup(html, 'html.parser')
             found_ids = []
             
-            # Поиск по всем ссылкам
             for link in soup.find_all('a', href=re.compile(r'/dic\.nsf/ruwiki/\d+')):
                 href = link.get('href', '')
                 text = link.get_text().lower().strip()
@@ -1255,22 +1210,6 @@ class APISourceManager:
                                             logger.info(f"      Найдена ссылка на список НП в 'См. также': ID {article_id} - {link.get_text()}")
                                         break
             
-            # Поиск в боковой панели
-            for div in soup.find_all('div', class_=['sidebox', 'navbox', 'toccolours']):
-                for link in div.find_all('a', href=re.compile(r'/dic\.nsf/ruwiki/\d+')):
-                    href = link.get('href', '')
-                    text = link.get_text().lower()
-                    
-                    for keyword in LIST_KEYWORDS:
-                        if keyword in text:
-                            match = re.search(r'/dic\.nsf/ruwiki/(\d+)', href)
-                            if match:
-                                article_id = match.group(1)
-                                if article_id not in found_ids:
-                                    found_ids.append(article_id)
-                                    logger.info(f"      Найдена ссылка на список НП в боковой панели: ID {article_id}")
-                                break
-            
             return list(set(found_ids))
             
         except Exception as e:
@@ -1278,7 +1217,6 @@ class APISourceManager:
             return []
     
     async def _parse_master_list_page(self, article_id: str, district: str) -> List[Dict]:
-        """Парсит страницу со списком населенных пунктов"""
         url = DIC_ACADEMIC_ARTICLE_URL.format(article_id)
         html = await self._fetch_page(url)
         
@@ -1305,7 +1243,6 @@ class APISourceManager:
         return results
     
     def _parse_master_list_html(self, html: str, article_id: str, district: str) -> List[Dict]:
-        """Парсит HTML страницы со списком населенных пунктов"""
         try:
             soup = BeautifulSoup(html, 'html.parser')
             results = []
@@ -1356,7 +1293,7 @@ class APISourceManager:
                         if not self._is_valid_name(name):
                             continue
                         
-                        # Фильтрация мусорных названий
+                        # Фильтрация мусора
                         skip = False
                         for marker in INVALID_VILLAGE_MARKERS:
                             if marker in name.lower():
@@ -1395,7 +1332,6 @@ class APISourceManager:
             return []
     
     async def _parse_individual_village_page(self, article_id: str, district: str) -> Optional[Dict]:
-        """Парсит отдельную страницу населенного пункта для извлечения координат (dic.academic.ru)"""
         url = DIC_ACADEMIC_ARTICLE_URL.format(article_id)
         html = await self._fetch_page(url)
         
@@ -1412,7 +1348,6 @@ class APISourceManager:
         )
     
     def _parse_individual_village_html(self, html: str, article_id: str, district: str) -> Optional[Dict]:
-        """Парсит отдельную страницу населенного пункта (dic.academic.ru)"""
         try:
             soup = BeautifulSoup(html, 'html.parser')
             
@@ -1531,7 +1466,6 @@ class APISourceManager:
     # ========== МЕТОДЫ ДЛЯ РАБОТЫ С WIKIPEDIA ==========
     
     async def _find_wikipedia_district_page(self, district: str) -> Optional[str]:
-        """Находит страницу района на Wikipedia по названию района"""
         logger.info(f"  🔍 Поиск страницы района на Wikipedia: {district}")
         
         possible_names = DISTRICT_WIKI_NAMES.get(district, [
@@ -1652,7 +1586,6 @@ class APISourceManager:
         return None
     
     async def _extract_wikipedia_village_links(self, page_url: str, district: str) -> Dict[str, str]:
-        """Извлекает из страницы района на Wikipedia ссылки на статьи населенных пунктов"""
         logger.info(f"  🔍 Извлечение ссылок на НП из Wikipedia")
         
         html = await self._fetch_page(page_url)
@@ -1679,11 +1612,9 @@ class APISourceManager:
         return links
     
     async def _parse_wikipedia_coordinates(self, html: str, village_name: str) -> Optional[Tuple[str, str]]:
-        """Парсит координаты из HTML страницы Wikipedia"""
         return await parse_wikipedia_coordinates(html, village_name)
     
     async def _get_wikipedia_coordinates(self, wiki_url: str, village_name: str, district: str) -> Optional[Dict]:
-        """Загружает страницу НП на Wikipedia и извлекает координаты"""
         try:
             logger.debug(f"      🔍 Загружаем Wikipedia страницу: {wiki_url}")
             html = await self._fetch_page(wiki_url)
@@ -1730,7 +1661,6 @@ class APISourceManager:
     # ========== ОСНОВНОЙ МЕТОД ==========
     
     async def fetch_district_data(self, district: str) -> List[Dict]:
-        """Основной метод: загружает данные для конкретного района"""
         self.clear_cache()
         self.start_time = time.time()
         logger.info(f"🌐 Загрузка данных для района: {district}")
