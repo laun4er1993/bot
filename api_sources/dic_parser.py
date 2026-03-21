@@ -8,9 +8,8 @@ from typing import List, Dict, Optional
 from bs4 import BeautifulSoup
 
 from .config import (
-    DIC_ACADEMIC_BASE_URL, DIC_ACADEMIC_SEARCH_URL, DIC_ACADEMIC_ARTICLE_URL,
-    LIST_KEYWORDS, SETTLEMENTS_SECTION_KEYWORDS, SETTLEMENT_KEYWORDS,
-    TYPE_INDICATORS, DISTRICT_KEYWORDS
+    DIC_ACADEMIC_ARTICLE_URL, LIST_KEYWORDS, SETTLEMENTS_SECTION_KEYWORDS,
+    SETTLEMENT_KEYWORDS, TYPE_INDICATORS, DISTRICT_KEYWORDS
 )
 from .utils import (
     is_valid_name, is_valid_settlement_name, expand_type,
@@ -24,10 +23,11 @@ logger = logging.getLogger(__name__)
 class DicParser:
     """Парсер для dic.academic.ru"""
     
-    def __init__(self, session, thread_pool, search_func):
+    def __init__(self, session, thread_pool, search_func, fetch_func):
         self.session = session
         self.thread_pool = thread_pool
         self._search_with_pagination = search_func
+        self._fetch_page = fetch_func
         
         # Кэши
         self.district_cache = {}
@@ -538,8 +538,3 @@ class DicParser:
         except Exception as e:
             logger.error(f"Ошибка парсинга: {e}")
             return None
-    
-    async def _fetch_page(self, url: str) -> Optional[str]:
-        """Загружает страницу (делегирует внешнему методу)"""
-        # Этот метод будет переопределен при создании DicParser
-        raise NotImplementedError("Метод _fetch_page должен быть переопределен")
