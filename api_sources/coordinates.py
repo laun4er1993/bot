@@ -73,7 +73,6 @@ async def parse_wikipedia_coordinates(html: str, village_name: str) -> Optional[
         # ВАРИАНТ 1: Ищем coordinates с data-param
         coord_elem = soup.find('span', class_='coordinates')
         if coord_elem:
-            # Ищем элемент с data-mw-kartographer
             maplink = coord_elem.find('a', class_='mw-kartographer-maplink')
             if maplink and maplink.get('data-mw-kartographer'):
                 try:
@@ -87,7 +86,6 @@ async def parse_wikipedia_coordinates(html: str, village_name: str) -> Optional[
                 except Exception as e:
                     logger.debug(f"          Ошибка парсинга data-mw-kartographer: {e}")
             
-            # Альтернативный поиск координат в coordinates
             geo = coord_elem.find('span', class_='geo')
             if geo:
                 lat_span = geo.find('span', class_='latitude')
@@ -102,7 +100,6 @@ async def parse_wikipedia_coordinates(html: str, village_name: str) -> Optional[
                     except:
                         pass
             
-            # Ищем текст с координатами в формате DMS внутри coordinates
             coord_text = coord_elem.get_text()
             dms_pattern = r'(\d+)°(\d+)′([\d.]+)″\s*([сю])\.[^\d]*(\d+)°(\d+)′([\d.]+)″\s*([зв])\.[^\d]*'
             match = re.search(dms_pattern, coord_text)
