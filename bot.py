@@ -535,58 +535,18 @@ class PhotosDatabase:
         self._load()
     
     def _load(self):
-        """Загружает данные (синхронно, только локальные файлы)"""
+        """Загружает данные (синхронно)"""
         os.makedirs(self.data_dir, exist_ok=True)
         self._load_multi_keys()
         self._load_details()
         
-        # Запускаем фоновую загрузку с Яндекс.Диска
-        asyncio.create_task(self._load_photo_files_async())
-    
-    async def _load_photo_files_async(self):
-        """Асинхронная загрузка файлов с Яндекс.Диска"""
-        try:
-            # Ждем немного, чтобы бот успел запуститься
-            await asyncio.sleep(2)
-            
-            if yd_client.check_root_access():
-                await self._load_photo_files_async_internal()
-            else:
-                logger.error("❌ Нет доступа к Яндекс.Диску, пропускаем загрузку ссылок")
-        except Exception as e:
-            logger.error(f"Ошибка загрузки с Яндекс.Диска: {e}")
-    
-    async def _load_photo_files_async_internal(self):
-        """Внутренний метод асинхронной загрузки"""
-        logger.info("🔍 Поиск файлов на Яндекс.Диске...")
+        # Синхронная загрузка с Яндекс.Диска
+        if yd_client.check_root_access():
+            self._load_photo_files()
+        else:
+            logger.error("❌ Нет доступа к Яндекс.Диску, пропускаем загрузку ссылок")
         
-        all_photos = set()
-        for record in self.locations:
-            for photo in record['photos']:
-                all_photos.add(photo)
-        
-        logger.info(f"Найдено {len(all_photos)} уникальных снимков для поиска")
-        
-        for photo in all_photos:
-            parts = photo.split('-')
-            if len(parts) >= 3:
-                try:
-                    files = yd_client.find_map_files(parts[0], parts[1], parts[2])
-                    if files['mbtiles'] or files['kmz']:
-                        self.photo_files[photo] = files
-                        if files['mbtiles']:
-                            logger.info(f"  ✅ Найдено MBTILES для {photo}: {len(files['mbtiles'])} версий")
-                        if files['kmz']:
-                            logger.info(f"  ✅ Найдено KMZ для {photo}: {len(files['kmz'])} версий")
-                    else:
-                        logger.warning(f"  ❌ Файлы не найдены для {photo}")
-                except Exception as e:
-                    logger.error(f"  ❌ Ошибка поиска для {photo}: {e}")
-            
-            # Небольшая задержка между запросами
-            await asyncio.sleep(0.5)
-        
-        logger.info(f"✅ Загрузка файлов завершена. Найдено {len(self.photo_files)} снимков с файлами")
+        self._log_stats()
     
     def _load_multi_keys(self):
         """Загружает связи деревень со снимками"""
@@ -628,6 +588,48 @@ class PhotosDatabase:
                 if photo_num and description and not photo_num.startswith('#'):
                     self.photo_details[photo_num] = description
     
+    def _load_photo_files(self):
+        """Загружает ссылки на файлы с Яндекс.Диска (синхронно)"""
+        logger.info("🔍 Поиск файлов на Яндекс.Диске...")
+        
+        all_photos = set()
+        for record in self.locations:
+            for photo in record['photos']:
+                all_photos.add(photo)
+        
+        logger.info(f"Найдено {len(all_photos)} уникальных снимков для поиска")
+        
+        for photo in all_photos:
+            parts = photo.split('-')
+            if len(parts) >= 3:
+                logger.info(f"  🔍 Обработка снимка: {photo}")
+                logger.info(f"    square={parts[0]}, overlay={parts[1]}, frame={parts[2]}")
+                
+                files_info = yd_client.find_map_files(
+                    square=parts[0],
+                    overlay=parts[1],
+                    frame=parts[2]
+                )
+                
+                if files_info['mbtiles'] or files_info['kmz']:
+                    self.photo_files[photo] = files_info
+                    if files_info['mbtiles']:
+                        logger.info(f"  ✅ Найдено MBTILES для {photo}: {len(files_info['mbtiles'])} версий")
+                    if files_info['kmz']:
+                        logger.info(f"  ✅ Найдено KMZ для {photo}: {len(files_info['kmz'])} версий")
+                else:
+                    logger.warning(f"  ❌ Файлы не найдены для {photo}")
+        
+        logger.info(f"✅ Загрузка файлов завершена. Найдено {len(self.photo_files)} снимков с файлами")
+    
+    def _log_stats(self):
+        """Логирует статистику"""
+        logger.info(f"📊 Статистика:")
+        logger.info(f"   • Записей в multi_keys: {len(self.locations)}")
+        logger.info(f"   • Деревень в multi_keys: {len(self.all_villages)}")
+        logger.info(f"   • Описаний снимков: {len(self.photo_details)}")
+        logger.info(f"   • Файловых записей: {len(self.photo_files)}")
+    
     def search_by_village(self, query: str) -> List[Dict]:
         """Ищет снимки по названию деревни"""
         if not query:
@@ -655,32 +657,60 @@ class PhotosDatabase:
                         seen.add(record['id'])
                     break
         
+        logger.info(f"🔍 По запросу '{query}' найдено {len(found)} записей")
         return found
     
+    def get_all_photos(self, records: List[Dict]) -> List[str]:
+        photos = []
+        for r in records:
+            photos.extend(r['photos'])
+        return list(dict.fromkeys(photos))
+    
+    def get_all_villages(self, records: List[Dict]) -> List[str]:
+        villages = []
+        for r in records:
+            villages.extend(r['villages'])
+        return sorted(list(set(villages)))
+    
     def get_photo_details(self, photo_num: str) -> Optional[str]:
-        """Возвращает описание снимка со ссылками"""
+        logger.info(f"📸 ЗАПРОШЕН СНИМОК: {photo_num}")
+        logger.info(f"  Есть в photo_details: {photo_num in self.photo_details}")
+        logger.info(f"  Есть в photo_files: {photo_num in self.photo_files}")
+        
         details = self.photo_details.get(photo_num)
-        if not details:
-            return None
-        
         files = self.photo_files.get(photo_num, {})
-        links = []
         
-        for file_type, label in [('mbtiles', 'Locus Maps'), ('kmz', 'Google Earth KMZ')]:
-            for v in files.get(file_type, []):
-                version = f"версия {v['version']}" if v['version'] > 0 else ""
-                size = f"({v['size_mb']} МБ)"
-                links.append(f"<a href='{v['download_link']}'>📥 Загрузить для {label} {version} {size}</a>")
-        
-        if links:
-            details += "\n\n" + "\n".join(links)
+        if details:
+            download_links = []
+            
+            if files.get('mbtiles'):
+                for v in files['mbtiles']:
+                    version_text = f"версия {v['version']}" if v['version'] > 0 else ""
+                    date_text = f"от {v['date']}" if v['date'] != "unknown" else ""
+                    size_text = f"({v['size_mb']} МБ)"
+                    link_text = f"📥 Загрузить для Locus Maps {version_text} {date_text} {size_text}".strip()
+                    download_links.append(f"<a href='{v['download_link']}'>{link_text}</a>")
+            
+            if files.get('kmz'):
+                for v in files['kmz']:
+                    version_text = f"версия {v['version']}" if v['version'] > 0 else ""
+                    date_text = f"от {v['date']}" if v['date'] != "unknown" else ""
+                    size_text = f"({v['size_mb']} МБ)"
+                    link_text = f"📥 Загрузить для Google Earth KMZ {version_text} {date_text} {size_text}".strip()
+                    download_links.append(f"<a href='{v['download_link']}'>{link_text}</a>")
+            
+            if download_links:
+                details += "\n\n" + "\n".join(download_links)
+                logger.info(f"  ✅ Добавлены ссылки: {len(download_links)}")
+            else:
+                details += f"\n\n❌ <b>Файлы не найдены на Яндекс.Диске</b>"
+                logger.info(f"  ❌ Файлы не найдены")
         else:
-            details += "\n\n❌ Файлы не найдены на Яндекс.Диске"
+            logger.warning(f"  ❌ Нет описания для {photo_num}")
         
         return details
     
     def get_all_villages_list(self) -> List[str]:
-        """Возвращает список всех деревень"""
         all_villages = set(self.all_villages)
         for v in village_db.villages:
             all_villages.add(v['name'])
