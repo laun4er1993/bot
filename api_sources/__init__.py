@@ -7,6 +7,7 @@ import logging
 import time
 import random
 import re
+import json
 from typing import List, Dict, Optional, Tuple, Set, Any
 from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor
@@ -18,7 +19,8 @@ from .config import (
     LIST_KEYWORDS, SETTLEMENT_KEYWORDS, DISTRICT_KEYWORDS,
     SETTLEMENTS_SECTION_KEYWORDS, TYPE_INDICATORS, TYPE_MAPPING,
     SERVICE_SETTLEMENT_WORDS, SERVICE_VILLAGE_WORDS,
-    MIN_NAME_LENGTH, MAX_NAME_LENGTH, DISTRICT_WIKI_NAMES, DISTRICT_UYEZDS
+    MIN_NAME_LENGTH, MAX_NAME_LENGTH, DISTRICT_WIKI_NAMES, DISTRICT_UYEZDS,
+    INVALID_SETTLEMENT_MARKERS, INVALID_SETTLEMENT_PATTERNS, KNOWN_PERSONALITIES
 )
 from .utils import (
     is_valid_name, is_valid_settlement_name, expand_type,
@@ -340,11 +342,41 @@ class APISourceManager:
             return False
         
         name_lower = name.lower()
+        
+        # Проверка на служебные слова
         for word in SERVICE_SETTLEMENT_WORDS:
             if word in name_lower:
                 return False
         
+        # Проверка на недопустимые маркеры
+        for marker in INVALID_SETTLEMENT_MARKERS:
+            if marker in name_lower:
+                return False
+        
+        # Проверка на паттерны
+        for pattern in INVALID_SETTLEMENT_PATTERNS:
+            if re.search(pattern, name):
+                return False
+        
+        # Проверка на известных личностей
+        for personality in KNOWN_PERSONALITIES:
+            if personality.lower() in name_lower or name == personality:
+                return False
+        
+        # Проверка на наличие русских букв
         if not re.search(r'[а-яА-ЯёЁ]', name):
+            return False
+        
+        # Проверка на цифры в начале
+        if name[0].isdigit():
+            return False
+        
+        # Проверка на инициалы (Ф.И.)
+        if re.search(r'[А-Я]\.\s*[А-Я]\.', name):
+            return False
+        
+        # Проверка на фамилии (Фамилия И.О.)
+        if re.search(r'[А-Я][а-я]+\s+[А-Я]\.', name):
             return False
         
         if name.isdigit():
@@ -471,13 +503,14 @@ class APISourceManager:
             return False
     
     async def _extract_settlements_from_page(self, html: str, district: str) -> List[str]:
-        """Извлекает список сельских поселений со страницы района (как в исходном коде)"""
+        """Извлекает список сельских поселений со страницы района с усиленной фильтрацией"""
         try:
             soup = BeautifulSoup(html, 'html.parser')
             found_settlements = []
             
             for header in soup.find_all(['h2', 'h3', 'h4']):
-                if 'состав района' in header.get_text().lower():
+                header_text = header.get_text().lower()
+                if any(keyword in header_text for keyword in SETTLEMENT_KEYWORDS):
                     parent = header.find_parent()
                     if parent:
                         for ul in parent.find_all('ul'):
@@ -488,14 +521,49 @@ class APISourceManager:
                                     match = re.search(r'Сельское поселение\s+([А-Яа-я-]+)', text)
                                     if match:
                                         settlement = match.group(1).strip()
+                                    else:
+                                        settlement = text
+                                    
+                                    # ДОПОЛНИТЕЛЬНАЯ ФИЛЬТРАЦИЯ
+                                    if settlement:
+                                        # Пропускаем уезды
+                                        if 'уезд' in settlement.lower():
+                                            continue
+                                        # Пропускаем города
+                                        if 'город' in settlement.lower() or 'городской' in settlement.lower():
+                                            continue
+                                        # Пропускаем названия с цифрами в начале
+                                        if re.match(r'^\d+', settlement):
+                                            continue
+                                        # Пропускаем имена людей
+                                        if re.search(r'[А-Я]\.\s*[А-Я]\.', settlement):
+                                            continue
+                                        # Пропускаем фамилии с инициалами
+                                        if re.search(r'[А-Я][а-я]+\s+[А-Я]\.', settlement):
+                                            continue
+                                        # Пропускаем известных личностей
+                                        skip = False
+                                        for personality in KNOWN_PERSONALITIES:
+                                            if personality.lower() in settlement.lower() or settlement == personality:
+                                                skip = True
+                                                break
+                                        if skip:
+                                            continue
+                                        # Пропускаем "Земляки" и подобные
+                                        if 'земляки' in settlement.lower() or 'военачальники' in settlement.lower():
+                                            continue
+                                        # Пропускаем даты
+                                        if re.match(r'\d+\s+(мая|января|февраля|марта|апреля|июня|июля|августа|сентября|октября|ноября|декабря)', settlement, re.IGNORECASE):
+                                            continue
+                                        
                                         if self._is_valid_settlement_name(settlement):
                                             found_settlements.append(settlement)
-                                    else:
-                                        if self._is_valid_settlement_name(text):
-                                            found_settlements.append(text)
             
             unique_settlements = sorted(list(set(found_settlements)))
             logger.info(f"    Найдено сельских поселений: {len(unique_settlements)}")
+            if unique_settlements:
+                logger.debug(f"    Список СП после фильтрации: {', '.join(unique_settlements[:20])}")
+            
             return unique_settlements
             
         except Exception as e:
@@ -737,7 +805,7 @@ class APISourceManager:
         return results
     
     def _parse_settlements_section(self, html: str, article_id: str, district: str, settlement: str) -> List[Dict]:
-        """Парсит раздел 'Населенные пункты' на странице сельского посещения (как в исходном коде)"""
+        """Парсит раздел 'Населенные пункты' на странице сельского поселения"""
         try:
             soup = BeautifulSoup(html, 'html.parser')
             results = []
@@ -921,7 +989,7 @@ class APISourceManager:
             return []
     
     def _parse_settlements_alternative(self, html: str, article_id: str, district: str, settlement: str) -> List[Dict]:
-        """Альтернативный метод парсинга (как в исходном коде)"""
+        """Альтернативный метод парсинга"""
         try:
             soup = BeautifulSoup(html, 'html.parser')
             results = []
@@ -1350,7 +1418,6 @@ class APISourceManager:
             html = await self._fetch_page(search_url)
             if html:
                 try:
-                    import json
                     data = json.loads(html)
                     if 'query' in data and 'search' in data['query']:
                         for result in data['query']['search'][:15]:
