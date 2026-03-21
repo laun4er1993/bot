@@ -46,6 +46,7 @@ class DicParser:
         
         logger.info(f"  🔍 Поиск страницы района: {district}")
         
+        # Расширенные запросы как в рабочей версии
         queries = [
             f"{district} район",
             f"{district} район Тверская область",
@@ -60,24 +61,35 @@ class DicParser:
             await asyncio.sleep(1.5)
         
         if not all_results:
+            logger.info(f"    ❌ Страница района не найдена")
             return None
         
+        # Оценка релевантности
         for result in all_results:
             score = self._score_district_relevance(result, district)
             result['score'] = score
         
         sorted_results = sorted(all_results, key=lambda x: x['score'], reverse=True)
+        top_results = sorted_results[:10]
         
-        for result in sorted_results[:10]:
+        for result in top_results:
             if result['score'] >= 50:
                 page_url = DIC_ACADEMIC_ARTICLE_URL.format(result['id'])
                 html = await self._fetch_page(page_url)
-                if html and await self._verify_district_page(html, district):
-                    info = {'id': result['id'], 'title': result['title'], 'url': page_url, 'score': result['score']}
-                    self.district_cache[cache_key] = info
-                    logger.info(f"    ✅ Найдена страница района (ID: {result['id']}, score: {result['score']})")
-                    return info
+                
+                if html:
+                    if await self._verify_district_page(html, district):
+                        logger.info(f"    ✅ Найдена страница района (ID: {result['id']}, score: {result['score']})")
+                        district_info = {
+                            'id': result['id'],
+                            'title': result['title'],
+                            'url': page_url,
+                            'score': result['score']
+                        }
+                        self.district_cache[cache_key] = district_info
+                        return district_info
         
+        logger.info(f"    ❌ Страница района не найдена")
         return None
     
     def _score_district_relevance(self, result: Dict, district: str) -> int:
@@ -87,6 +99,7 @@ class DicParser:
         district_lower = district.lower()
         
         score = 0
+        
         if f"{district_lower} район" in title_lower:
             score += 100
         elif district_lower in title_lower:
@@ -119,10 +132,17 @@ class DicParser:
             if f"{district_lower} район" not in text:
                 return False
             
-            sections = ['география', 'история', 'население', 'состав района']
-            found = sum(1 for s in sections if s in text)
-            return found >= 2
-        except:
+            expected_sections = ['география', 'история', 'население', 'состав района']
+            found_sections = 0
+            
+            for section in expected_sections:
+                if section in text:
+                    found_sections += 1
+            
+            return found_sections >= 2
+            
+        except Exception as e:
+            logger.error(f"Ошибка проверки страницы района: {e}")
             return False
     
     async def extract_settlements(self, html: str, district: str) -> List[str]:
@@ -132,31 +152,49 @@ class DicParser:
             found_settlements = []
             
             for header in soup.find_all(['h2', 'h3', 'h4']):
-                header_text = header.get_text().lower()
-                if any(kw in header_text for kw in SETTLEMENT_KEYWORDS):
+                if 'состав района' in header.get_text().lower():
                     parent = header.find_parent()
                     if parent:
-                        for ul in parent.find_all(['ul', 'ol']):
+                        for ul in parent.find_all('ul'):
                             for li in ul.find_all('li'):
-                                text = li.get_text().strip()
-                                text = re.sub(r'\[[0-9]+\]', '', text).strip()
-                                
-                                settlement = extract_settlement_from_text(text)
-                                if settlement and is_valid_settlement_name(settlement):
-                                    if not re.match(r'^\d+\s+(мая|января)', settlement, re.IGNORECASE):
-                                        found_settlements.append(settlement)
+                                link = li.find('a')
+                                if link:
+                                    text = link.get_text().strip()
+                                    match = re.search(r'Сельское поселение\s+([А-Яа-я-]+)', text)
+                                    if match:
+                                        settlement = match.group(1).strip()
+                                        if self._is_valid_settlement_name(settlement):
+                                            found_settlements.append(settlement)
+                                    else:
+                                        if self._is_valid_settlement_name(text):
+                                            found_settlements.append(text)
             
-            unique = sorted(list(set(found_settlements)))
-            valid = []
-            for s in unique:
-                if len(s) >= 3 and not any(w in s.lower() for w in ['список', 'статья']):
-                    valid.append(s)
+            unique_settlements = sorted(list(set(found_settlements)))
+            logger.info(f"    Найдено сельских поселений: {len(unique_settlements)}")
+            return unique_settlements
             
-            logger.info(f"    Найдено сельских поселений: {len(valid)}")
-            return valid
         except Exception as e:
             logger.error(f"Ошибка парсинга сельских поселений: {e}")
             return []
+    
+    def _is_valid_settlement_name(self, name: str) -> bool:
+        """Проверяет, является ли текст валидным названием сельского поселения"""
+        if not name or len(name) < 2 or len(name) > 30:
+            return False
+        
+        name_lower = name.lower()
+        from .config import SERVICE_SETTLEMENT_WORDS
+        for word in SERVICE_SETTLEMENT_WORDS:
+            if word in name_lower:
+                return False
+        
+        if not re.search(r'[а-яА-ЯёЁ]', name):
+            return False
+        
+        if name.isdigit():
+            return False
+        
+        return True
     
     async def find_former_np_page(self, settlement: str, district: str) -> Optional[str]:
         """Находит страницу с бывшими населенными пунктами"""
@@ -168,39 +206,46 @@ class DicParser:
             f"Список бывших населённых пунктов на территории сельского поселения {settlement} {district} района",
             f"Список бывших населенных пунктов на территории сельского поселения {settlement} {district} района",
             f"Список бывших населённых пунктов {settlement} {district} района",
+            f"Бывшие населённые пункты {settlement} СП",
+            f"Список бывших населённых пунктов {settlement} сельского поселения"
         ]
         
         all_results = []
-        for q in queries:
-            results = await self._search_with_pagination(q, max_pages=15)
+        
+        for query in queries:
+            results = await self._search_with_pagination(query, max_pages=15)
             all_results.extend(results)
             await asyncio.sleep(1.5)
         
         if not all_results:
             return None
         
-        for r in all_results:
-            title = r['title'].lower()
-            text = r['full_text'].lower()
-            d_lower = district.lower()
+        for result in all_results:
+            title_lower = result['title'].lower()
+            full_text_lower = result['full_text'].lower()
             
-            if d_lower not in text and d_lower not in title:
-                r['score'] = 0
+            # Проверяем, что страница относится к нужному району
+            district_lower = district.lower()
+            if district_lower not in full_text_lower and district_lower not in title_lower:
+                result['score'] = 0
                 continue
             
-            if "список бывших" in title and settlement.lower() in title:
-                r['score'] = 150
+            if "список бывших" in title_lower and settlement.lower() in title_lower:
+                result['score'] = 150
             else:
-                r['score'] = self._score_settlement_relevance(r, settlement, district)
+                result['score'] = self._score_settlement_relevance(result, settlement, district)
             
-            if d_lower in text:
-                r['score'] += 20
+            # Дополнительный бонус, если в тексте есть район
+            if district_lower in full_text_lower:
+                result['score'] += 20
         
-        filtered = [r for r in all_results if r['score'] >= 50 and district.lower() in (r['full_text'].lower() + r['title'].lower())]
-        if not filtered:
+        # Фильтруем результаты, оставляем только те, где есть упоминание района
+        filtered_results = [r for r in all_results if r['score'] >= 50 and district.lower() in (r['full_text'].lower() + r['title'].lower())]
+        
+        if not filtered_results:
             return None
         
-        best = max(filtered, key=lambda x: x['score'])
+        best = max(filtered_results, key=lambda x: x['score'])
         
         if best['score'] >= 50:
             logger.info(f"      Найдена страница бывших НП для СП {settlement} (ID: {best['id']}, score: {best['score']})")
@@ -215,39 +260,48 @@ class DicParser:
         if cache_key in self.settlement_pages_cache:
             return self.settlement_pages_cache[cache_key]
         
-        queries = [f"Сельское поселение {settlement}", f"{settlement} сельское поселение", f"{settlement} СП"]
+        queries = [
+            f"Сельское поселение {settlement}",
+            f"{settlement} сельское поселение",
+            f"{settlement} СП"
+        ]
         
         all_results = []
-        for q in queries:
-            results = await self._search_with_pagination(q, max_pages=10)
+        
+        for query in queries:
+            results = await self._search_with_pagination(query, max_pages=10)
             all_results.extend(results)
             await asyncio.sleep(1.5)
         
         if not all_results:
             return None
         
-        for r in all_results:
-            title = r['title'].lower()
-            text = r['full_text'].lower()
-            d_lower = district.lower()
+        for result in all_results:
+            title_lower = result['title'].lower()
+            full_text_lower = result['full_text'].lower()
             
-            if d_lower not in text and d_lower not in title:
-                r['score'] = 0
+            # Проверяем, что страница относится к нужному району
+            district_lower = district.lower()
+            if district_lower not in full_text_lower and district_lower not in title_lower:
+                result['score'] = 0
                 continue
             
-            if "список бывших" in title:
-                r['score'] = 0
+            if "список бывших" in title_lower:
+                result['score'] = 0
             else:
-                r['score'] = self._score_settlement_relevance(r, settlement, district)
+                result['score'] = self._score_settlement_relevance(result, settlement, district)
             
-            if d_lower in text:
-                r['score'] += 20
+            # Дополнительный бонус, если в тексте есть район
+            if district_lower in full_text_lower:
+                result['score'] += 20
         
-        filtered = [r for r in all_results if r['score'] >= 40 and district.lower() in (r['full_text'].lower() + r['title'].lower())]
-        if not filtered:
+        # Фильтруем результаты, оставляем только те, где есть упоминание района
+        filtered_results = [r for r in all_results if r['score'] >= 40 and district.lower() in (r['full_text'].lower() + r['title'].lower())]
+        
+        if not filtered_results:
             return None
         
-        best = max(filtered, key=lambda x: x['score'])
+        best = max(filtered_results, key=lambda x: x['score'])
         
         if best['score'] >= 40:
             logger.info(f"      Найдена основная страница СП {settlement} (ID: {best['id']}, score: {best['score']})")
@@ -258,18 +312,22 @@ class DicParser:
     
     def _score_settlement_relevance(self, result: Dict, settlement: str, district: str) -> int:
         """Оценивает релевантность результата для страницы сельского поселения"""
-        title = result['title'].lower()
-        text = result['full_text'].lower()
+        title_lower = result['title'].lower()
+        full_text_lower = result['full_text'].lower()
         settlement_lower = settlement.lower()
         district_lower = district.lower()
         
         score = 0
-        if settlement_lower in title:
+        
+        if settlement_lower in title_lower:
             score += 50
-        if "сельское поселение" in title:
+        
+        if "сельское поселение" in title_lower:
             score += 40
-        if district_lower in title or district_lower in text:
+        
+        if district_lower in title_lower or district_lower in full_text_lower:
             score += 20
+        
         if result['position'] == 1:
             score += 15
         elif result['position'] <= 3:
@@ -281,16 +339,21 @@ class DicParser:
         """Парсит страницу с бывшими населенными пунктами"""
         url = DIC_ACADEMIC_ARTICLE_URL.format(article_id)
         html = await self._fetch_page(url)
+        
         if not html:
             return []
         
+        # Проверяем, что страница относится к нужному району
         soup = BeautifulSoup(html, 'html.parser')
-        if district.lower() not in soup.get_text().lower():
+        page_text = soup.get_text().lower()
+        district_lower = district.lower()
+        
+        if district_lower not in page_text:
             logger.debug(f"      Страница ID {article_id} не относится к району {district}, пропускаем")
             return []
         
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
+        results = await loop.run_in_executor(
             self.thread_pool,
             self._parse_former_np_html,
             html,
@@ -298,19 +361,28 @@ class DicParser:
             district,
             settlement
         )
+        
+        if results:
+            logger.info(f"      Из списка бывших НП ID {article_id} получено {len(results)} записей")
+        
+        return results
     
     def _parse_former_np_html(self, html: str, article_id: str, district: str, settlement: str) -> List[Dict]:
-        """Парсит HTML страницы с бывшими НП"""
+        """Парсит HTML страницы с бывшими НП (с координатами)"""
         try:
             soup = BeautifulSoup(html, 'html.parser')
             results = []
             
-            for table in soup.find_all('table', class_=['standard', 'sortable']):
+            tables = soup.find_all('table', class_=['standard', 'sortable'])
+            
+            for table in tables:
                 rows = table.find_all('tr')
                 if len(rows) < 2:
                     continue
                 
-                headers = [h.get_text().strip().lower() for h in rows[0].find_all(['th', 'td'])]
+                header_cells = rows[0].find_all(['th', 'td'])
+                headers = [h.get_text().strip().lower() for h in header_cells]
+                
                 name_idx = find_column_index(headers, ['населённый пункт', 'название'])
                 type_idx = find_column_index(headers, ['тип'])
                 coords_idx = find_column_index(headers, ['координаты', 'коорд'])
@@ -318,16 +390,24 @@ class DicParser:
                 for row in rows[1:]:
                     try:
                         cells = row.find_all('td')
-                        if len(cells) < max(name_idx or 0, type_idx or 0) + 1:
+                        if len(cells) < max(filter(None, [name_idx, type_idx])) + 1:
                             continue
                         
-                        name = cells[name_idx].get_text().strip() if name_idx is not None else None
-                        if not name or name in ['ИТОГО', 'Всего'] or not is_valid_name(name):
+                        if name_idx is not None and name_idx < len(cells):
+                            name = cells[name_idx].get_text().strip()
+                        else:
+                            continue
+                        
+                        if not name or name in ['ИТОГО', 'Всего']:
+                            continue
+                        
+                        if not is_valid_name(name):
                             continue
                         
                         village_type = 'деревня'
                         if type_idx is not None and type_idx < len(cells):
-                            village_type = expand_type(cells[type_idx].get_text().strip())
+                            raw_type = cells[type_idx].get_text().strip()
+                            village_type = expand_type(raw_type)
                         
                         lat, lon = None, None
                         if coords_idx is not None and coords_idx < len(cells):
@@ -348,12 +428,12 @@ class DicParser:
                             "district": district,
                             "has_coords": bool(lat)
                         })
-                    except:
+                        
+                    except Exception as e:
                         continue
             
-            if results:
-                logger.info(f"      Из списка бывших НП ID {article_id} получено {len(results)} записей")
             return results
+            
         except Exception as e:
             logger.error(f"Ошибка парсинга страницы бывших НП: {e}")
             return []
@@ -362,16 +442,21 @@ class DicParser:
         """Парсит основную страницу сельского поселения"""
         url = DIC_ACADEMIC_ARTICLE_URL.format(article_id)
         html = await self._fetch_page(url)
+        
         if not html:
             return []
         
+        # Проверяем, что страница относится к нужному району
         soup = BeautifulSoup(html, 'html.parser')
-        if district.lower() not in soup.get_text().lower():
+        page_text = soup.get_text().lower()
+        district_lower = district.lower()
+        
+        if district_lower not in page_text:
             logger.debug(f"      Страница ID {article_id} не относится к району {district}, пропускаем")
             return []
         
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
+        results = await loop.run_in_executor(
             self.thread_pool,
             self._parse_settlement_section,
             html,
@@ -379,6 +464,23 @@ class DicParser:
             district,
             settlement
         )
+        
+        if results:
+            logger.info(f"      Из раздела 'Населенные пункты' СП {settlement} получено {len(results)} записей")
+        else:
+            alt_results = await loop.run_in_executor(
+                self.thread_pool,
+                self._parse_settlements_alternative,
+                html,
+                article_id,
+                district,
+                settlement
+            )
+            if alt_results:
+                logger.info(f"      Из альтернативного парсинга СП {settlement} получено {len(alt_results)} записей")
+                results = alt_results
+        
+        return results
     
     def _parse_settlement_section(self, html: str, article_id: str, district: str, settlement: str) -> List[Dict]:
         """Парсит раздел "Населенные пункты" на странице сельского поселения"""
@@ -387,10 +489,48 @@ class DicParser:
             results = []
             links_found = 0
             
-            # Поиск таблиц
-            tables = soup.find_all('table', class_=['standard', 'sortable', 'wikitable', 'simple', 'collapsible', 'collapsed'])
+            section_headers = []
+            for header in soup.find_all(['h2', 'h3', 'h4']):
+                header_text = header.get_text().lower()
+                for keyword in SETTLEMENTS_SECTION_KEYWORDS:
+                    if keyword in header_text:
+                        section_headers.append(header)
+                        logger.info(f"        Найден заголовок: {header_text}")
+                        break
             
-            for table in tables:
+            if not section_headers:
+                for elem in soup.find_all(['p', 'div', 'span']):
+                    elem_text = elem.get_text().lower()
+                    for keyword in SETTLEMENTS_SECTION_KEYWORDS:
+                        if keyword in elem_text and len(elem_text) < 100:
+                            parent = elem.find_parent()
+                            if parent:
+                                section_headers.append(elem)
+                                logger.info(f"        Найден текстовый маркер: {elem_text[:50]}")
+                                break
+            
+            all_tables = soup.find_all('table', class_=['standard', 'sortable', 'wikitable', 'simple', 'collapsible', 'collapsed'])
+            
+            tables_to_parse = []
+            if section_headers:
+                for header in section_headers:
+                    parent = header.find_parent()
+                    if parent:
+                        nearby_tables = parent.find_all('table', class_=['standard', 'sortable', 'wikitable', 'simple', 'collapsible', 'collapsed'])
+                        tables_to_parse.extend(nearby_tables)
+            
+            if not tables_to_parse:
+                tables_to_parse = all_tables
+            
+            unique_tables = []
+            seen = set()
+            for table in tables_to_parse:
+                table_id = id(table)
+                if table_id not in seen:
+                    seen.add(table_id)
+                    unique_tables.append(table)
+            
+            for table in unique_tables:
                 rows = table.find_all('tr')
                 if len(rows) < 2:
                     continue
@@ -410,40 +550,156 @@ class DicParser:
                 
                 if type_idx is None or name_idx is None:
                     if len(rows) > 1:
-                        sample = rows[1].find_all('td')
-                        for i, cell in enumerate(sample):
-                            if any(ind in cell.get_text() for ind in TYPE_INDICATORS):
+                        sample_row = rows[1]
+                        sample_cells = sample_row.find_all('td')
+                        for i, cell in enumerate(sample_cells):
+                            cell_text = cell.get_text().strip()
+                            if any(indicator in cell_text for indicator in TYPE_INDICATORS):
                                 type_idx = i
-                                if i + 1 < len(sample):
+                                if i + 1 < len(sample_cells):
                                     name_idx = i + 1
                                 break
                 
                 if name_idx is None:
-                    name_idx = 1 if len(header_cells) >= 2 else 0
+                    if len(header_cells) >= 2:
+                        name_idx = 1
+                    else:
+                        name_idx = 0
+                
                 if type_idx is None:
-                    type_idx = name_idx - 1 if name_idx > 0 else 0
+                    if name_idx > 0:
+                        type_idx = name_idx - 1
+                    else:
+                        type_idx = 0
                 
                 for row in rows[1:]:
-                    cells = row.find_all('td')
-                    if len(cells) <= max(type_idx, name_idx):
+                    try:
+                        cells = row.find_all('td')
+                        if len(cells) <= max(type_idx, name_idx):
+                            continue
+                        
+                        type_cell = cells[type_idx]
+                        raw_type = type_cell.get_text().strip()
+                        village_type = expand_type(raw_type)
+                        
+                        name_cell = cells[name_idx]
+                        name = clean_village_name(name_cell.get_text().strip())
+                        
+                        if not name or len(name) < 2:
+                            continue
+                        
+                        if not is_valid_name(name):
+                            continue
+                        
+                        link = name_cell.find('a')
+                        article_id_from_link = None
+                        if link:
+                            href = link.get('href', '')
+                            match = re.search(r'(\d+)', href)
+                            if match:
+                                article_id_from_link = match.group(1)
+                                self.village_links[name] = article_id_from_link
+                                links_found += 1
+                                logger.info(f"        🔗 Найдена ссылка для {name}: ID {article_id_from_link}")
+                        
+                        results.append({
+                            "name": name,
+                            "type": village_type,
+                            "lat": "",
+                            "lon": "",
+                            "district": district,
+                            "has_coords": False,
+                            "article_id": article_id_from_link
+                        })
+                        
+                    except Exception as e:
                         continue
-                    
-                    raw_type = cells[type_idx].get_text().strip()
-                    village_type = expand_type(raw_type)
-                    
-                    name = clean_village_name(cells[name_idx].get_text().strip())
-                    if not name or len(name) < 2 or not is_valid_name(name):
-                        continue
-                    
-                    link = cells[name_idx].find('a')
-                    if link:
-                        href = link.get('href', '')
-                        match = re.search(r'(\d+)', href)
-                        if match:
-                            self.village_links[name] = match.group(1)
-                            links_found += 1
-                            logger.info(f"        🔗 Найдена ссылка для {name}: ID {match.group(1)}")
-                    
+                
+                if links_found == 0:
+                    for row in rows:
+                        cells = row.find_all('td')
+                        for i, cell in enumerate(cells):
+                            link = cell.find('a')
+                            if link:
+                                name = clean_village_name(link.get_text().strip())
+                                
+                                if not name or len(name) < 2:
+                                    continue
+                                
+                                if not is_valid_name(name):
+                                    continue
+                                
+                                type_text = 'деревня'
+                                if i > 0:
+                                    prev_cell = cells[i-1]
+                                    prev_text = prev_cell.get_text().strip()
+                                    if any(ind in prev_text for ind in TYPE_INDICATORS):
+                                        type_text = expand_type(prev_text)
+                                
+                                href = link.get('href', '')
+                                match = re.search(r'(\d+)', href)
+                                if match:
+                                    article_id_from_link = match.group(1)
+                                    self.village_links[name] = article_id_from_link
+                                    links_found += 1
+                                    logger.info(f"        🔗 Найдена ссылка (альт) для {name}: ID {article_id_from_link}")
+                                    
+                                    results.append({
+                                        "name": name,
+                                        "type": type_text,
+                                        "lat": "",
+                                        "lon": "",
+                                        "district": district,
+                                        "has_coords": False,
+                                        "article_id": article_id_from_link
+                                    })
+            
+            logger.info(f"        Всего найдено ссылок: {links_found}")
+            return results
+            
+        except Exception as e:
+            logger.error(f"Ошибка парсинга раздела 'Населенные пункты': {e}")
+            return []
+    
+    def _parse_settlements_alternative(self, html: str, article_id: str, district: str, settlement: str) -> List[Dict]:
+        """Альтернативный метод парсинга"""
+        try:
+            soup = BeautifulSoup(html, 'html.parser')
+            results = []
+            seen_names = set()
+            links_found = 0
+            
+            for link in soup.find_all('a', href=re.compile(r'/dic\.nsf/ruwiki/\d+')):
+                href = link.get('href', '')
+                if article_id in href:
+                    continue
+                
+                name = clean_village_name(link.get_text().strip())
+                
+                if not name or len(name) < 2 or name in seen_names:
+                    continue
+                
+                if not is_valid_name(name):
+                    continue
+                
+                village_type = 'деревня'
+                parent = link.find_parent('td')
+                if parent:
+                    row = parent.find_parent('tr')
+                    if row:
+                        for cell in row.find_all('td'):
+                            cell_text = cell.get_text().strip().lower()
+                            if cell_text in ['дер.', 'д.', 'пос.', 'п.', 'с.', 'х.', 'ур.']:
+                                village_type = expand_type(cell_text)
+                                break
+                
+                match = re.search(r'(\d+)', href)
+                if match:
+                    link_id = match.group(1)
+                    seen_names.add(name)
+                    self.village_links[name] = link_id
+                    links_found += 1
+                    logger.info(f"        🔗 Найдена ссылка (альт) для {name}: ID {link_id}")
                     results.append({
                         "name": name,
                         "type": village_type,
@@ -451,19 +707,21 @@ class DicParser:
                         "lon": "",
                         "district": district,
                         "has_coords": False,
-                        "article_id": self.village_links.get(name)
+                        "article_id": link_id
                     })
             
-            logger.info(f"        Всего найдено ссылок: {links_found}")
+            logger.info(f"        Всего найдено ссылок (альт): {links_found}")
             return results
+            
         except Exception as e:
-            logger.error(f"Ошибка парсинга: {e}")
+            logger.error(f"Ошибка альтернативного парсинга: {e}")
             return []
     
     async def parse_individual_village_page(self, article_id: str, district: str) -> Optional[Dict]:
-        """Парсит отдельную страницу населенного пункта для извлечения координат"""
+        """Парсит отдельную страницу населенного пункта для извлечения координат (dic.academic.ru)"""
         url = DIC_ACADEMIC_ARTICLE_URL.format(article_id)
         html = await self._fetch_page(url)
+        
         if not html:
             return None
         
@@ -477,7 +735,7 @@ class DicParser:
         )
     
     def _parse_individual_village_html(self, html: str, article_id: str, district: str) -> Optional[Dict]:
-        """Парсит отдельную страницу населенного пункта"""
+        """Парсит отдельную страницу населенного пункта (dic.academic.ru)"""
         try:
             soup = BeautifulSoup(html, 'html.parser')
             
@@ -486,45 +744,95 @@ class DicParser:
                 return None
             
             full_title = title_elem.get_text().strip()
+            
             name = full_title
             village_type = 'деревня'
             
             type_match = re.search(r'\(([^)]+)\)$', full_title)
             if type_match:
-                village_type = expand_type(type_match.group(1))
-                name = full_title.replace(f'({type_match.group(1)})', '').strip()
+                possible_type = type_match.group(1).lower()
+                name = full_title.replace(f'({possible_type})', '').strip()
+                village_type = expand_type(possible_type)
             else:
                 type_match = re.search(r',\s*([^,]+)$', full_title)
                 if type_match:
-                    village_type = expand_type(type_match.group(1))
-                    name = full_title.replace(f', {type_match.group(1)}', '').strip()
+                    possible_type = type_match.group(1).lower()
+                    name = full_title.replace(f', {possible_type}', '').strip()
+                    village_type = expand_type(possible_type)
             
             if not is_valid_name(name):
+                logger.debug(f"        ❌ Невалидное название: {name}")
                 return None
             
             lat, lon = None, None
-            geo = soup.find('span', class_='geo')
-            if geo:
-                lat_span = geo.find('span', class_='latitude')
-                lon_span = geo.find('span', class_='longitude')
+            source = None
+            
+            geo_span = soup.find('span', class_='geo')
+            if geo_span:
+                lat_span = geo_span.find('span', class_='latitude')
+                lon_span = geo_span.find('span', class_='longitude')
+                
                 if lat_span and lon_span:
                     try:
                         lat = float(lat_span.get_text().strip())
                         lon = float(lon_span.get_text().strip())
-                    except:
-                        pass
+                        source = "скрытый geo span"
+                        logger.info(f"        ✅ Найдены координаты через geo span: {lat:.5f}, {lon:.5f}")
+                    except ValueError as e:
+                        logger.debug(f"        ❌ Ошибка парсинга geo span: {e}")
             
             if not lat or not lon:
-                dms = r'(\d+)°(\d+)′([\d.]+)″.*?(\d+)°(\d+)′([\d.]+)″'
-                match = re.search(dms, soup.get_text())
+                dms_pattern = r'(\d+)°(\d+)′([\d.]+)″.*?(\d+)°(\d+)′([\d.]+)″'
+                text = soup.get_text()
+                match = re.search(dms_pattern, text)
                 if match:
                     try:
-                        lat = float(match.group(1)) + float(match.group(2))/60 + float(match.group(3))/3600
-                        lon = float(match.group(4)) + float(match.group(5))/60 + float(match.group(6))/3600
-                    except:
-                        pass
+                        lat_deg, lat_min, lat_sec = map(float, match.group(1, 2, 3))
+                        lon_deg, lon_min, lon_sec = map(float, match.group(4, 5, 6))
+                        
+                        lat = lat_deg + lat_min/60 + lat_sec/3600
+                        lon = lon_deg + lon_min/60 + lon_sec/3600
+                        source = "DMS формат"
+                        logger.info(f"        ✅ Найдены координаты через DMS: {lat:.5f}, {lon:.5f}")
+                    except ValueError as e:
+                        logger.debug(f"        ❌ Ошибка парсинга DMS: {e}")
+            
+            if not lat or not lon:
+                decimal_pattern = r'([0-9]+\.[0-9]+)[,\s]+([0-9]+\.[0-9]+)'
+                text = soup.get_text()
+                match = re.search(decimal_pattern, text)
+                if match:
+                    try:
+                        lat_candidate = float(match.group(1))
+                        lon_candidate = float(match.group(2))
+                        from .utils import validate_coordinates
+                        if validate_coordinates(lat_candidate, lon_candidate):
+                            lat = lat_candidate
+                            lon = lon_candidate
+                            source = "десятичные в тексте"
+                            logger.info(f"        ✅ Найдены координаты через десятичные: {lat:.5f}, {lon:.5f}")
+                    except ValueError as e:
+                        logger.debug(f"        ❌ Ошибка парсинга десятичных: {e}")
+            
+            if not lat or not lon:
+                geo_dms = soup.find('span', class_='geo-dms')
+                if geo_dms:
+                    dms_text = geo_dms.get_text()
+                    match = re.search(dms_pattern, dms_text)
+                    if match:
+                        try:
+                            lat_deg, lat_min, lat_sec = map(float, match.group(1, 2, 3))
+                            lon_deg, lon_min, lon_sec = map(float, match.group(4, 5, 6))
+                            
+                            lat = lat_deg + lat_min/60 + lat_sec/3600
+                            lon = lon_deg + lon_min/60 + lon_sec/3600
+                            source = "geo-dms span"
+                            logger.info(f"        ✅ Найдены координаты через geo-dms: {lat:.5f}, {lon:.5f}")
+                        except ValueError as e:
+                            logger.debug(f"        ❌ Ошибка парсинга geo-dms: {e}")
             
             if lat and lon:
+                logger.info(f"        ✅ ИТОГО: координаты для {name}: {lat:.5f}, {lon:.5f} (из {source})")
                 return {
                     "name": name,
                     "type": village_type,
@@ -533,8 +841,10 @@ class DicParser:
                     "district": district,
                     "has_coords": True
                 }
+            else:
+                logger.debug(f"        ❌ Координаты не найдены для {name}")
+                return None
             
-            return None
         except Exception as e:
-            logger.error(f"Ошибка парсинга: {e}")
+            logger.error(f"Ошибка парсинга отдельной страницы НП: {e}")
             return None
