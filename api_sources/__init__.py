@@ -96,9 +96,9 @@ class APISourceManager:
             'total_unique': 0
         }
         
-        # Параллельные запросы
-        self.max_concurrent_requests = 10  # к Wikipedia
-        self.max_concurrent_dic = 3        # к dic.academic.ru
+        # Параллельные запросы (уменьшено для избежания 429)
+        self.max_concurrent_requests = 3   # к Wikipedia (было 10)
+        self.max_concurrent_dic = 2        # к dic.academic.ru (было 3)
         
         # Стандартные заголовки
         self.default_headers = {
@@ -174,10 +174,8 @@ class APISourceManager:
                     html = await response.text()
                     return html
                 elif response.status == 429:
-                    base_wait = 2 ** retry_count
-                    jitter = random.uniform(0.5, 1.5)
-                    wait_time = base_wait * jitter
-                    
+                    base_wait = (2 ** retry_count) * random.uniform(1.0, 2.0)
+                    wait_time = base_wait
                     logger.warning(f"Ошибка 429 для {url}, повтор через {wait_time:.1f}с (попытка {retry_count + 1}/{self.max_retries})")
                     await asyncio.sleep(wait_time)
                     return await self._fetch_page_with_retry(url, retry_count + 1)
@@ -1120,20 +1118,25 @@ class APISourceManager:
             master_keywords = LIST_KEYWORDS + [
                 "список населённых пунктов района",
                 "список населенных пунктов района",
-                "населенные пункты района"
+                "населенные пункты района",
+                "список сельских населенных пунктов",
+                "перечень сельских населенных пунктов",
+                "состав сельского поселения",
+                "бывшие населенные пункты"
             ]
             
             # Поиск по всем ссылкам
             for link in soup.find_all('a', href=re.compile(r'/dic\.nsf/ruwiki/\d+')):
                 href = link.get('href', '')
                 text = link.get_text().lower().strip()
+                title = link.get('title', '').lower()
                 surrounding = ''
                 
                 parent = link.find_parent(['p', 'div', 'li', 'td', 'span'])
                 if parent:
                     surrounding = parent.get_text().lower()
                 
-                full_context = text + ' ' + surrounding
+                full_context = text + ' ' + title + ' ' + surrounding
                 
                 for keyword in master_keywords:
                     if keyword in full_context:
@@ -1154,9 +1157,10 @@ class APISourceManager:
                         for link in parent.find_all('a', href=re.compile(r'/dic\.nsf/ruwiki/\d+')):
                             href = link.get('href', '')
                             text = link.get_text().lower()
+                            title = link.get('title', '').lower()
                             
                             for keyword in master_keywords:
-                                if keyword in text:
+                                if keyword in text or keyword in title:
                                     match = re.search(r'/dic\.nsf/ruwiki/(\d+)', href)
                                     if match:
                                         article_id = match.group(1)
@@ -1170,9 +1174,10 @@ class APISourceManager:
                 for link in div.find_all('a', href=re.compile(r'/dic\.nsf/ruwiki/\d+')):
                     href = link.get('href', '')
                     text = link.get_text().lower()
+                    title = link.get('title', '').lower()
                     
                     for keyword in master_keywords:
-                        if keyword in text:
+                        if keyword in text or keyword in title:
                             match = re.search(r'/dic\.nsf/ruwiki/(\d+)', href)
                             if match:
                                 article_id = match.group(1)
@@ -1185,8 +1190,9 @@ class APISourceManager:
             for link in soup.find_all('a', href=re.compile(r'/dic\.nsf/ruwiki/\d+')):
                 href = link.get('href', '')
                 text = link.get_text().lower()
+                title = link.get('title', '').lower()
                 
-                if 'список' in text and ('населённых' in text or 'населенных' in text):
+                if ('список' in text or 'список' in title) and ('населённых' in text or 'населенных' in text or 'населённых' in title or 'населенных' in title):
                     match = re.search(r'/dic\.nsf/ruwiki/(\d+)', href)
                     if match:
                         article_id = match.group(1)
@@ -1205,7 +1211,6 @@ class APISourceManager:
             return []
     
     async def _parse_master_list_page(self, article_id: str, district: str) -> List[Dict]:
-        """Парсит страницу со списком населенных пунктов"""
         url = DIC_ACADEMIC_ARTICLE_URL.format(article_id)
         html = await self._fetch_page(url)
         
@@ -1241,7 +1246,6 @@ class APISourceManager:
         return results
     
     def _parse_master_list_html(self, html: str, article_id: str, district: str) -> List[Dict]:
-        """Парсит HTML страницы со списком населенных пунктов"""
         try:
             soup = BeautifulSoup(html, 'html.parser')
             results = []
@@ -1710,6 +1714,9 @@ class APISourceManager:
                 name = village['name']
                 logger.info(f"      🔍 Поиск в Wikipedia: {name}")
                 
+                # Случайная задержка перед запросом (0.5-1.5 сек)
+                await asyncio.sleep(random.uniform(0.5, 1.5))
+                
                 # Ищем страницу в Wikipedia по названию
                 encoded_name = quote_plus(name)
                 search_url = f"{WIKIPEDIA_SEARCH_URL}?action=query&list=search&srsearch={encoded_name}&format=json&utf8=1"
@@ -1727,6 +1734,13 @@ class APISourceManager:
                             
                             page_html = await self._fetch_page(page_url)
                             if page_html:
+                                # Проверяем, что это не страница-перенаправление и не список
+                                soup = BeautifulSoup(page_html, 'html.parser')
+                                if soup.find('div', class_='noarticletext'):
+                                    continue
+                                if 'список' in title.lower():
+                                    continue
+                                
                                 coords = await self._parse_wikipedia_coordinates(page_html, name)
                                 if coords:
                                     lat, lon = coords
@@ -1739,7 +1753,7 @@ class APISourceManager:
                                         "district": district,
                                         "has_coords": True
                                     }
-                            await asyncio.sleep(0.3)
+                            await asyncio.sleep(0.5)  # задержка между страницами
                 except Exception as e:
                     logger.debug(f"      ❌ Ошибка поиска в Wikipedia для {name}: {e}")
                 
