@@ -20,7 +20,8 @@ from .config import (
     SETTLEMENTS_SECTION_KEYWORDS, TYPE_INDICATORS, TYPE_MAPPING,
     SERVICE_SETTLEMENT_WORDS, SERVICE_VILLAGE_WORDS,
     MIN_NAME_LENGTH, MAX_NAME_LENGTH, DISTRICT_WIKI_NAMES, DISTRICT_UYEZDS,
-    INVALID_SETTLEMENT_MARKERS, INVALID_SETTLEMENT_PATTERNS, KNOWN_PERSONALITIES
+    INVALID_SETTLEMENT_MARKERS, INVALID_VILLAGE_MARKERS, INVALID_LINK_PATTERNS,
+    KNOWN_PERSONALITIES
 )
 from .utils import (
     is_valid_name, is_valid_settlement_name, expand_type,
@@ -354,7 +355,7 @@ class APISourceManager:
                 return False
         
         # Проверка на паттерны
-        for pattern in INVALID_SETTLEMENT_PATTERNS:
+        for pattern in INVALID_LINK_PATTERNS:
             if re.search(pattern, name):
                 return False
         
@@ -398,6 +399,7 @@ class APISourceManager:
             f"{district} район",
             f"{district} район Тверская область",
             f"{district} муниципальный район",
+            f"{district} муниципальный округ",
             district
         ]
         
@@ -457,7 +459,7 @@ class APISourceManager:
         
         score = 0
         
-        if f"{district_lower} район" in title_lower:
+        if f"{district_lower} район" in title_lower or f"{district_lower} муниципальный округ" in title_lower:
             score += 100
         elif district_lower in title_lower:
             score += 50
@@ -486,10 +488,10 @@ class APISourceManager:
             text = soup.get_text().lower()
             district_lower = district.lower()
             
-            if f"{district_lower} район" not in text:
+            if f"{district_lower} район" not in text and f"{district_lower} муниципальный округ" not in text:
                 return False
             
-            expected_sections = ['география', 'история', 'население', 'состав района']
+            expected_sections = ['география', 'история', 'население', 'состав района', 'муниципальное устройство']
             found_sections = 0
             
             for section in expected_sections:
@@ -508,56 +510,104 @@ class APISourceManager:
             soup = BeautifulSoup(html, 'html.parser')
             found_settlements = []
             
+            # Ищем заголовки с ключевыми словами
             for header in soup.find_all(['h2', 'h3', 'h4']):
                 header_text = header.get_text().lower()
                 if any(keyword in header_text for keyword in SETTLEMENT_KEYWORDS):
                     parent = header.find_parent()
                     if parent:
+                        # Ищем списки
                         for ul in parent.find_all('ul'):
                             for li in ul.find_all('li'):
                                 link = li.find('a')
                                 if link:
                                     text = link.get_text().strip()
-                                    match = re.search(r'Сельское поселение\s+([А-Яа-я-]+)', text)
-                                    if match:
-                                        settlement = match.group(1).strip()
-                                    else:
-                                        settlement = text
-                                    
-                                    # ДОПОЛНИТЕЛЬНАЯ ФИЛЬТРАЦИЯ
-                                    if settlement:
-                                        # Пропускаем уезды
-                                        if 'уезд' in settlement.lower():
-                                            continue
-                                        # Пропускаем города
-                                        if 'город' in settlement.lower() or 'городской' in settlement.lower():
-                                            continue
-                                        # Пропускаем названия с цифрами в начале
-                                        if re.match(r'^\d+', settlement):
-                                            continue
-                                        # Пропускаем имена людей
-                                        if re.search(r'[А-Я]\.\s*[А-Я]\.', settlement):
-                                            continue
-                                        # Пропускаем фамилии с инициалами
-                                        if re.search(r'[А-Я][а-я]+\s+[А-Я]\.', settlement):
-                                            continue
-                                        # Пропускаем известных личностей
-                                        skip = False
-                                        for personality in KNOWN_PERSONALITIES:
-                                            if personality.lower() in settlement.lower() or settlement == personality:
-                                                skip = True
-                                                break
-                                        if skip:
-                                            continue
-                                        # Пропускаем "Земляки" и подобные
-                                        if 'земляки' in settlement.lower() or 'военачальники' in settlement.lower():
-                                            continue
-                                        # Пропускаем даты
-                                        if re.match(r'\d+\s+(мая|января|февраля|марта|апреля|июня|июля|августа|сентября|октября|ноября|декабря)', settlement, re.IGNORECASE):
-                                            continue
+                                    # Проверяем, что это ссылка на сельское поселение
+                                    if 'сельское поселение' in text.lower() or 'сельсовет' in text.lower():
+                                        # Извлекаем название
+                                        match = re.search(r'«([^»]+)»', text)
+                                        if match:
+                                            settlement = match.group(1).strip()
+                                        else:
+                                            # Убираем слова "сельское поселение"
+                                            settlement = re.sub(r'^сельское\s+поселение\s*', '', text, flags=re.IGNORECASE)
+                                            settlement = re.sub(r'\s+\(.*?\)', '', settlement).strip()
                                         
-                                        if self._is_valid_settlement_name(settlement):
-                                            found_settlements.append(settlement)
+                                        # Фильтрация
+                                        if settlement and len(settlement) > 2:
+                                            # Пропускаем мусорные маркеры
+                                            skip = False
+                                            for marker in INVALID_SETTLEMENT_MARKERS:
+                                                if marker in settlement.lower():
+                                                    skip = True
+                                                    break
+                                            if skip:
+                                                continue
+                                            
+                                            # Пропускаем цифры в начале
+                                            if re.match(r'^\d+', settlement):
+                                                continue
+                                            
+                                            # Пропускаем даты
+                                            if re.match(r'\d+\s+(мая|января|февраля|марта|апреля|июня|июля|августа|сентября|октября|ноября|декабря)', settlement, re.IGNORECASE):
+                                                continue
+                                            
+                                            if self._is_valid_settlement_name(settlement):
+                                                found_settlements.append(settlement)
+                        
+                        # Ищем таблицы
+                        for table in parent.find_all('table', class_=['standard', 'wikitable', 'sortable']):
+                            for row in table.find_all('tr'):
+                                cells = row.find_all('td')
+                                if cells:
+                                    for cell in cells:
+                                        cell_text = cell.get_text().strip()
+                                        if 'сельское поселение' in cell_text.lower() or 'сельсовет' in cell_text.lower():
+                                            # Извлекаем название
+                                            match = re.search(r'«([^»]+)»', cell_text)
+                                            if match:
+                                                settlement = match.group(1).strip()
+                                            else:
+                                                settlement = re.sub(r'^сельское\s+поселение\s*', '', cell_text, flags=re.IGNORECASE)
+                                                settlement = re.sub(r'\s+\(.*?\)', '', settlement).strip()
+                                            
+                                            if settlement and len(settlement) > 2:
+                                                skip = False
+                                                for marker in INVALID_SETTLEMENT_MARKERS:
+                                                    if marker in settlement.lower():
+                                                        skip = True
+                                                        break
+                                                if skip:
+                                                    continue
+                                                if re.match(r'^\d+', settlement):
+                                                    continue
+                                                if self._is_valid_settlement_name(settlement):
+                                                    found_settlements.append(settlement)
+            
+            # Если не нашли через заголовки, ищем прямые ссылки на СП
+            if not found_settlements:
+                for link in soup.find_all('a', href=re.compile(r'/dic\.nsf/ruwiki/\d+')):
+                    link_text = link.get_text().strip()
+                    if 'сельское поселение' in link_text.lower() or 'сельсовет' in link_text.lower():
+                        match = re.search(r'«([^»]+)»', link_text)
+                        if match:
+                            settlement = match.group(1).strip()
+                        else:
+                            settlement = re.sub(r'^сельское\s+поселение\s*', '', link_text, flags=re.IGNORECASE)
+                            settlement = re.sub(r'\s+\(.*?\)', '', settlement).strip()
+                        
+                        if settlement and len(settlement) > 2:
+                            skip = False
+                            for marker in INVALID_SETTLEMENT_MARKERS:
+                                if marker in settlement.lower():
+                                    skip = True
+                                    break
+                            if skip:
+                                continue
+                            if re.match(r'^\d+', settlement):
+                                continue
+                            if self._is_valid_settlement_name(settlement):
+                                found_settlements.append(settlement)
             
             unique_settlements = sorted(list(set(found_settlements)))
             logger.info(f"    Найдено сельских поселений: {len(unique_settlements)}")
@@ -596,12 +646,27 @@ class APISourceManager:
         
         for result in all_results:
             title_lower = result['title'].lower()
+            full_text_lower = result['full_text'].lower()
+            
+            district_lower = district.lower()
+            if district_lower not in full_text_lower and district_lower not in title_lower:
+                result['score'] = 0
+                continue
+            
             if "список бывших" in title_lower and settlement.lower() in title_lower:
                 result['score'] = 150
             else:
                 result['score'] = self._score_settlement_relevance(result, settlement, district)
+            
+            if district_lower in full_text_lower:
+                result['score'] += 20
         
-        best = max(all_results, key=lambda x: x['score'])
+        filtered_results = [r for r in all_results if r['score'] >= 50 and district.lower() in (r['full_text'].lower() + r['title'].lower())]
+        
+        if not filtered_results:
+            return None
+        
+        best = max(filtered_results, key=lambda x: x['score'])
         
         if best['score'] >= 50:
             logger.info(f"      Найдена страница бывших НП для СП {settlement} (ID: {best['id']}, score: {best['score']})")
@@ -634,12 +699,27 @@ class APISourceManager:
         
         for result in all_results:
             title_lower = result['title'].lower()
+            full_text_lower = result['full_text'].lower()
+            
+            district_lower = district.lower()
+            if district_lower not in full_text_lower and district_lower not in title_lower:
+                result['score'] = 0
+                continue
+            
             if "список бывших" in title_lower:
                 result['score'] = 0
             else:
                 result['score'] = self._score_settlement_relevance(result, settlement, district)
+            
+            if district_lower in full_text_lower:
+                result['score'] += 20
         
-        best = max(all_results, key=lambda x: x['score'])
+        filtered_results = [r for r in all_results if r['score'] >= 40 and district.lower() in (r['full_text'].lower() + r['title'].lower())]
+        
+        if not filtered_results:
+            return None
+        
+        best = max(filtered_results, key=lambda x: x['score'])
         
         if best['score'] >= 40:
             logger.info(f"      Найдена основная страница СП {settlement} (ID: {best['id']}, score: {best['score']})")
@@ -679,6 +759,15 @@ class APISourceManager:
         html = await self._fetch_page(url)
         
         if not html:
+            return []
+        
+        # Проверяем, что страница относится к нужному району
+        soup = BeautifulSoup(html, 'html.parser')
+        page_text = soup.get_text().lower()
+        district_lower = district.lower()
+        
+        if district_lower not in page_text:
+            logger.debug(f"      Страница ID {article_id} не относится к району {district}, пропускаем")
             return []
         
         loop = asyncio.get_event_loop()
@@ -733,6 +822,15 @@ class APISourceManager:
                         if not self._is_valid_name(name):
                             continue
                         
+                        # Фильтрация мусорных названий
+                        skip = False
+                        for marker in INVALID_VILLAGE_MARKERS:
+                            if marker in name.lower():
+                                skip = True
+                                break
+                        if skip:
+                            continue
+                        
                         village_type = 'деревня'
                         if type_idx is not None and type_idx < len(cells):
                             raw_type = cells[type_idx].get_text().strip()
@@ -775,6 +873,15 @@ class APISourceManager:
         html = await self._fetch_page(url)
         
         if not html:
+            return []
+        
+        # Проверяем, что страница относится к нужному району
+        soup = BeautifulSoup(html, 'html.parser')
+        page_text = soup.get_text().lower()
+        district_lower = district.lower()
+        
+        if district_lower not in page_text:
+            logger.debug(f"      Страница ID {article_id} не относится к району {district}, пропускаем")
             return []
         
         loop = asyncio.get_event_loop()
@@ -910,10 +1017,27 @@ class APISourceManager:
                         name = re.sub(r'^\d+\s*', '', name)
                         name = re.sub(r'\s+', ' ', name).strip()
                         
-                        if not name or len(name) < 2:
+                        if not name or len(name) < MIN_NAME_LENGTH or len(name) > MAX_NAME_LENGTH:
                             continue
                         
                         if not self._is_valid_name(name):
+                            continue
+                        
+                        # Фильтрация мусорных названий
+                        skip = False
+                        for marker in INVALID_VILLAGE_MARKERS:
+                            if marker in name.lower():
+                                skip = True
+                                break
+                        if skip:
+                            continue
+                        
+                        # Фильтрация по паттернам
+                        for pattern in INVALID_LINK_PATTERNS:
+                            if re.search(pattern, name.lower()):
+                                skip = True
+                                break
+                        if skip:
                             continue
                         
                         link = name_cell.find('a')
@@ -950,10 +1074,19 @@ class APISourceManager:
                                 name = re.sub(r'^\d+\s*', '', name)
                                 name = re.sub(r'\s+', ' ', name).strip()
                                 
-                                if not name or len(name) < 2:
+                                if not name or len(name) < MIN_NAME_LENGTH or len(name) > MAX_NAME_LENGTH:
                                     continue
                                 
                                 if not self._is_valid_name(name):
+                                    continue
+                                
+                                # Фильтрация мусорных названий
+                                skip = False
+                                for marker in INVALID_VILLAGE_MARKERS:
+                                    if marker in name.lower():
+                                        skip = True
+                                        break
+                                if skip:
                                     continue
                                 
                                 type_text = 'деревня'
@@ -989,7 +1122,7 @@ class APISourceManager:
             return []
     
     def _parse_settlements_alternative(self, html: str, article_id: str, district: str, settlement: str) -> List[Dict]:
-        """Альтернативный метод парсинга"""
+        """Альтернативный метод парсинга с усиленной фильтрацией мусора"""
         try:
             soup = BeautifulSoup(html, 'html.parser')
             results = []
@@ -1005,12 +1138,40 @@ class APISourceManager:
                 name = re.sub(r'^\d+\s*', '', name)
                 name = re.sub(r'\s+', ' ', name).strip()
                 
-                if not name or len(name) < 2 or name in seen_names:
+                if not name or len(name) < MIN_NAME_LENGTH or len(name) > MAX_NAME_LENGTH:
+                    continue
+                if name in seen_names:
+                    continue
+                
+                # Жесткая фильтрация мусорных названий
+                skip = False
+                for marker in INVALID_VILLAGE_MARKERS:
+                    if marker in name.lower():
+                        skip = True
+                        break
+                if skip:
+                    continue
+                
+                # Проверка на паттерны мусора
+                for pattern in INVALID_LINK_PATTERNS:
+                    if re.search(pattern, name.lower()):
+                        skip = True
+                        break
+                if skip:
+                    continue
+                
+                # Проверка на известных личностей
+                for personality in KNOWN_PERSONALITIES:
+                    if personality.lower() in name.lower():
+                        skip = True
+                        break
+                if skip:
                     continue
                 
                 if not self._is_valid_name(name):
                     continue
                 
+                # Определяем тип населенного пункта
                 village_type = 'деревня'
                 parent = link.find_parent('td')
                 if parent:
@@ -1052,12 +1213,13 @@ class APISourceManager:
             soup = BeautifulSoup(html, 'html.parser')
             found_ids = []
             
+            # Поиск по всем ссылкам
             for link in soup.find_all('a', href=re.compile(r'/dic\.nsf/ruwiki/\d+')):
                 href = link.get('href', '')
                 text = link.get_text().lower().strip()
                 surrounding = ''
                 
-                parent = link.find_parent(['p', 'div', 'li'])
+                parent = link.find_parent(['p', 'div', 'li', 'td'])
                 if parent:
                     surrounding = parent.get_text().lower()
                 
@@ -1072,7 +1234,8 @@ class APISourceManager:
                             logger.info(f"      Найдена ссылка на список НП: ID {article_id} - {link.get_text()}")
                             break
             
-            see_also_patterns = ['см. также', 'смотри также', 'см также']
+            # Поиск в разделе "См. также"
+            see_also_patterns = ['см. также', 'смотри также', 'см также', 'примечания']
             
             for pattern in see_also_patterns:
                 for elem in soup.find_all(['p', 'div', 'span', 'li'], string=re.compile(pattern, re.I)):
@@ -1091,6 +1254,22 @@ class APISourceManager:
                                             found_ids.append(article_id)
                                             logger.info(f"      Найдена ссылка на список НП в 'См. также': ID {article_id} - {link.get_text()}")
                                         break
+            
+            # Поиск в боковой панели
+            for div in soup.find_all('div', class_=['sidebox', 'navbox', 'toccolours']):
+                for link in div.find_all('a', href=re.compile(r'/dic\.nsf/ruwiki/\d+')):
+                    href = link.get('href', '')
+                    text = link.get_text().lower()
+                    
+                    for keyword in LIST_KEYWORDS:
+                        if keyword in text:
+                            match = re.search(r'/dic\.nsf/ruwiki/(\d+)', href)
+                            if match:
+                                article_id = match.group(1)
+                                if article_id not in found_ids:
+                                    found_ids.append(article_id)
+                                    logger.info(f"      Найдена ссылка на список НП в боковой панели: ID {article_id}")
+                                break
             
             return list(set(found_ids))
             
@@ -1175,6 +1354,15 @@ class APISourceManager:
                         name = re.sub(r'\s+', ' ', name).strip()
                         
                         if not self._is_valid_name(name):
+                            continue
+                        
+                        # Фильтрация мусорных названий
+                        skip = False
+                        for marker in INVALID_VILLAGE_MARKERS:
+                            if marker in name.lower():
+                                skip = True
+                                break
+                        if skip:
                             continue
                         
                         village_type = 'деревня'
