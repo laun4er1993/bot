@@ -11,6 +11,7 @@ import os
 import time
 import re
 import random
+import json
 from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import quote, quote_plus
@@ -1581,7 +1582,6 @@ class APISourceManager:
             html = await self._fetch_page(search_url)
             if html:
                 try:
-                    import json
                     data = json.loads(html)
                     if 'query' in data and 'search' in data['query']:
                         for result in data['query']['search'][:15]:
@@ -1719,27 +1719,71 @@ class APISourceManager:
     async def _parse_wikipedia_coordinates(self, html: str, village_name: str) -> Optional[Tuple[str, str]]:
         """
         Парсит координаты из HTML страницы Wikipedia.
-        Ищет geo-спан, инфобокс или DMS формат.
+        Ищет:
+        1. Класс coordinates с data-param (основной формат)
+        2. geo span (старый формат)
+        3. DMS формат в тексте
         """
         try:
             soup = BeautifulSoup(html, 'html.parser')
             
-            # Вариант 1: Ищем geo span (как на dic.academic.ru)
-            geo_span = soup.find('span', class_='geo')
-            if geo_span:
-                lat_span = geo_span.find('span', class_='latitude')
-                lon_span = geo_span.find('span', class_='longitude')
-                if lat_span and lon_span:
+            # ВАРИАНТ 1: Ищем coordinates с data-param (новый основной формат)
+            coord_elem = soup.find('span', class_='coordinates')
+            if coord_elem:
+                # Ищем элемент с data-mw-kartographer
+                maplink = coord_elem.find('a', class_='mw-kartographer-maplink')
+                if maplink and maplink.get('data-mw-kartographer'):
                     try:
-                        lat = float(lat_span.get_text().strip())
-                        lon = float(lon_span.get_text().strip())
+                        data = json.loads(maplink['data-mw-kartographer'])
+                        if 'lat' in data and 'lon' in data:
+                            lat = float(data['lat'])
+                            lon = float(data['lon'])
+                            if self._validate_coordinates(lat, lon):
+                                logger.info(f"          ✅ Wikipedia: найдены координаты через data-param: {lat:.5f}, {lon:.5f}")
+                                return (str(round(lat, 5)), str(round(lon, 5)))
+                    except Exception as e:
+                        logger.debug(f"          Ошибка парсинга data-mw-kartographer: {e}")
+                
+                # Альтернативный поиск координат в coordinates
+                geo = coord_elem.find('span', class_='geo')
+                if geo:
+                    lat_span = geo.find('span', class_='latitude')
+                    lon_span = geo.find('span', class_='longitude')
+                    if lat_span and lon_span:
+                        try:
+                            lat = float(lat_span.get_text().strip())
+                            lon = float(lon_span.get_text().strip())
+                            if self._validate_coordinates(lat, lon):
+                                logger.info(f"          ✅ Wikipedia: найдены координаты через geo span: {lat:.5f}, {lon:.5f}")
+                                return (str(round(lat, 5)), str(round(lon, 5)))
+                        except:
+                            pass
+                
+                # Ищем текст с координатами в формате DMS внутри coordinates
+                coord_text = coord_elem.get_text()
+                # Ищем формат "56°18′12″ с. ш. 34°20′24″ в. д."
+                dms_pattern = r'(\d+)°(\d+)′([\d.]+)″\s*([сю])\.[^\d]*(\d+)°(\d+)′([\d.]+)″\s*([зв])\.[^\d]*'
+                match = re.search(dms_pattern, coord_text)
+                if match:
+                    try:
+                        lat_deg, lat_min, lat_sec, lat_dir = match.group(1, 2, 3, 4)
+                        lon_deg, lon_min, lon_sec, lon_dir = match.group(5, 6, 7, 8)
+                        
+                        lat = float(lat_deg) + float(lat_min)/60 + float(lat_sec)/3600
+                        lon = float(lon_deg) + float(lon_min)/60 + float(lon_sec)/3600
+                        
+                        if lat_dir == 'ю':
+                            lat = -lat
+                        if lon_dir == 'з':
+                            lon = -lon
+                        
                         if self._validate_coordinates(lat, lon):
-                            logger.info(f"          ✅ Wikipedia: найдены координаты через geo span: {lat:.5f}, {lon:.5f}")
+                            logger.info(f"          ✅ Wikipedia: найдены координаты через DMS в coordinates: {lat:.5f}, {lon:.5f}")
                             return (str(round(lat, 5)), str(round(lon, 5)))
                     except:
                         pass
             
-            # Вариант 2: Ищем координаты в инфобоксе
+            # ВАРИАНТ 2: Ищем инфобокс с координатами (старый формат)
             infobox = soup.find('table', class_='infobox')
             if infobox:
                 for row in infobox.find_all('tr'):
@@ -1747,6 +1791,7 @@ class APISourceManager:
                     if header and ('координаты' in header.get_text().lower()):
                         coord_cell = row.find('td')
                         if coord_cell:
+                            # Ищем geo span внутри ячейки
                             geo_span = coord_cell.find('span', class_='geo')
                             if geo_span:
                                 lat_span = geo_span.find('span', class_='latitude')
@@ -1761,7 +1806,7 @@ class APISourceManager:
                                     except:
                                         pass
             
-            # Вариант 3: Ищем координаты в формате DMS
+            # ВАРИАНТ 3: Ищем координаты в формате DMS в любом месте страницы
             dms_pattern = r'(\d+)°(\d+)′([\d.]+)″([NS])\s+(\d+)°(\d+)′([\d.]+)″([EW])'
             text = soup.get_text()
             match = re.search(dms_pattern, text)
@@ -1780,6 +1825,19 @@ class APISourceManager:
                     
                     if self._validate_coordinates(lat, lon):
                         logger.info(f"          ✅ Wikipedia: найдены координаты через DMS: {lat:.5f}, {lon:.5f}")
+                        return (str(round(lat, 5)), str(round(lon, 5)))
+                except:
+                    pass
+            
+            # ВАРИАНТ 4: Ищем десятичные координаты
+            decimal_pattern = r'([0-9]{2}\.[0-9]{4,})[,\s]+([0-9]{2,3}\.[0-9]{4,})'
+            match = re.search(decimal_pattern, text)
+            if match:
+                try:
+                    lat = float(match.group(1))
+                    lon = float(match.group(2))
+                    if self._validate_coordinates(lat, lon):
+                        logger.info(f"          ✅ Wikipedia: найдены координаты через десятичные: {lat:.5f}, {lon:.5f}")
                         return (str(round(lat, 5)), str(round(lon, 5)))
                 except:
                     pass
