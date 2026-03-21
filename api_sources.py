@@ -2023,6 +2023,3 @@ class APISourceManager:
     
     def _validate_coordinates(self, lat: float, lon: float) -> bool:
         return (55.0 <= lat <= 58.0 and 30.0 <= lon <= 38.0)
-
-
-AVAILABLE_DISTRICTS = DISTRICTS
