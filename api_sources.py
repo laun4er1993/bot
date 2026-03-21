@@ -974,12 +974,30 @@ class APISourceManager:
         
         for result in all_results:
             title_lower = result['title'].lower()
+            full_text_lower = result['full_text'].lower()
+            
+            # Проверяем, что страница относится к нужному району
+            district_lower = district.lower()
+            if district_lower not in full_text_lower and district_lower not in title_lower:
+                result['score'] = 0
+                continue
+            
             if "список бывших" in title_lower and settlement.lower() in title_lower:
                 result['score'] = 150
             else:
                 result['score'] = self._score_settlement_relevance(result, settlement, district)
+            
+            # Дополнительный бонус, если в тексте есть район
+            if district_lower in full_text_lower:
+                result['score'] += 20
         
-        best = max(all_results, key=lambda x: x['score'])
+        # Фильтруем результаты, оставляем только те, где есть упоминание района
+        filtered_results = [r for r in all_results if r['score'] >= 50 and district.lower() in (r['full_text'].lower() + r['title'].lower())]
+        
+        if not filtered_results:
+            return None
+        
+        best = max(filtered_results, key=lambda x: x['score'])
         
         if best['score'] >= 50:
             logger.info(f"      Найдена страница бывших НП для СП {settlement} (ID: {best['id']}, score: {best['score']})")
@@ -1014,12 +1032,30 @@ class APISourceManager:
         
         for result in all_results:
             title_lower = result['title'].lower()
+            full_text_lower = result['full_text'].lower()
+            
+            # Проверяем, что страница относится к нужному району
+            district_lower = district.lower()
+            if district_lower not in full_text_lower and district_lower not in title_lower:
+                result['score'] = 0
+                continue
+            
             if "список бывших" in title_lower:
                 result['score'] = 0
             else:
                 result['score'] = self._score_settlement_relevance(result, settlement, district)
+            
+            # Дополнительный бонус, если в тексте есть район
+            if district_lower in full_text_lower:
+                result['score'] += 20
         
-        best = max(all_results, key=lambda x: x['score'])
+        # Фильтруем результаты, оставляем только те, где есть упоминание района
+        filtered_results = [r for r in all_results if r['score'] >= 40 and district.lower() in (r['full_text'].lower() + r['title'].lower())]
+        
+        if not filtered_results:
+            return None
+        
+        best = max(filtered_results, key=lambda x: x['score'])
         
         if best['score'] >= 40:
             logger.info(f"      Найдена основная страница СП {settlement} (ID: {best['id']}, score: {best['score']})")
@@ -1063,6 +1099,15 @@ class APISourceManager:
         html = await self._fetch_page(url)
         
         if not html:
+            return []
+        
+        # Проверяем, что страница относится к нужному району
+        soup = BeautifulSoup(html, 'html.parser')
+        page_text = soup.get_text().lower()
+        district_lower = district.lower()
+        
+        if district_lower not in page_text:
+            logger.debug(f"      Страница ID {article_id} не относится к району {district}, пропускаем")
             return []
         
         loop = asyncio.get_event_loop()
@@ -1161,6 +1206,15 @@ class APISourceManager:
         html = await self._fetch_page(url)
         
         if not html:
+            return []
+        
+        # Проверяем, что страница относится к нужному району
+        soup = BeautifulSoup(html, 'html.parser')
+        page_text = soup.get_text().lower()
+        district_lower = district.lower()
+        
+        if district_lower not in page_text:
+            logger.debug(f"      Страница ID {article_id} не относится к району {district}, пропускаем")
             return []
         
         loop = asyncio.get_event_loop()
