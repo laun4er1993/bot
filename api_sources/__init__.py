@@ -155,59 +155,111 @@ class APISourceManager:
             self.page_cache[url] = (html, current_time)
         return html
     
-    async def _search_with_pagination(self, query: str, max_pages: int = 10) -> List[Dict]:
-        """Поиск на dic.academic.ru с пагинацией"""
+    async def _search_with_pagination(self, query: str, max_pages: int = 10, unlimited: bool = False) -> List[Dict]:
+        """
+        Выполняет поиск с обработкой нескольких страниц результатов (как в рабочей версии)
+        """
         all_results = []
         page = 1
-        while page <= max_pages:
+        
+        while True:
+            if not unlimited and page > max_pages:
+                break
+            
             if page > 1:
                 await asyncio.sleep(2.0)
-            url = f"{DIC_ACADEMIC_SEARCH_URL}?SWord={quote(query)}"
+            
+            encoded_query = quote(query)
+            search_url = f"{DIC_ACADEMIC_SEARCH_URL}?SWord={encoded_query}"
             if page > 1:
-                url += f"&page={page}"
-            html = await self._fetch_page(url)
+                search_url += f"&page={page}"
+            
+            html = await self._fetch_page(search_url)
             if not html:
                 break
+            
             loop = asyncio.get_event_loop()
-            results = await loop.run_in_executor(self.thread_pool, self._parse_search_page, html, page)
-            if not results:
+            page_results = await loop.run_in_executor(
+                self.thread_pool,
+                self._parse_search_page,
+                html,
+                page
+            )
+            
+            if not page_results:
                 break
-            all_results.extend(results)
-            has_next = await loop.run_in_executor(self.thread_pool, self._has_next_page, html)
+            
+            all_results.extend(page_results)
+            logger.info(f"      Страница {page}: найдено {len(page_results)} результатов")
+            
+            has_next = await loop.run_in_executor(
+                self.thread_pool,
+                self._has_next_page,
+                html
+            )
+            
             if not has_next:
                 break
+            
             page += 1
+        
+        if page > 1:
+            logger.info(f"    Всего найдено результатов: {len(all_results)} на {page-1} страницах")
+        
         return all_results
     
     def _parse_search_page(self, html: str, page_num: int) -> List[Dict]:
+        """
+        Парсит одну страницу результатов поиска (как в рабочей версии)
+        """
         try:
             soup = BeautifulSoup(html, 'html.parser')
             results = []
+            
             for link in soup.find_all('a', href=re.compile(r'/dic\.nsf/ruwiki/\d+')):
                 href = link.get('href', '')
+                title_text = link.get_text().strip()
+                
                 match = re.search(r'/dic\.nsf/ruwiki/(\d+)', href)
                 if not match:
                     continue
-                pid = match.group(1)
-                title = link.get_text().strip()
+                    
+                article_id = match.group(1)
+                
                 parent = link.find_parent()
-                text = ""
+                full_text = ""
                 if parent:
-                    desc = parent.find_next('span', class_='description')
-                    text = desc.get_text().strip() if desc else parent.get_text().strip()
-                pos = re.match(r'^(\d+)', text)
+                    description = parent.find_next('span', class_='description')
+                    if description:
+                        full_text = description.get_text().strip()
+                    else:
+                        full_text = parent.get_text().strip()
+                
+                position_match = re.match(r'^(\d+)', full_text)
+                position = int(position_match.group(1)) if position_match else 0
+                
                 results.append({
-                    'id': pid, 'title': title, 'full_text': text,
-                    'page': page_num, 'position': int(pos.group(1)) if pos else 0
+                    'id': article_id,
+                    'title': title_text,
+                    'full_text': full_text,
+                    'page': page_num,
+                    'position': position
                 })
+            
             return results
-        except:
+            
+        except Exception as e:
+            logger.error(f"Ошибка парсинга страницы поиска: {e}")
             return []
     
     def _has_next_page(self, html: str) -> bool:
+        """
+        Проверяет наличие ссылки на следующую страницу
+        """
         try:
             soup = BeautifulSoup(html, 'html.parser')
-            return soup.find('a', string=re.compile(r'далее|следующая|next', re.I)) is not None
+            next_link = soup.find('a', string=re.compile(r'далее|следующая|next', re.I))
+            return next_link is not None
         except:
             return False
     
