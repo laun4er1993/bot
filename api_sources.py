@@ -28,37 +28,32 @@ AVAILABLE_DISTRICTS = [
     "Осташковский"
 ]
 
-# Соответствие районов возможным названиям на Wikipedia (все варианты)
+# Соответствие районов возможным названиям на Wikipedia (в порядке приоритета)
 DISTRICT_WIKI_NAMES = {
     "Ржевский": [
         "Ржевский муниципальный округ",
         "Ржевский район",
-        "Ржевский",
-        "Ржевский округ"
+        "Ржевский"
     ],
     "Оленинский": [
         "Оленинский муниципальный округ",
         "Оленинский район",
-        "Оленинский",
-        "Оленинский округ"
+        "Оленинский"
     ],
     "Зубцовский": [
         "Зубцовский муниципальный округ",
         "Зубцовский район",
-        "Зубцовский",
-        "Зубцовский округ"
+        "Зубцовский"
     ],
     "Бельский": [
         "Бельский муниципальный округ",
         "Бельский район",
-        "Бельский",
-        "Бельский округ"
+        "Бельский"
     ],
     "Осташковский": [
         "Осташковский муниципальный округ",
         "Осташковский район",
-        "Осташковский",
-        "Осташковский округ"
+        "Осташковский"
     ]
 }
 
@@ -226,6 +221,7 @@ class APISourceManager:
             'from_links': 0,
             'from_wikipedia': 0,
             'total_without': 0,
+            'found': 0,
             'remaining': 0
         }
         
@@ -273,6 +269,7 @@ class APISourceManager:
             'from_links': 0,
             'from_wikipedia': 0,
             'total_without': 0,
+            'found': 0,
             'remaining': 0
         }
         self.collection_stats = {
@@ -1306,8 +1303,7 @@ class APISourceManager:
                             "type": village_type,
                             "lat": "",
                             "lon": "",
-                            "district": district,
-                            "has_coords": False
+                            "district": district
                         })
                         
                     except Exception as e:
@@ -1443,8 +1439,7 @@ class APISourceManager:
                     "type": village_type,
                     "lat": str(round(lat, 5)),
                     "lon": str(round(lon, 5)),
-                    "district": district,
-                    "has_coords": True
+                    "district": district
                 }
             else:
                 logger.debug(f"        ❌ Координаты не найдены для {name}")
@@ -1459,30 +1454,19 @@ class APISourceManager:
     async def _find_wikipedia_district_page(self, district: str) -> Optional[str]:
         """
         Находит страницу района на Wikipedia по названию района.
-        Пробует все возможные варианты названий и ищет таблицу или список с населенными пунктами.
+        Пробует варианты в порядке приоритета:
+        1. Муниципальный округ
+        2. Район
+        3. Просто название
         """
         logger.info(f"  🔍 Поиск страницы района на Wikipedia: {district}")
         
-        # Получаем все возможные названия для района
+        # Получаем возможные названия в порядке приоритета
         possible_names = DISTRICT_WIKI_NAMES.get(district, [
-            f"{district} район",
             f"{district} муниципальный округ",
-            f"{district} муниципальный район",
-            f"{district} округ",
+            f"{district} район",
             f"{district}"
         ])
-        
-        # Добавляем дополнительные варианты
-        additional_variants = [
-            f"{district} муниципальный округ Тверской области",
-            f"{district} район Тверской области",
-            f"Муниципальный округ {district}",
-            f"Район {district}"
-        ]
-        possible_names.extend(additional_variants)
-        
-        # Убираем дубликаты
-        possible_names = list(dict.fromkeys(possible_names))
         
         for name in possible_names:
             encoded_name = quote_plus(name)
@@ -1493,15 +1477,21 @@ class APISourceManager:
             
             if html:
                 soup = BeautifulSoup(html, 'html.parser')
-                # Проверяем, что страница существует (нет сообщения об отсутствии)
+                # Проверяем, что страница существует
                 no_article = soup.find('div', class_='noarticletext')
                 
                 if not no_article:
-                    # Проверяем, есть ли таблица или список с населенными пунктами
-                    # Ищем таблицу с классом standard или wikitable
-                    tables = soup.find_all('table', class_=['standard', 'wikitable', 'sortable'])
+                    # Проверяем, что это не страница города (для Ржевского)
+                    title = soup.find('h1')
+                    title_text = title.get_text().strip().lower() if title else ""
                     
-                    # Также ищем списки ul/ol с ссылками на НП
+                    # Пропускаем страницы городов с таким же названием
+                    if district == "Ржевский" and ("ржев" in title_text and "район" not in title_text and "округ" not in title_text):
+                        logger.debug(f"    ⚠️ Пропускаем страницу города: {url}")
+                        continue
+                    
+                    # Проверяем, есть ли таблица или список с населенными пунктами
+                    tables = soup.find_all('table', class_=['standard', 'wikitable', 'sortable'])
                     lists = soup.find_all(['ul', 'ol'])
                     
                     has_village_links = False
@@ -1521,7 +1511,6 @@ class APISourceManager:
                     if not has_village_links:
                         for lst in lists:
                             links = lst.find_all('a', href=re.compile(r'^/wiki/'))
-                            # Если в списке больше 10 ссылок на страницы wiki, вероятно это список НП
                             if len(links) > 10:
                                 has_village_links = True
                                 logger.debug(f"      Найден список с {len(links)} ссылками в {url}")
@@ -1539,12 +1528,12 @@ class APISourceManager:
         logger.info(f"    🔎 Пробуем поиск через API Wikipedia")
         region = "Тверская область"
         
-        # Пробуем разные поисковые запросы
+        # Пробуем разные поисковые запросы в порядке приоритета
         search_queries = [
-            f"{district} район {region}",
             f"{district} муниципальный округ {region}",
-            f"{district} район",
-            f"{district} муниципальный округ"
+            f"{district} район {region}",
+            f"{district} муниципальный округ",
+            f"{district} район"
         ]
         
         for search_query in search_queries:
@@ -1615,7 +1604,6 @@ class APISourceManager:
         links = {}
         
         # Ищем все ссылки на НП в HTML-списках и таблицах
-        # Структура: <ul><li><a href="/wiki/...">Название</a></li>...</ul>
         for link in soup.find_all('a', href=re.compile(r'^/wiki/')):
             href = link.get('href', '')
             # Пропускаем служебные страницы
@@ -1662,7 +1650,7 @@ class APISourceManager:
             if infobox:
                 for row in infobox.find_all('tr'):
                     header = row.find('th')
-                    if header and ('координаты' in header.get_text().lower() or 'координаты' in header.get_text().lower()):
+                    if header and ('координаты' in header.get_text().lower()):
                         coord_cell = row.find('td')
                         if coord_cell:
                             geo_span = coord_cell.find('span', class_='geo')
@@ -1737,8 +1725,7 @@ class APISourceManager:
                     "type": 'деревня',
                     "lat": lat,
                     "lon": lon,
-                    "district": district,
-                    "has_coords": True
+                    "district": district
                 }
             
             return None
@@ -1980,8 +1967,7 @@ class APISourceManager:
                             "type": village['type'],
                             "lat": lat,
                             "lon": lon,
-                            "district": district,
-                            "has_coords": True
+                            "district": district
                         }
                         logger.info(f"    📍 [{i+1}/{total_to_process}] {village_name}: координаты из кэша Wikipedia")
                     
@@ -1993,9 +1979,9 @@ class APISourceManager:
                         if coords_data:
                             self.wikipedia_coords_cache[village_name] = (coords_data['lat'], coords_data['lon'])
                     
-                    if coords_data and coords_data.get('has_coords'):
+                    if coords_data and coords_data.get('lat'):
                         for v in all_villages:
-                            if v['name'] == village_name and not v.get('has_coords'):
+                            if v['name'] == village_name and not v.get('lat'):
                                 v['lat'] = coords_data['lat']
                                 v['lon'] = coords_data['lon']
                                 v['has_coords'] = True
@@ -2014,6 +2000,7 @@ class APISourceManager:
                     logger.error(f"      Ошибка обработки {village.get('name', 'unknown')}: {e}")
                     continue
             
+            self.coords_stats['found'] = search_found + self.coords_stats['from_former'] + self.coords_stats['from_links']
             self.coords_stats['remaining'] = total_without - search_found - self.coords_stats['from_former'] - self.coords_stats['from_links']
             
             logger.info(f"    ✅ Поиск координат завершен. Найдено координат: {search_found}")
@@ -2027,6 +2014,11 @@ class APISourceManager:
         
         final_with_coords = sum(1 for v in all_villages if v.get('has_coords'))
         all_villages.sort(key=lambda x: x['name'])
+        
+        # Удаляем поле has_coords из финальных данных
+        for v in all_villages:
+            if 'has_coords' in v:
+                del v['has_coords']
         
         total_time = time.time() - self.start_time
         logger.info(f"  ✅ Всего уникальных записей: {len(all_villages)}")
