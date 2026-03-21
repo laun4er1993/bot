@@ -21,9 +21,10 @@ logger = logging.getLogger(__name__)
 class WikipediaParser:
     """Парсер для Wikipedia"""
     
-    def __init__(self, session, thread_pool):
+    def __init__(self, session, thread_pool, fetch_func):
         self.session = session
         self.thread_pool = thread_pool
+        self._fetch_page = fetch_func
         self.page_cache = {}
         self.cache_ttl = 3600
     
@@ -169,7 +170,7 @@ class WikipediaParser:
         
         # Поиск по прямым названиям
         for uyezd_name in DISTRICT_UYEZDS.get(district, [f"{district} уезд"]):
-            encoded = quote_plus(uyezed_name)
+            encoded = quote_plus(uyezd_name)
             url = f"{WIKIPEDIA_BASE_URL}/wiki/{encoded}"
             html = await self._fetch_page(url)
             if html and not BeautifulSoup(html, 'html.parser').find('div', class_='noarticletext'):
@@ -220,24 +221,3 @@ class WikipediaParser:
         
         logger.info(f"    📊 Найдено {len(links)} ссылок на НП")
         return links
-    
-    async def _fetch_page(self, url: str) -> Optional[str]:
-        """Загружает страницу с кэшированием"""
-        import time
-        current_time = time.time()
-        
-        if url in self.page_cache:
-            html, ts = self.page_cache[url]
-            if current_time - ts < self.cache_ttl:
-                return html
-        
-        try:
-            async with self.session.get(url, timeout=60) as resp:
-                if resp.status == 200:
-                    html = await resp.text()
-                    self.page_cache[url] = (html, current_time)
-                    return html
-        except Exception as e:
-            logger.debug(f"Ошибка загрузки {url}: {e}")
-        
-        return None
