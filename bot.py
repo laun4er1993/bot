@@ -23,6 +23,7 @@ from aiogram.types import (
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.exceptions import TelegramBadRequest
 from shapely.geometry import Polygon, Point
 from bs4 import BeautifulSoup
 
@@ -52,6 +53,43 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=storage)
 
 
+# ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ БЕЗОПАСНОГО ОТВЕТА ==========
+
+async def safe_edit_text(message, text: str, parse_mode: str = "HTML", reply_markup=None):
+    """Безопасное редактирование сообщения с обработкой ошибок"""
+    try:
+        await message.edit_text(text, parse_mode=parse_mode, reply_markup=reply_markup)
+    except TelegramBadRequest as e:
+        if "message is not modified" in str(e):
+            pass
+        elif "message can't be edited" in str(e):
+            await message.answer(text, parse_mode=parse_mode, reply_markup=reply_markup)
+        else:
+            raise
+
+
+async def safe_answer_callback(callback: CallbackQuery, text: str = None, show_alert: bool = False):
+    """Безопасный ответ на callback с обработкой ошибок"""
+    try:
+        if text:
+            await callback.answer(text, show_alert=show_alert)
+        else:
+            await callback.answer()
+    except TelegramBadRequest as e:
+        if "query is too old" in str(e) or "timeout expired" in str(e):
+            logger.debug(f"Callback expired: {e}")
+        else:
+            logger.warning(f"Callback answer error: {e}")
+
+
+async def safe_delete_message(message):
+    """Безопасное удаление сообщения"""
+    try:
+        await message.delete()
+    except Exception as e:
+        logger.debug(f"Не удалось удалить сообщение: {e}")
+
+
 # ========== КЛАСС ДЛЯ РАБОТЫ С ЯНДЕКС.ДИСКОМ ==========
 
 class YandexDiskClient:
@@ -64,90 +102,189 @@ class YandexDiskClient:
             "Authorization": f"OAuth {token}",
             "Content-Type": "application/json"
         }
+        self.logger = logging.getLogger('YandexDisk')
     
     def _request(self, url: str, params: dict = None) -> Optional[Dict]:
         """Выполняет запрос к API"""
         try:
-            response = requests.get(url, headers=self.headers, params=params)
+            response = requests.get(url, headers=self.headers, params=params, timeout=30)
             if response.status_code == 200:
                 return response.json()
+            elif response.status_code == 401:
+                self.logger.error("  ❌ Ошибка 401: Неверный токен или нет прав доступа")
+            elif response.status_code == 404:
+                self.logger.debug(f"  Ресурс не найден: {url}")
+            else:
+                self.logger.debug(f"  HTTP {response.status_code}: {url}")
             return None
         except Exception as e:
-            logger.error(f"Ошибка запроса: {e}")
+            self.logger.error(f"  ❌ Ошибка запроса: {e}")
             return None
     
     def check_root_access(self) -> bool:
         """Проверяет доступ к диску"""
+        self.logger.info("🔍 Проверка доступа к Яндекс.Диску...")
         data = self._request(f"{self.base_url}/")
-        return data is not None
+        if data:
+            self.logger.info("✅ Доступ к диску получен")
+            return True
+        self.logger.error("❌ Нет доступа к Яндекс.Диску")
+        return False
     
     def get_file_download_link(self, file_path: str) -> Optional[str]:
         """Получает ссылку на скачивание файла"""
-        if ' ' in os.path.basename(file_path):
+        file_name = os.path.basename(file_path)
+        
+        if ' ' in file_name:
+            self.logger.warning(f"  ⚠️ Пропускаем файл с пробелом: {file_name}")
             return None
         
         url = f"{self.base_url}/resources/download"
         data = self._request(url, {"path": f"/{file_path}"})
         
         if data and "href" in data:
+            self.logger.debug(f"  ✅ Получена ссылка для {file_name}")
             return data["href"]
+        
+        self.logger.debug(f"  ❌ Не удалось получить ссылку для {file_name}")
         return None
     
-    def find_map_files(self, square: str, overlay: str, frame: str) -> Dict[str, List[Dict]]:
-        """Ищет MBTILES и KMZ файлы для снимка"""
-        base_folder = "Компьютер DESKTOP-JMVJ4CL/АФС/КаталогПОСокол"
-        full_name = f"{square}-{overlay}-{frame}"
-        result = {'mbtiles': [], 'kmz': []}
-        
-        # Проверяем возможные пути
-        paths = [
-            f"{base_folder}/{square}/{square}-{overlay}/{full_name}",
-            f"{base_folder}/{square}/{square}-{overlay}",
-            f"{base_folder}/{square}/{full_name}"
-        ]
-        
-        for path in paths:
-            files = self._get_files_in_folder(path)
-            if files:
-                for ext in ['.mbtiles', '.kmz']:
-                    versions = self._extract_versions(files, full_name, ext, path)
-                    result[ext.replace('.', '')].extend(versions)
-        
-        for key in result:
-            result[key].sort(key=lambda x: x['version'], reverse=True)
-        
-        return result
-    
-    def _get_files_in_folder(self, folder_path: str) -> Optional[List[Dict]]:
+    def get_files_in_folder(self, folder_path: str, quiet: bool = False) -> Optional[List[Dict]]:
         """Получает список файлов в папке"""
         url = f"{self.base_url}/resources"
         data = self._request(url, {"path": f"/{folder_path}"})
         
         if data and "_embedded" in data:
-            return data["_embedded"].get("items", [])
+            items = data["_embedded"].get("items", [])
+            if not quiet:
+                self.logger.info(f"  ✅ Найдено {len(items)} элементов в папке: {folder_path}")
+            return items
+        
+        if not quiet:
+            self.logger.debug(f"  Папка не найдена или пуста: {folder_path}")
         return None
     
-    def _extract_versions(self, files: List[Dict], base_name: str, ext: str, folder: str) -> List[Dict]:
+    def folder_exists(self, folder_path: str, quiet: bool = False) -> bool:
+        """Проверяет существование папки"""
+        url = f"{self.base_url}/resources"
+        data = self._request(url, {"path": f"/{folder_path}"})
+        
+        exists = data and data.get("type") == "dir"
+        if not quiet:
+            self.logger.debug(f"  Папка {'существует' if exists else 'не существует'}: {folder_path}")
+        return exists
+    
+    def find_map_files(self, square: str, overlay: str, frame: str) -> Dict[str, List[Dict]]:
+        """Ищет MBTILES и KMZ файлы для снимка"""
+        try:
+            base_folder = "Компьютер DESKTOP-JMVJ4CL/АФС/КаталогПОСокол"
+            square_folder = f"{base_folder}/{square}"
+            overlay_folder = f"{square_folder}/{square}-{overlay}"
+            full_name = f"{square}-{overlay}-{frame}"
+            
+            self.logger.info(f"\n🔍 Поиск файлов для {full_name}:")
+            
+            result = {'mbtiles': [], 'kmz': []}
+            
+            # Вариант 1: путь с подпапкой наложения и подпапкой полного имени
+            subfolder_path = f"{overlay_folder}/{full_name}"
+            self.logger.info(f"  Вариант 1: {subfolder_path}")
+            
+            if self.folder_exists(subfolder_path, quiet=True):
+                files = self.get_files_in_folder(subfolder_path, quiet=True)
+                if files:
+                    self.logger.info(f"  ✅ Вариант 1: папка существует")
+                    mbtiles = self._extract_file_versions(files, full_name, '.mbtiles', subfolder_path)
+                    kmz = self._extract_file_versions(files, full_name, '.kmz', subfolder_path)
+                    result['mbtiles'].extend(mbtiles)
+                    result['kmz'].extend(kmz)
+            
+            # Вариант 2: путь без подпапки полного имени
+            self.logger.info(f"  Вариант 2: {overlay_folder}")
+            files = self.get_files_in_folder(overlay_folder, quiet=True)
+            if files:
+                self.logger.info(f"  ✅ Вариант 2: папка существует")
+                mbtiles = self._extract_file_versions(files, full_name, '.mbtiles', overlay_folder)
+                kmz = self._extract_file_versions(files, full_name, '.kmz', overlay_folder)
+                result['mbtiles'].extend(mbtiles)
+                result['kmz'].extend(kmz)
+            
+            # Вариант 3: путь с полным именем прямо в квадрате
+            full_folder_path = f"{square_folder}/{full_name}"
+            self.logger.info(f"  Вариант 3: {full_folder_path}")
+            
+            if self.folder_exists(full_folder_path, quiet=True):
+                files = self.get_files_in_folder(full_folder_path, quiet=True)
+                if files:
+                    self.logger.info(f"  ✅ Вариант 3: папка существует")
+                    mbtiles = self._extract_file_versions(files, full_name, '.mbtiles', full_folder_path)
+                    kmz = self._extract_file_versions(files, full_name, '.kmz', full_folder_path)
+                    result['mbtiles'].extend(mbtiles)
+                    result['kmz'].extend(kmz)
+            
+            # Сортируем по версии
+            result['mbtiles'].sort(key=lambda x: x['version'], reverse=True)
+            result['kmz'].sort(key=lambda x: x['version'], reverse=True)
+            
+            if result['mbtiles']:
+                self.logger.info(f"  ✅ Найдено MBTILES: {len(result['mbtiles'])} версий")
+                for v in result['mbtiles']:
+                    self.logger.info(f"    - {v['name']} (версия {v['version']}, {v['size_mb']} МБ)")
+            if result['kmz']:
+                self.logger.info(f"  ✅ Найдено KMZ: {len(result['kmz'])} версий")
+                for v in result['kmz']:
+                    self.logger.info(f"    - {v['name']} (версия {v['version']}, {v['size_mb']} МБ)")
+            if not result['mbtiles'] and not result['kmz']:
+                self.logger.warning(f"  ❌ Файлы не найдены для {full_name}")
+            
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"  ❌ Ошибка поиска файлов: {e}")
+            return {'mbtiles': [], 'kmz': []}
+    
+    def _extract_file_versions(self, files: List[Dict], base_name: str, ext: str, folder: str) -> List[Dict]:
         """Извлекает информацию о версиях файлов"""
         versions = []
+        
         for f in files:
             name = f['name']
             if not name.startswith(base_name) or not name.endswith(ext):
+                continue
+            
+            if ' ' in name:
+                self.logger.debug(f"    ⏭️ Пропущен файл с пробелом: {name}")
                 continue
             
             version = 0
             match = re.search(rf'{re.escape(base_name)}-(\d+){re.escape(ext)}$', name)
             if match:
                 version = int(match.group(1))
+            elif name == f"{base_name}{ext}":
+                version = 0
             
             link = self.get_file_download_link(f"{folder}/{name}")
             if link:
+                created = f.get('created', '')
+                if created:
+                    date_match = re.search(r'(\d{4})-(\d{2})-(\d{2})', created)
+                    date = f"{date_match.group(3)}.{date_match.group(2)}.{date_match.group(1)}" if date_match else "unknown"
+                else:
+                    date = "unknown"
+                
                 size_mb = round(f.get('size', 0) / (1024 * 1024))
+                
                 if size_mb >= 10:
                     versions.append({
                         'name': name, 'version': version, 'download_link': link,
-                        'size_mb': size_mb
+                        'date': date, 'size_mb': size_mb
                     })
+                    self.logger.info(f"    ✅ Добавлен файл: {name} (версия {version}, {date}, {size_mb} МБ)")
+                else:
+                    self.logger.debug(f"    ⏭️ Пропущен файл (<10 МБ): {name} ({size_mb} МБ)")
+            else:
+                self.logger.debug(f"    ⏭️ Пропущен файл (нет ссылки): {name}")
+        
         return versions
 
 
@@ -192,9 +329,10 @@ class VillageDatabase:
             self.stats['total'] = len(self.villages)
             self.stats['with_coords'] = with_coords
             logger.info(f"✅ Загружено {self.stats['total']} населенных пунктов")
+            logger.info(f"   • С координатами: {self.stats['with_coords']}")
             
         except Exception as e:
-            logger.error(f"Ошибка загрузки: {e}")
+            logger.error(f"❌ Ошибка загрузки: {e}")
             self._create_empty()
     
     def _create_empty(self):
@@ -225,14 +363,12 @@ class VillageDatabase:
         results = []
         seen = set()
         
-        # Точное совпадение
         if query_lower in self.villages_by_name:
             for v in self.villages_by_name[query_lower]:
                 if v['name'] not in seen:
                     results.append(v)
                     seen.add(v['name'])
         
-        # Частичное совпадение
         for name, villages in self.villages_by_name.items():
             if query_lower in name and name != query_lower:
                 for v in villages:
@@ -271,7 +407,6 @@ class VillageDatabase:
             self.villages = new_villages
             self._save()
             
-            # Обновляем индекс
             self.villages_by_name.clear()
             for v in self.villages:
                 name_lower = v['name'].lower()
@@ -284,10 +419,11 @@ class VillageDatabase:
             self.stats['last_update'] = time.strftime('%Y-%m-%d %H:%M:%S')
             self.stats['source_file'] = source_filename
             
+            logger.info(f"✅ Каталог заменен: {stats['loaded']} записей, {stats['with_coords']} с координатами")
             return stats
             
         except Exception as e:
-            logger.error(f"Ошибка замены каталога: {e}")
+            logger.error(f"❌ Ошибка замены каталога: {e}")
             raise
     
     def get_stats(self) -> Dict:
@@ -399,12 +535,58 @@ class PhotosDatabase:
         self._load()
     
     def _load(self):
+        """Загружает данные (синхронно, только локальные файлы)"""
         os.makedirs(self.data_dir, exist_ok=True)
         self._load_multi_keys()
         self._load_details()
         
-        if yd_client.check_root_access():
-            self._load_photo_files()
+        # Запускаем фоновую загрузку с Яндекс.Диска
+        asyncio.create_task(self._load_photo_files_async())
+    
+    async def _load_photo_files_async(self):
+        """Асинхронная загрузка файлов с Яндекс.Диска"""
+        try:
+            # Ждем немного, чтобы бот успел запуститься
+            await asyncio.sleep(2)
+            
+            if yd_client.check_root_access():
+                await self._load_photo_files_async_internal()
+            else:
+                logger.error("❌ Нет доступа к Яндекс.Диску, пропускаем загрузку ссылок")
+        except Exception as e:
+            logger.error(f"Ошибка загрузки с Яндекс.Диска: {e}")
+    
+    async def _load_photo_files_async_internal(self):
+        """Внутренний метод асинхронной загрузки"""
+        logger.info("🔍 Поиск файлов на Яндекс.Диске...")
+        
+        all_photos = set()
+        for record in self.locations:
+            for photo in record['photos']:
+                all_photos.add(photo)
+        
+        logger.info(f"Найдено {len(all_photos)} уникальных снимков для поиска")
+        
+        for photo in all_photos:
+            parts = photo.split('-')
+            if len(parts) >= 3:
+                try:
+                    files = yd_client.find_map_files(parts[0], parts[1], parts[2])
+                    if files['mbtiles'] or files['kmz']:
+                        self.photo_files[photo] = files
+                        if files['mbtiles']:
+                            logger.info(f"  ✅ Найдено MBTILES для {photo}: {len(files['mbtiles'])} версий")
+                        if files['kmz']:
+                            logger.info(f"  ✅ Найдено KMZ для {photo}: {len(files['kmz'])} версий")
+                    else:
+                        logger.warning(f"  ❌ Файлы не найдены для {photo}")
+                except Exception as e:
+                    logger.error(f"  ❌ Ошибка поиска для {photo}: {e}")
+            
+            # Небольшая задержка между запросами
+            await asyncio.sleep(0.5)
+        
+        logger.info(f"✅ Загрузка файлов завершена. Найдено {len(self.photo_files)} снимков с файлами")
     
     def _load_multi_keys(self):
         """Загружает связи деревень со снимками"""
@@ -446,20 +628,6 @@ class PhotosDatabase:
                 if photo_num and description and not photo_num.startswith('#'):
                     self.photo_details[photo_num] = description
     
-    def _load_photo_files(self):
-        """Загружает ссылки на файлы с Яндекс.Диска"""
-        all_photos = set()
-        for record in self.locations:
-            for photo in record['photos']:
-                all_photos.add(photo)
-        
-        for photo in all_photos:
-            parts = photo.split('-')
-            if len(parts) >= 3:
-                files = yd_client.find_map_files(parts[0], parts[1], parts[2])
-                if files['mbtiles'] or files['kmz']:
-                    self.photo_files[photo] = files
-    
     def search_by_village(self, query: str) -> List[Dict]:
         """Ищет снимки по названию деревни"""
         if not query:
@@ -469,7 +637,6 @@ class PhotosDatabase:
         found = []
         seen = set()
         
-        # Поиск в каталоге НП
         villages = village_db.search(query)
         for village in villages:
             for record in self.locations:
@@ -480,7 +647,6 @@ class PhotosDatabase:
                             seen.add(record['id'])
                         break
         
-        # Поиск в multi_keys
         for record in self.locations:
             for v in record['villages']:
                 if query_lower == v.lower() or (len(query_lower) > 2 and query_lower in v.lower()):
@@ -790,14 +956,14 @@ async def menu_settings(message: types.Message):
 @dp.callback_query(lambda c: c.data == "locus_instruction")
 async def locus_instruction(callback: CallbackQuery):
     """Инструкция по Locus Maps"""
-    await callback.message.edit_text(
+    await safe_edit_text(
+        callback.message,
         "📖 <b>Инструкция по Locus Maps</b>\n\n"
         "1. Скачайте приложение Locus Maps\n"
         "2. Скачайте карту Ржевского района\n"
         "3. Скачайте MBTILES файл снимка\n"
         "4. Откройте MBTILES файл в приложении\n\n"
         "📥 <b>Скачать инструкцию:</b>",
-        parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📖 Скачать инструкцию", url="https://disk.yandex.ru/i/sE2Jy99in7MCxw")],
             [InlineKeyboardButton(text="📥 Скачать Locus Maps", callback_data="locus_download")],
@@ -805,16 +971,16 @@ async def locus_instruction(callback: CallbackQuery):
             [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
         ])
     )
-    await callback.answer()
+    await safe_answer_callback(callback)
 
 
 @dp.callback_query(lambda c: c.data == "locus_download")
 async def locus_download(callback: CallbackQuery):
     """Скачивание Locus Maps"""
-    await callback.message.edit_text(
+    await safe_edit_text(
+        callback.message,
         "📥 <b>Скачать Locus Maps</b>\n\n"
         "Нажмите кнопку для скачивания:",
-        parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📥 Скачать Locus Maps", url="https://disk.yandex.ru/d/uUgVGkMoq3WITw")],
             [InlineKeyboardButton(text="📖 Инструкция", callback_data="locus_instruction")],
@@ -822,13 +988,14 @@ async def locus_download(callback: CallbackQuery):
             [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
         ])
     )
-    await callback.answer()
+    await safe_answer_callback(callback)
 
 
 @dp.callback_query(lambda c: c.data == "back_to_locus")
 async def back_to_locus(callback: CallbackQuery):
     """Возврат в меню Locus Maps"""
-    await callback.message.edit_text(
+    await safe_edit_text(
+        callback.message,
         "🗺️ <b>Locus Maps</b>\n\nВыберите действие:",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📖 Инструкция", callback_data="locus_instruction")],
@@ -836,7 +1003,7 @@ async def back_to_locus(callback: CallbackQuery):
             [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
         ])
     )
-    await callback.answer()
+    await safe_answer_callback(callback)
 
 
 @dp.callback_query(lambda c: c.data == "village_stats")
@@ -861,20 +1028,22 @@ async def show_stats(callback: CallbackQuery):
             coords = f"({v['lat']}, {v['lon']})" if v['lat'] and v['lon'] else "(без координат)"
             text += f"• {v['name']} ({v['type']}) {coords}\n"
     
-    await callback.message.edit_text(
-        text, parse_mode="HTML",
+    await safe_edit_text(
+        callback.message,
+        text,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_settings")],
             [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
         ])
     )
-    await callback.answer()
+    await safe_answer_callback(callback)
 
 
 @dp.callback_query(lambda c: c.data == "update_villages")
 async def update_villages_start(callback: CallbackQuery, state: FSMContext):
     """Начало загрузки каталога"""
-    await callback.message.edit_text(
+    await safe_edit_text(
+        callback.message,
         "📤 <b>Загрузка каталога населенных пунктов</b>\n\n"
         "⚠️ ВНИМАНИЕ: Это действие ЗАМЕНИТ текущую базу данных!\n\n"
         "Отправьте CSV файл со структурой:\n"
@@ -885,7 +1054,7 @@ async def update_villages_start(callback: CallbackQuery, state: FSMContext):
         parse_mode="HTML"
     )
     await state.set_state(SearchStates.waiting_for_csv_upload)
-    await callback.answer()
+    await safe_answer_callback(callback)
 
 
 @dp.callback_query(lambda c: c.data == "download_villages_txt")
@@ -893,7 +1062,7 @@ async def download_villages_txt(callback: CallbackQuery):
     """Скачивание каталога в TXT"""
     if not os.path.exists(village_db.csv_path) or village_db.stats['total'] == 0:
         await callback.message.answer("❌ Каталог пуст. Сначала загрузите данные.")
-        await callback.answer()
+        await safe_answer_callback(callback)
         return
     
     try:
@@ -915,7 +1084,7 @@ async def download_villages_txt(callback: CallbackQuery):
         logger.error(f"Ошибка: {e}")
         await callback.message.answer("❌ Ошибка при создании файла.")
     
-    await callback.answer()
+    await safe_answer_callback(callback)
 
 
 @dp.callback_query(lambda c: c.data == "download_from_web_start")
@@ -923,7 +1092,8 @@ async def download_from_web_start(callback: CallbackQuery, state: FSMContext):
     """Начало загрузки из интернета"""
     districts_list = "\n".join([f"• {d} район" for d in AVAILABLE_DISTRICTS])
     
-    await callback.message.edit_text(
+    await safe_edit_text(
+        callback.message,
         "🌐 <b>Загрузка данных из интернета</b>\n\n"
         f"Выберите район:\n\n{districts_list}\n\n"
         "<i>Бот выполнит поиск на dic.academic.ru и Wikipedia</i>",
@@ -931,7 +1101,7 @@ async def download_from_web_start(callback: CallbackQuery, state: FSMContext):
         reply_markup=get_district_keyboard()
     )
     await state.set_state(SearchStates.waiting_for_district_select)
-    await callback.answer()
+    await safe_answer_callback(callback)
 
 
 @dp.callback_query(lambda c: c.data.startswith("select_district_"))
@@ -939,13 +1109,14 @@ async def process_district_select(callback: CallbackQuery, state: FSMContext):
     """Обработка выбора района"""
     district = callback.data.replace("select_district_", "")
     
-    await callback.message.edit_text(
+    await safe_edit_text(
+        callback.message,
         f"⏳ <b>Загрузка данных для {district} района...</b>\n\n"
         f"Это может занять 10-15 минут.\n"
         f"<i>Пожалуйста, подождите...</i>",
         parse_mode="HTML"
     )
-    await callback.answer("⏳ Начинаю загрузку...")
+    await safe_answer_callback(callback, "⏳ Начинаю загрузку...")
     
     try:
         api_manager = APISourceManager()
@@ -956,13 +1127,14 @@ async def process_district_select(callback: CallbackQuery, state: FSMContext):
         await api_manager.close_session()
         
         if not villages:
-            await callback.message.edit_text(
+            await safe_edit_text(
+                callback.message,
                 f"❌ <b>Не удалось загрузить данные для {district} района</b>\n\n"
                 f"Попробуйте другой район или загрузите CSV вручную.",
                 parse_mode="HTML",
                 reply_markup=back_keyboard()
             )
-            await callback.answer()
+            await safe_answer_callback(callback)
             return
         
         # Сохраняем данные
@@ -982,7 +1154,8 @@ async def process_district_select(callback: CallbackQuery, state: FSMContext):
         
         with_coords = sum(1 for v in villages if v.get('lat'))
         
-        await callback.message.edit_text(
+        await safe_edit_text(
+            callback.message,
             f"✅ <b>Данные для {district} района загружены!</b>\n\n"
             f"📊 Всего: {len(villages)} записей\n"
             f"📍 С координатами: {with_coords}\n"
@@ -993,14 +1166,16 @@ async def process_district_select(callback: CallbackQuery, state: FSMContext):
         )
         
     except asyncio.TimeoutError:
-        await callback.message.edit_text(
+        await safe_edit_text(
+            callback.message,
             "❌ <b>Превышено время ожидания</b>\n\nПопробуйте позже.",
             parse_mode="HTML",
             reply_markup=back_keyboard()
         )
     except Exception as e:
         logger.error(f"Ошибка: {e}")
-        await callback.message.edit_text(
+        await safe_edit_text(
+            callback.message,
             f"❌ <b>Ошибка</b>\n\n{str(e)}",
             parse_mode="HTML",
             reply_markup=back_keyboard()
@@ -1020,11 +1195,12 @@ async def process_merge(callback: CallbackQuery, state: FSMContext):
     villages = data.get('villages', [])
     
     if not temp_csv or not os.path.exists(temp_csv):
-        await callback.message.edit_text(
+        await safe_edit_text(
+            callback.message,
             "❌ Временный файл не найден. Попробуйте заново.",
             reply_markup=back_keyboard()
         )
-        await callback.answer()
+        await safe_answer_callback(callback)
         return
     
     if action == "download":
@@ -1034,7 +1210,7 @@ async def process_merge(callback: CallbackQuery, state: FSMContext):
                 FSInputFile(txt_path, filename=os.path.basename(txt_path)),
                 caption=f"📁 Данные для {district} района"
             )
-        await callback.answer()
+        await safe_answer_callback(callback)
         return
     
     elif action == "replace":
@@ -1050,7 +1226,8 @@ async def process_merge(callback: CallbackQuery, state: FSMContext):
             
             await state.clear()
             
-            await callback.message.edit_text(
+            await safe_edit_text(
+                callback.message,
                 f"✅ <b>Каталог заменен данными {district} района!</b>\n\n"
                 f"📊 Загружено: {stats['loaded']} записей\n"
                 f"📍 С координатами: {stats['with_coords']}",
@@ -1059,7 +1236,11 @@ async def process_merge(callback: CallbackQuery, state: FSMContext):
             )
         except Exception as e:
             logger.error(f"Ошибка: {e}")
-            await callback.message.edit_text(f"❌ Ошибка: {e}", reply_markup=back_keyboard())
+            await safe_edit_text(
+                callback.message,
+                f"❌ Ошибка: {e}",
+                reply_markup=back_keyboard()
+            )
         
     elif action == "append":
         try:
@@ -1101,7 +1282,8 @@ async def process_merge(callback: CallbackQuery, state: FSMContext):
             
             await state.clear()
             
-            await callback.message.edit_text(
+            await safe_edit_text(
+                callback.message,
                 f"✅ <b>Каталог дополнен данными {district} района!</b>\n\n"
                 f"📊 Добавлено: {added} новых записей\n"
                 f"🔄 Обновлено: {updated} записей\n"
@@ -1112,9 +1294,13 @@ async def process_merge(callback: CallbackQuery, state: FSMContext):
             )
         except Exception as e:
             logger.error(f"Ошибка: {e}")
-            await callback.message.edit_text(f"❌ Ошибка: {e}", reply_markup=back_keyboard())
+            await safe_edit_text(
+                callback.message,
+                f"❌ Ошибка: {e}",
+                reply_markup=back_keyboard()
+            )
     
-    await callback.answer()
+    await safe_answer_callback(callback)
 
 
 @dp.callback_query(lambda c: c.data == "back_to_settings")
@@ -1131,8 +1317,13 @@ async def back_to_settings(callback: CallbackQuery):
     if stats['last_update']:
         text += f"• Обновлено: {stats['last_update']}\n"
     
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=get_settings_keyboard())
-    await callback.answer()
+    await safe_edit_text(
+        callback.message,
+        text,
+        parse_mode="HTML",
+        reply_markup=get_settings_keyboard()
+    )
+    await safe_answer_callback(callback)
 
 
 @dp.callback_query(lambda c: c.data.startswith("photo_"))
@@ -1141,7 +1332,8 @@ async def process_photo(callback: CallbackQuery):
     photo = callback.data.replace("photo_", "")
     details = db.get_photo_details(photo)
     
-    await callback.message.edit_text(
+    await safe_edit_text(
+        callback.message,
         details or f"📸 <b>Снимок {photo}</b>\n\n❌ Информация отсутствует",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -1149,7 +1341,7 @@ async def process_photo(callback: CallbackQuery):
             [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
         ])
     )
-    await callback.answer()
+    await safe_answer_callback(callback)
 
 
 @dp.callback_query(lambda c: c.data == "back_to_photos")
@@ -1161,23 +1353,24 @@ async def back_to_photos(callback: CallbackQuery):
     query = db.get_last_query(user_id)
     
     if photos:
-        await callback.message.edit_text(
+        await safe_edit_text(
+            callback.message,
             f"✅ <b>Найдено по запросу '{query}':</b>\n\n"
             f"📍 <b>Деревни:</b> {villages}\n\n"
             f"📸 <b>Снимки ({len(photos)} шт.):</b>\n" + "\n".join([f"• {p}" for p in photos]),
             parse_mode="HTML",
             reply_markup=photos_keyboard(photos)
         )
-    await callback.answer()
+    await safe_answer_callback(callback)
 
 
 @dp.callback_query(lambda c: c.data == "back_to_main")
 async def back_to_main(callback: CallbackQuery, state: FSMContext):
     """Возврат в главное меню"""
     await state.clear()
-    await callback.message.delete()
+    await safe_delete_message(callback.message)
     await cmd_start(callback.message)
-    await callback.answer()
+    await safe_answer_callback(callback)
 
 
 # ========== ОБРАБОТЧИКИ СООБЩЕНИЙ ==========
@@ -1329,21 +1522,22 @@ async def process_csv_invalid(message: types.Message, state: FSMContext):
 @dp.callback_query(lambda c: c.data == "try_again")
 async def try_again(callback: CallbackQuery, state: FSMContext):
     """Повторный поиск"""
-    await callback.message.delete()
+    await safe_delete_message(callback.message)
     await callback.message.answer("🔍 Введите название деревни:")
     await state.set_state(SearchStates.waiting_for_village)
-    await callback.answer()
+    await safe_answer_callback(callback)
 
 
 @dp.callback_query(lambda c: c.data == "show_villages")
 async def show_villages(callback: CallbackQuery):
     """Показ списка деревень"""
-    await callback.message.delete()
+    await safe_delete_message(callback.message)
+    
     villages = db.get_all_villages_list()
     
     if not villages:
         await callback.message.answer("📭 Список деревень пуст")
-        await callback.answer()
+        await safe_answer_callback(callback)
         return
     
     chunks = [villages[i:i+25] for i in range(0, len(villages), 25)]
@@ -1353,7 +1547,7 @@ async def show_villages(callback: CallbackQuery):
         await callback.message.answer(text, parse_mode="HTML")
     
     await callback.message.answer("💡 Нажмите 🔍 ПОИСК", reply_markup=back_keyboard())
-    await callback.answer()
+    await safe_answer_callback(callback)
 
 
 # ========== ЗАПУСК ==========
