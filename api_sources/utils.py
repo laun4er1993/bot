@@ -39,7 +39,6 @@ def is_valid_settlement_name(name: str) -> bool:
     
     name_lower = name.lower()
     
-    # Пропускаем названия, похожие на даты
     if re.match(r'^\d+\s+(мая|января|февраля|марта|апреля|июня|июля|августа|сентября|октября|ноября|декабря)', name_lower):
         return False
     
@@ -83,12 +82,10 @@ def clean_village_name(name: str) -> str:
 
 def extract_settlement_from_text(text: str) -> Optional[str]:
     """Извлекает название сельского поселения из текста"""
-    # Ищем в кавычках
     match = re.search(r'«([^»]+)»', text)
     if match:
         return match.group(1).strip()
     
-    # Убираем слова "сельское поселение"
     settlement = re.sub(r'^сельское\s+поселение\s*', '', text, flags=re.IGNORECASE)
     settlement = re.sub(r'\s+\(.*?\)', '', settlement).strip()
     
