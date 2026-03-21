@@ -119,7 +119,8 @@ SETTLEMENT_KEYWORDS = [
     "состав района",
     "муниципальное образование",
     "муниципальное устройство",
-    "административное деление"
+    "административное деление",
+    "список сельских поселений"
 ]
 
 # Ключевые слова для идентификации страницы района
@@ -154,7 +155,10 @@ SERVICE_SETTLEMENT_WORDS = [
     'категория', 'флаг', 'герб', 'описание', 'площадь', 'часовой пояс',
     'код', 'официальный сайт', 'административный центр', 'дата образования',
     'глава', 'плотность', 'национальный состав', 'россия', 'ржев', 'тверская',
-    'область', 'федерация', 'тыс', 'чел', 'км', 'район', '▼', '▲'
+    'область', 'федерация', 'тыс', 'чел', 'км', 'район', '▼', '▲',
+    '10 мая', '11 января', '14 сентября', '18 марта', '1919 год', '23 мая', '25 июля',
+    '8 июля', 'января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля',
+    'августа', 'сентября', 'октября', 'ноября', 'декабря'
 ]
 
 # Список служебных слов для фильтрации названий НП
@@ -674,18 +678,26 @@ class APISourceManager:
         """
         Проверяет, является ли текст валидным названием сельского поселения
         """
-        if not name or len(name) < 2 or len(name) > 30:
+        if not name or len(name) < 3 or len(name) > 50:
             return False
         
         name_lower = name.lower()
+        
+        # Пропускаем названия, похожие на даты (10 мая, 11 января и т.д.)
+        if re.match(r'^\d+\s+(мая|января|февраля|марта|апреля|июня|июля|августа|сентября|октября|ноября|декабря)', name_lower):
+            return False
+        
+        # Пропускаем названия, содержащие только цифры
+        if name.isdigit():
+            return False
+        
+        # Пропускаем служебные слова
         for word in SERVICE_SETTLEMENT_WORDS:
             if word in name_lower:
                 return False
         
+        # Должны быть русские буквы
         if not re.search(r'[а-яА-ЯёЁ]', name):
-            return False
-        
-        if name.isdigit():
             return False
         
         return True
@@ -822,27 +834,113 @@ class APISourceManager:
             soup = BeautifulSoup(html, 'html.parser')
             found_settlements = []
             
+            # Ищем раздел "Сельские поселения" или "Муниципальное устройство"
             for header in soup.find_all(['h2', 'h3', 'h4']):
-                if 'состав района' in header.get_text().lower():
+                header_text = header.get_text().lower()
+                
+                # Проверяем заголовки, которые могут содержать список сельских поселений
+                if any(keyword in header_text for keyword in SETTLEMENT_KEYWORDS):
                     parent = header.find_parent()
                     if parent:
-                        for ul in parent.find_all('ul'):
+                        # Ищем список ul/ol после заголовка
+                        for ul in parent.find_all(['ul', 'ol']):
                             for li in ul.find_all('li'):
-                                link = li.find('a')
-                                if link:
-                                    text = link.get_text().strip()
-                                    match = re.search(r'Сельское поселение\s+([А-Яа-я-]+)', text)
-                                    if match:
-                                        settlement = match.group(1).strip()
+                                text = li.get_text().strip()
+                                
+                                # Очищаем текст от лишнего
+                                text = re.sub(r'\[[0-9]+\]', '', text).strip()
+                                text = re.sub(r'\s+', ' ', text).strip()
+                                
+                                # Ищем название сельского поселения в кавычках
+                                match = re.search(r'«([^»]+)»', text)
+                                if match:
+                                    settlement = match.group(1).strip()
+                                else:
+                                    # Убираем слова "сельское поселение" и оставляем название
+                                    settlement = re.sub(r'^сельское\s+поселение\s*', '', text, flags=re.IGNORECASE)
+                                    settlement = re.sub(r'\s+\(.*?\)', '', settlement).strip()
+                                
+                                if settlement and len(settlement) > 2:
+                                    # Проверяем, что это не дата
+                                    if not re.match(r'^\d+\s+(мая|января|февраля|марта|апреля|июня|июля|августа|сентября|октября|ноября|декабря)', settlement, re.IGNORECASE):
                                         if self._is_valid_settlement_name(settlement):
                                             found_settlements.append(settlement)
-                                    else:
-                                        if self._is_valid_settlement_name(text):
-                                            found_settlements.append(text)
+                                else:
+                                    # Если текст короткий, возможно это просто ссылка
+                                    link = li.find('a')
+                                    if link:
+                                        link_text = link.get_text().strip()
+                                        if link_text and len(link_text) > 2:
+                                            # Убираем слова "сельское поселение" из текста ссылки
+                                            clean_text = re.sub(r'^сельское\s+поселение\s*', '', link_text, flags=re.IGNORECASE)
+                                            clean_text = re.sub(r'\s+\(.*?\)', '', clean_text).strip()
+                                            if clean_text and len(clean_text) > 2:
+                                                if not re.match(r'^\d+\s+(мая|января)', clean_text, re.IGNORECASE):
+                                                    if self._is_valid_settlement_name(clean_text):
+                                                        found_settlements.append(clean_text)
+                        
+                        # Также ищем таблицы с сельскими поселениями
+                        for table in parent.find_all('table', class_=['standard', 'wikitable', 'sortable']):
+                            for row in table.find_all('tr'):
+                                cells = row.find_all('td')
+                                if cells:
+                                    for cell in cells:
+                                        cell_text = cell.get_text().strip()
+                                        if 'сельское поселение' in cell_text.lower():
+                                            # Извлекаем название из текста
+                                            match = re.search(r'«([^»]+)»', cell_text)
+                                            if match:
+                                                settlement = match.group(1).strip()
+                                            else:
+                                                settlement = re.sub(r'^сельское\s+поселение\s*', '', cell_text, flags=re.IGNORECASE)
+                                                settlement = re.sub(r'\s+\(.*?\)', '', settlement).strip()
+                                            
+                                            if settlement and len(settlement) > 2:
+                                                if not re.match(r'^\d+\s+(мая|января)', settlement, re.IGNORECASE):
+                                                    if self._is_valid_settlement_name(settlement):
+                                                        found_settlements.append(settlement)
             
+            # Если не нашли через заголовки, ищем по прямым ссылкам на сельские поселения
+            if not found_settlements:
+                # Ищем все ссылки, которые содержат "сельское поселение" в тексте
+                for link in soup.find_all('a', href=re.compile(r'/dic\.nsf/ruwiki/\d+')):
+                    link_text = link.get_text().strip()
+                    if 'сельское поселение' in link_text.lower():
+                        # Извлекаем название
+                        match = re.search(r'«([^»]+)»', link_text)
+                        if match:
+                            settlement = match.group(1).strip()
+                        else:
+                            settlement = re.sub(r'^сельское\s+поселение\s*', '', link_text, flags=re.IGNORECASE)
+                            settlement = re.sub(r'\s+\(.*?\)', '', settlement).strip()
+                        
+                        if settlement and len(settlement) > 2:
+                            if not re.match(r'^\d+\s+(мая|января)', settlement, re.IGNORECASE):
+                                if self._is_valid_settlement_name(settlement):
+                                    found_settlements.append(settlement)
+            
+            # Убираем дубликаты и фильтруем
             unique_settlements = sorted(list(set(found_settlements)))
-            logger.info(f"    Найдено сельских поселений: {len(unique_settlements)}")
-            return unique_settlements
+            
+            # Фильтруем явно невалидные названия
+            valid_settlements = []
+            for s in unique_settlements:
+                # Пропускаем названия, похожие на даты
+                if re.match(r'^\d+\s+(мая|января|февраля|марта|апреля|июня|июля|августа|сентября|октября|ноября|декабря)', s, re.IGNORECASE):
+                    continue
+                # Пропускаем слишком короткие названия
+                if len(s) < 3:
+                    continue
+                # Пропускаем служебные слова
+                if any(word in s.lower() for word in ['список', 'статья', 'категория']):
+                    continue
+                valid_settlements.append(s)
+            
+            logger.info(f"    Найдено сельских поселений: {len(valid_settlements)}")
+            if valid_settlements:
+                logger.debug(f"    Список СП: {', '.join(valid_settlements[:20])}")
+            
+            return valid_settlements
             
         except Exception as e:
             logger.error(f"Ошибка парсинга сельских поселений: {e}")
