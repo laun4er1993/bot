@@ -325,7 +325,6 @@ class APISourceManager:
         if name.isdigit():
             return False
         
-        # Дополнительная фильтрация мусора
         for marker in INVALID_VILLAGE_MARKERS:
             if marker in name_lower:
                 return False
@@ -492,31 +491,25 @@ class APISourceManager:
             return False
     
     async def _extract_settlements_from_page(self, html: str, district: str) -> List[str]:
-        """Извлекает список сельских поселений со страницы района (как в исходном коде)"""
         try:
             soup = BeautifulSoup(html, 'html.parser')
             found_settlements = []
             
-            # Ищем заголовок "Сельские поселения" или "Состав района"
             for header in soup.find_all(['h2', 'h3', 'h4']):
                 header_text = header.get_text().lower()
                 if any(keyword in header_text for keyword in SETTLEMENT_KEYWORDS):
                     parent = header.find_parent()
                     if parent:
-                        # Ищем списки
                         for ul in parent.find_all('ul'):
                             for li in ul.find_all('li'):
                                 link = li.find('a')
                                 if link:
                                     text = link.get_text().strip()
-                                    # Проверяем, что это ссылка на сельское поселение
                                     if 'сельское поселение' in text.lower():
-                                        # Извлекаем название
                                         match = re.search(r'«([^»]+)»', text)
                                         if match:
                                             settlement = match.group(1).strip()
                                         else:
-                                            # Убираем слова "сельское поселение"
                                             settlement = re.sub(r'^сельское\s+поселение\s*', '', text, flags=re.IGNORECASE)
                                             settlement = re.sub(r'\s+\(.*?\)', '', settlement).strip()
                                         
@@ -524,7 +517,6 @@ class APISourceManager:
                                             if self._is_valid_settlement_name(settlement):
                                                 found_settlements.append(settlement)
             
-            # Если не нашли через заголовки, ищем прямые ссылки на СП
             if not found_settlements:
                 for link in soup.find_all('a', href=re.compile(r'/dic\.nsf/ruwiki/\d+')):
                     link_text = link.get_text().strip()
@@ -576,13 +568,11 @@ class APISourceManager:
         if not all_results:
             return None
         
-        # Оцениваем релевантность
         for result in all_results:
             title_lower = result['title'].lower()
             full_text_lower = result['full_text'].lower()
             district_lower = district.lower()
             
-            # Проверяем, что страница относится к нужному району
             if district_lower not in full_text_lower and district_lower not in title_lower:
                 result['score'] = 0
                 continue
@@ -592,11 +582,9 @@ class APISourceManager:
             else:
                 result['score'] = self._score_settlement_relevance(result, settlement, district)
             
-            # Дополнительный бонус за район
             if district_lower in full_text_lower:
                 result['score'] += 20
         
-        # Фильтруем результаты, оставляем только те, где есть упоминание района
         filtered_results = [r for r in all_results if r['score'] >= 50 and district.lower() in (r['full_text'].lower() + r['title'].lower())]
         
         if not filtered_results:
@@ -605,6 +593,16 @@ class APISourceManager:
         best = max(filtered_results, key=lambda x: x['score'])
         
         if best['score'] >= 50:
+            # Дополнительная проверка: загружаем страницу и убеждаемся, что она не пустая
+            page_url = DIC_ACADEMIC_ARTICLE_URL.format(best['id'])
+            html = await self._fetch_page(page_url)
+            if html:
+                soup = BeautifulSoup(html, 'html.parser')
+                # Проверяем, есть ли таблицы с бывшими НП
+                tables = soup.find_all('table', class_=['standard', 'sortable'])
+                if not tables:
+                    logger.debug(f"      Страница бывших НП ID {best['id']} не содержит таблиц, пропускаем")
+                    return None
             logger.info(f"      Найдена страница бывших НП для СП {settlement} (ID: {best['id']}, score: {best['score']})")
             self.former_np_pages_cache[cache_key] = best['id']
             return best['id']
@@ -621,9 +619,7 @@ class APISourceManager:
         queries = [
             f"Сельское поселение {settlement}",
             f"{settlement} сельское поселение",
-            f"{settlement} СП",
-            f"Сельское поселение {settlement} {district} района",
-            f"{settlement} {district} района"
+            f"{settlement} СП"
         ]
         
         all_results = []
@@ -636,61 +632,24 @@ class APISourceManager:
         if not all_results:
             return None
         
-        # Оцениваем релевантность
         for result in all_results:
-            title_lower = result['title'].lower()
-            full_text_lower = result['full_text'].lower()
-            district_lower = district.lower()
-            
-            # Проверяем, что страница относится к нужному району
-            if district_lower not in full_text_lower and district_lower not in title_lower:
-                result['score'] = 0
-                continue
-            
-            if "список бывших" in title_lower:
-                result['score'] = 0
-            else:
-                result['score'] = self._score_settlement_relevance(result, settlement, district)
-            
-            # Дополнительный бонус за район
-            if district_lower in full_text_lower:
-                result['score'] += 20
-            
-            # Штраф, если в заголовке есть "район" или "муниципальный"
-            if "район" in title_lower or "муниципальный" in title_lower:
-                result['score'] -= 30
+            score = self._score_settlement_relevance(result, settlement, district)
+            result['score'] = score
         
-        # Фильтруем результаты, оставляем только те, где есть упоминание района и score >= 50
-        filtered_results = [r for r in all_results if r['score'] >= 50 and district.lower() in (r['full_text'].lower() + r['title'].lower())]
+        best = max(all_results, key=lambda x: x['score'])
         
-        if not filtered_results:
-            return None
-        
-        best = max(filtered_results, key=lambda x: x['score'])
-        
-        if best['score'] >= 50:
+        if best['score'] >= 40:
             # Дополнительная проверка: загружаем страницу и убеждаемся, что это не страница района
             page_url = DIC_ACADEMIC_ARTICLE_URL.format(best['id'])
             html = await self._fetch_page(page_url)
             if html:
                 soup = BeautifulSoup(html, 'html.parser')
-                # Проверяем, что в тексте нет "район" в заголовке и есть "сельское поселение"
                 title_elem = soup.find('h1')
                 title_text = title_elem.get_text().lower() if title_elem else ""
-                if "район" in title_text or "муниципальный" in title_text:
-                    logger.debug(f"      Пропускаем страницу района: {best['id']}")
+                # Если в заголовке есть "район" и нет "сельское поселение" — это страница района
+                if "район" in title_text and "сельское поселение" not in title_text:
+                    logger.debug(f"      Пропускаем страницу района: {best['id']} - {title_text}")
                     return None
-                # Проверяем наличие раздела "Населенные пункты" или таблиц с НП
-                tables = soup.find_all('table', class_=['standard', 'sortable', 'wikitable', 'simple'])
-                has_settlement_section = False
-                for header in soup.find_all(['h2', 'h3', 'h4']):
-                    if any(kw in header.get_text().lower() for kw in SETTLEMENTS_SECTION_KEYWORDS):
-                        has_settlement_section = True
-                        break
-                if not has_settlement_section and not tables:
-                    logger.debug(f"      Страница {best['id']} не содержит раздела с населенными пунктами, пропускаем")
-                    return None
-            
             logger.info(f"      Найдена основная страница СП {settlement} (ID: {best['id']}, score: {best['score']})")
             self.settlement_pages_cache[cache_key] = best['id']
             return best['id']
@@ -698,7 +657,6 @@ class APISourceManager:
         return None
     
     def _score_settlement_relevance(self, result: Dict, settlement: str, district: str) -> int:
-        """Оценивает релевантность результата для страницы сельского поселения"""
         title_lower = result['title'].lower()
         full_text_lower = result['full_text'].lower()
         settlement_lower = settlement.lower()
@@ -711,8 +669,6 @@ class APISourceManager:
         
         if "сельское поселение" in title_lower:
             score += 40
-        elif "сельское поселение" in full_text_lower:
-            score += 20
         
         if district_lower in title_lower or district_lower in full_text_lower:
             score += 20
@@ -731,7 +687,6 @@ class APISourceManager:
         if not html:
             return []
         
-        # Проверяем, что страница относится к нужному району
         soup = BeautifulSoup(html, 'html.parser')
         page_text = soup.get_text().lower()
         district_lower = district.lower()
@@ -791,7 +746,6 @@ class APISourceManager:
                         if not self._is_valid_name(name):
                             continue
                         
-                        # Фильтрация мусора
                         skip = False
                         for marker in INVALID_VILLAGE_MARKERS:
                             if marker in name.lower():
@@ -843,7 +797,6 @@ class APISourceManager:
         if not html:
             return []
         
-        # Проверяем, что страница относится к нужному району
         soup = BeautifulSoup(html, 'html.parser')
         page_text = soup.get_text().lower()
         district_lower = district.lower()
@@ -990,7 +943,6 @@ class APISourceManager:
                         if not self._is_valid_name(name):
                             continue
                         
-                        # Фильтрация мусора
                         skip = False
                         for marker in INVALID_VILLAGE_MARKERS:
                             if marker in name.lower():
@@ -1039,7 +991,6 @@ class APISourceManager:
                                 if not self._is_valid_name(name):
                                     continue
                                 
-                                # Фильтрация мусора
                                 skip = False
                                 for marker in INVALID_VILLAGE_MARKERS:
                                     if marker in name.lower():
@@ -1101,7 +1052,6 @@ class APISourceManager:
                 if name in seen_names:
                     continue
                 
-                # Жесткая фильтрация мусора
                 skip = False
                 for marker in INVALID_VILLAGE_MARKERS:
                     if marker in name.lower():
@@ -1127,7 +1077,6 @@ class APISourceManager:
                 if not self._is_valid_name(name):
                     continue
                 
-                # Определяем тип
                 village_type = 'деревня'
                 parent = link.find_parent('td')
                 if parent:
@@ -1164,7 +1113,6 @@ class APISourceManager:
             return []
     
     async def _find_master_list_links(self, html: str, district: str) -> List[str]:
-        """Автоматический поиск ссылок на списки населенных пунктов (как в исходном коде)"""
         try:
             soup = BeautifulSoup(html, 'html.parser')
             found_ids = []
@@ -1189,7 +1137,6 @@ class APISourceManager:
                             logger.info(f"      Найдена ссылка на список НП: ID {article_id} - {link.get_text()}")
                             break
             
-            # Поиск в разделе "См. также"
             see_also_patterns = ['см. также', 'смотри также', 'см также', 'примечания']
             
             for pattern in see_also_patterns:
@@ -1293,7 +1240,6 @@ class APISourceManager:
                         if not self._is_valid_name(name):
                             continue
                         
-                        # Фильтрация мусора
                         skip = False
                         for marker in INVALID_VILLAGE_MARKERS:
                             if marker in name.lower():
