@@ -549,7 +549,6 @@ class APISourceManager:
         if cache_key in self.former_np_pages_cache:
             return self.former_np_pages_cache[cache_key]
         
-        # Используем запросы как в исходном коде
         queries = [
             f"Список бывших населённых пунктов на территории сельского поселения {settlement} {district} района",
             f"Список бывших населенных пунктов на территории сельского поселения {settlement} {district} района",
@@ -593,16 +592,6 @@ class APISourceManager:
         best = max(filtered_results, key=lambda x: x['score'])
         
         if best['score'] >= 50:
-            # Дополнительная проверка: загружаем страницу и убеждаемся, что она не пустая
-            page_url = DIC_ACADEMIC_ARTICLE_URL.format(best['id'])
-            html = await self._fetch_page(page_url)
-            if html:
-                soup = BeautifulSoup(html, 'html.parser')
-                # Проверяем, есть ли таблицы с бывшими НП
-                tables = soup.find_all('table', class_=['standard', 'sortable'])
-                if not tables:
-                    logger.debug(f"      Страница бывших НП ID {best['id']} не содержит таблиц, пропускаем")
-                    return None
             logger.info(f"      Найдена страница бывших НП для СП {settlement} (ID: {best['id']}, score: {best['score']})")
             self.former_np_pages_cache[cache_key] = best['id']
             return best['id']
@@ -615,7 +604,6 @@ class APISourceManager:
         if cache_key in self.settlement_pages_cache:
             return self.settlement_pages_cache[cache_key]
         
-        # Используем запросы как в исходном коде
         queries = [
             f"Сельское поселение {settlement}",
             f"{settlement} сельское поселение",
@@ -1113,6 +1101,7 @@ class APISourceManager:
             return []
     
     async def _find_master_list_links(self, html: str, district: str) -> List[str]:
+        """Автоматический поиск ссылок на списки населенных пунктов"""
         try:
             soup = BeautifulSoup(html, 'html.parser')
             found_ids = []
