@@ -9,14 +9,16 @@ import random
 from typing import List, Dict, Optional
 from bs4 import BeautifulSoup
 from urllib.parse import quote
+from concurrent.futures import ThreadPoolExecutor
 
 from .config import (
-    AVAILABLE_DISTRICTS, DIC_ACADEMIC_SEARCH_URL, DIC_ACADEMIC_ARTICLE_URL
+    AVAILABLE_DISTRICTS, DIC_ACADEMIC_SEARCH_URL, DIC_ACADEMIC_ARTICLE_URL,
+    LIST_KEYWORDS
 )
 from .dic_parser import DicParser
 from .wikipedia_parser import WikipediaParser
-from .coordinates import parse_wikipedia_coordinates, parse_dic_coordinates
-from .utils import clean_village_name, is_valid_name
+from .coordinates import parse_wikipedia_coordinates
+from .utils import clean_village_name, is_valid_name, expand_type
 
 logger = logging.getLogger(__name__)
 
@@ -24,12 +26,6 @@ logger = logging.getLogger(__name__)
 class APISourceManager:
     """
     Универсальный менеджер для загрузки данных из dic.academic.ru и Wikipedia
-    
-    Алгоритм:
-    1. Сбор НП с dic.academic.ru (общие списки, бывшие НП, сельские поселения)
-    2. Поиск координат на dic.academic.ru
-    3. Для НП без координат - поиск на Wikipedia
-    4. Поиск НП в исторических уездах на Wikipedia
     """
     
     def __init__(self):
@@ -71,13 +67,21 @@ class APISourceManager:
             'Connection': 'keep-alive',
         }
         
-        # Инициализация парсеров
-        self.dic_parser = DicParser(self.session, self.thread_pool, self._search_with_pagination)
-        self.wiki_parser = WikipediaParser(self.session, self.thread_pool)
+        # Инициализация парсеров (будет завершена после создания сессии)
+        self.dic_parser = None
+        self.wiki_parser = None
     
     async def _get_session(self) -> aiohttp.ClientSession:
         if self.session is None or self.session.closed:
             self.session = aiohttp.ClientSession()
+            # Инициализируем парсеры с сессией
+            self.dic_parser = DicParser(
+                self.session, self.thread_pool, 
+                self._search_with_pagination, self._fetch_page
+            )
+            self.wiki_parser = WikipediaParser(
+                self.session, self.thread_pool, self._fetch_page
+            )
         return self.session
     
     async def close_session(self):
@@ -96,13 +100,16 @@ class APISourceManager:
                             'from_uyezd': 0, 'total_without': 0, 'remaining': 0}
         self.collection_stats = {'from_master_lists': 0, 'from_former': 0,
                                 'from_settlements': 0, 'from_uyezd': 0, 'total_unique': 0}
-        self.dic_parser.district_cache.clear()
-        self.dic_parser.former_np_pages_cache.clear()
-        self.dic_parser.settlement_pages_cache.clear()
-        self.dic_parser.processed_article_ids.clear()
-        self.dic_parser.village_links.clear()
-        self.dic_parser.coords_stats = {'from_former': 0, 'from_links': 0}
-        self.dic_parser.collection_stats = {'from_master_lists': 0, 'from_former': 0, 'from_settlements': 0}
+        
+        if self.dic_parser:
+            self.dic_parser.district_cache.clear()
+            self.dic_parser.former_np_pages_cache.clear()
+            self.dic_parser.settlement_pages_cache.clear()
+            self.dic_parser.processed_article_ids.clear()
+            self.dic_parser.village_links.clear()
+            self.dic_parser.coords_stats = {'from_former': 0, 'from_links': 0}
+            self.dic_parser.collection_stats = {'from_master_lists': 0, 'from_former': 0, 'from_settlements': 0}
+        
         logger.info("🧹 Кэш очищен для нового поиска")
     
     async def _rate_limit(self):
@@ -235,7 +242,7 @@ class APISourceManager:
                         continue
                     vtype = 'деревня'
                     if type_idx is not None and type_idx < len(cells):
-                        vtype = self._expand_type(cells[type_idx].get_text().strip())
+                        vtype = expand_type(cells[type_idx].get_text().strip())
                     results.append({
                         "name": name, "type": vtype,
                         "lat": "", "lon": "",
@@ -251,13 +258,6 @@ class APISourceManager:
                 if n in h:
                     return i
         return None
-    
-    def _expand_type(self, short: str) -> str:
-        from .config import TYPE_MAPPING
-        if not short:
-            return 'деревня'
-        clean = short.rstrip('.').lower().strip()
-        return TYPE_MAPPING.get(clean, clean if clean in TYPE_MAPPING.values() else 'деревня')
     
     async def _find_master_list_links(self, html: str, district: str) -> List[str]:
         try:
@@ -282,12 +282,8 @@ class APISourceManager:
         title = soup.find('h1')
         return {'id': article_id, 'title': title.get_text().strip() if title else ""}
     
-    async def _parse_wikipedia_coordinates(self, html: str, name: str):
-        from .coordinates import parse_wikipedia_coordinates
-        return await parse_wikipedia_coordinates(html, name)
-    
     async def _get_wikipedia_coordinates(self, url: str, name: str, district: str) -> Optional[Dict]:
-        from .coordinates import parse_wikipedia_coordinates
+        """Загружает страницу НП на Wikipedia и извлекает координаты"""
         html = await self._fetch_page(url)
         if not html:
             return None
@@ -307,9 +303,8 @@ class APISourceManager:
         self.start_time = time.time()
         logger.info(f"🌐 Загрузка данных для района: {district}")
         
-        # Передаем ссылки на методы парсерам
-        self.dic_parser._fetch_page = self._fetch_page
-        self.dic_parser._search_with_pagination = self._search_with_pagination
+        # Инициализируем сессию
+        await self._get_session()
         
         all_villages = []
         seen = set()
