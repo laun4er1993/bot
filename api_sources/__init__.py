@@ -6,6 +6,7 @@ import asyncio
 import logging
 import time
 import random
+import re
 from typing import List, Dict, Optional
 from bs4 import BeautifulSoup
 from urllib.parse import quote
