@@ -61,6 +61,7 @@ class APISourceManager:
         self.settlement_pages_cache: Dict[str, str] = {}
         self.page_cache: Dict[str, Tuple[str, float]] = {}
         self.processed_article_ids: Set[str] = set()
+        self.processed_former_np_ids: Set[str] = set()  # Отдельный сет для бывших НП
         
         # Словарь для хранения ссылок на отдельные страницы НП
         self.village_links: Dict[str, str] = {}
@@ -131,6 +132,7 @@ class APISourceManager:
         self.settlement_pages_cache.clear()
         self.page_cache.clear()
         self.processed_article_ids.clear()
+        self.processed_former_np_ids.clear()
         self.village_links.clear()
         self.wikipedia_links.clear()
         self.wikipedia_coords_cache.clear()
@@ -2141,8 +2143,8 @@ class APISourceManager:
         
         # Шаг 2.5: Ищем общий список бывших НП для района
         district_former_id = await self._find_district_former_np_page(district, district_html)
-        if district_former_id and district_former_id not in self.processed_article_ids:
-            self.processed_article_ids.add(district_former_id)
+        if district_former_id and district_former_id not in self.processed_former_np_ids:
+            self.processed_former_np_ids.add(district_former_id)
             district_former_data = await self._parse_former_np_page(district_former_id, district, "всего района")
             for village in district_former_data:
                 key = f"{village['name']}_{village['district']}"
@@ -2192,8 +2194,9 @@ class APISourceManager:
                 # Страница с бывшими НП (для конкретного СП)
                 former_np_id = await self._find_former_np_page(settlement, district)
                 
-                if former_np_id and former_np_id not in self.processed_article_ids:
-                    self.processed_article_ids.add(former_np_id)
+                # Проверяем, что страница не была обработана как общий список района
+                if former_np_id and former_np_id not in self.processed_former_np_ids:
+                    self.processed_former_np_ids.add(former_np_id)
                     logger.info(f"    ✅ Найдена страница бывших НП для СП {settlement} (ID: {former_np_id})")
                     former_np_data = await self._parse_former_np_page(former_np_id, district, settlement)
                     
@@ -2221,7 +2224,10 @@ class APISourceManager:
                     if former_new > 0:
                         logger.info(f"    ✅ СП {settlement}: добавлено {former_new} записей из списка бывших НП (из них с координатами: {former_with_coords})")
                 else:
-                    logger.info(f"    ⚠️ Страница бывших НП для СП {settlement} не найдена")
+                    if former_np_id:
+                        logger.info(f"    ⚠️ Страница бывших НП для СП {settlement} уже обработана (ID: {former_np_id}), пропускаем")
+                    else:
+                        logger.info(f"    ⚠️ Страница бывших НП для СП {settlement} не найдена")
                 
                 # Основная страница СП
                 main_page_id = await self._find_settlement_main_page(settlement, district)
