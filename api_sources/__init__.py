@@ -326,44 +326,28 @@ class APISourceManager:
         text = re.sub(r'\s+', ' ', text).strip()
         return text.lower()
     
-    def _normalize_district_name(self, district: str) -> str:
-        """Нормализует название района для поиска"""
-        # Убираем окончания "ий", "ой", "ого", "его"
-        normalized = district.lower()
-        normalized = re.sub(r'ий$', 'и', normalized)
-        normalized = re.sub(r'ой$', 'о', normalized)
-        normalized = re.sub(r'ого$', 'о', normalized)
-        normalized = re.sub(r'его$', 'е', normalized)
-        return normalized
-    
     def _check_district_in_text(self, text: str, district: str) -> bool:
         """Проверяет, есть ли упоминание района в тексте (с учётом падежей)"""
         text_lower = text.lower()
         district_lower = district.lower()
-        district_normalized = self._normalize_district_name(district_lower)
         
-        # Проверяем точное вхождение
-        if district_lower in text_lower:
-            return True
-        
-        # Проверяем нормализованное название
-        if district_normalized in text_lower:
-            return True
-        
-        # Проверяем различные падежи
-        patterns = [
-            district_lower,
-            district_lower + "ий",
-            district_lower + "ого",
-            district_lower + "его",
-            district_lower + "ому",
-            district_lower + "ему",
-            district_lower + "им",
-            district_lower + "ом"
+        # Различные падежные формы
+        district_variants = [
+            district_lower,                                    # Ржевский
+            district_lower + "ий",                            # Ржевский
+            district_lower + "ого",                           # Ржевского
+            district_lower + "его",                           # Ржевского (для мягких)
+            district_lower + "ому",                           # Ржевскому
+            district_lower + "ему",                           # Ржевскому
+            district_lower + "им",                            # Ржевским
+            district_lower + "ом",                            # Ржевском
+            district_lower + "ой",                            # Ржевской (для женского рода)
+            district_lower + "ая",                            # Ржевская
+            district_lower + "ую",                            # Ржевскую
         ]
         
-        for pattern in patterns:
-            if pattern in text_lower:
+        for variant in district_variants:
+            if variant in text_lower:
                 return True
         
         return False
@@ -690,6 +674,46 @@ class APISourceManager:
             logger.error(f"Ошибка парсинга сельских поселений: {e}")
             return []
     
+    async def _find_district_former_np_page(self, district: str, district_html: str) -> Optional[str]:
+        """Находит общую страницу бывших населенных пунктов для всего района"""
+        cache_key = f"district_former_{district}"
+        if cache_key in self.former_np_pages_cache:
+            return self.former_np_pages_cache[cache_key]
+        
+        soup = BeautifulSoup(district_html, 'html.parser')
+        
+        # Ищем в разделе "См. также"
+        see_also = soup.find('div', class_='rellink boilerplate seealso')
+        if see_also:
+            for link in see_also.find_all('a', href=re.compile(r'/dic\.nsf/ruwiki/\d+')):
+                link_text = link.get_text().lower()
+                if 'список бывших населённых пунктов' in link_text and self._check_district_in_text(link_text, district):
+                    match = re.search(r'/dic\.nsf/ruwiki/(\d+)', link.get('href', ''))
+                    if match:
+                        article_id = match.group(1)
+                        logger.info(f"      Найдена общая страница бывших НП для района {district} (ID: {article_id})")
+                        self.former_np_pages_cache[cache_key] = article_id
+                        return article_id
+        
+        # Если не нашли в "См. также", ищем по запросу
+        query = f"Список бывших населённых пунктов на территории {district} района Тверской области"
+        results = await self._search_with_pagination(query, max_pages=10)
+        
+        for result in results[:10]:
+            title_lower = result['title'].lower()
+            if 'список бывших' in title_lower and self._check_district_in_text(title_lower, district):
+                page_url = DIC_ACADEMIC_ARTICLE_URL.format(result['id'])
+                html = await self._fetch_page(page_url)
+                if html:
+                    soup_page = BeautifulSoup(html, 'html.parser')
+                    tables = soup_page.find_all('table', class_=['standard', 'sortable'])
+                    if tables:
+                        logger.info(f"      Найдена общая страница бывших НП для района {district} (ID: {result['id']})")
+                        self.former_np_pages_cache[cache_key] = result['id']
+                        return result['id']
+        
+        return None
+    
     async def _find_former_np_page(self, settlement: str, district: str) -> Optional[str]:
         """Находит страницу с бывшими населенными пунктами для сельского поселения"""
         cache_key = f"former_np_{district}_{settlement}"
@@ -699,7 +723,7 @@ class APISourceManager:
         district_lower = district.lower()
         settlement_lower = settlement.lower()
         
-        # Используем правильные запросы с именительным падежом
+        # Расширенные запросы
         queries = [
             f"Список бывших населённых пунктов на территории сельского поселения {settlement} {district} район",
             f"Список бывших населенных пунктов на территории сельского поселения {settlement} {district} район",
@@ -1946,6 +1970,22 @@ class APISourceManager:
         else:
             logger.warning(f"  ⚠️ Сельские поселения не найдены")
         
+        # Шаг 2.5: Ищем общий список бывших НП для района
+        district_former_id = await self._find_district_former_np_page(district, district_html)
+        if district_former_id and district_former_id not in self.processed_article_ids:
+            self.processed_article_ids.add(district_former_id)
+            district_former_data = await self._parse_former_np_page(district_former_id, district, "всего района")
+            for village in district_former_data:
+                key = f"{village['name']}_{village['district']}"
+                if key not in seen_villages:
+                    seen_villages[key] = village
+                    self.collection_stats['from_former'] += 1
+                else:
+                    existing = seen_villages[key]
+                    if not existing.get('has_coords') and village.get('has_coords'):
+                        seen_villages[key] = village
+            logger.info(f"  ✅ Из общего списка бывших НП района добавлено {len(district_former_data)} записей")
+        
         # Шаг 3: Ищем общие списки на странице района
         if district_html:
             master_list_ids = await self._find_master_list_links(district_html, district)
@@ -1978,7 +2018,7 @@ class APISourceManager:
                 
                 await asyncio.sleep(1.5)
                 
-                # Страница с бывшими НП
+                # Страница с бывшими НП (для конкретного СП)
                 former_np_id = await self._find_former_np_page(settlement, district)
                 
                 if former_np_id and former_np_id not in self.processed_article_ids:
