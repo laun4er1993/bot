@@ -31,6 +31,17 @@ from .coordinates import parse_dic_coordinates, parse_wikipedia_coordinates
 
 logger = logging.getLogger(__name__)
 
+# Общие границы Тверской области (на всякий случай)
+TVER_BOUNDS = {
+    'min_lat': 55.0,
+    'max_lat': 58.5,
+    'min_lon': 30.0,
+    'max_lon': 38.5
+}
+
+# Предварительные границы районов (будут дополняться в процессе работы)
+DISTRICT_BOUNDS_CACHE: Dict[str, Dict[str, float]] = {}
+
 
 class APISourceManager:
     """
@@ -62,6 +73,9 @@ class APISourceManager:
         
         # Кэш координат из Wikipedia
         self.wikipedia_coords_cache: Dict[str, Tuple[str, str]] = {}
+        
+        # Кэш границ районов
+        self.district_bounds_cache: Dict[str, Dict[str, float]] = {}
         
         # Время жизни кэша
         self.cache_ttl = 3600
@@ -123,6 +137,7 @@ class APISourceManager:
         self.village_links.clear()
         self.wikipedia_links.clear()
         self.wikipedia_coords_cache.clear()
+        self.district_bounds_cache.clear()
         self.coords_stats = {
             'from_former': 0,
             'from_links': 0,
@@ -340,7 +355,7 @@ class APISourceManager:
                 return False
         
         # Фильтрация названий из других регионов
-        other_regions = ['ростовская', 'рязанская', 'волгоградская', 'пермский', 'удмуртия', 'московская']
+        other_regions = ['ростовская', 'рязанская', 'волгоградская', 'пермский', 'удмуртия', 'московская', 'владимирская', 'калужская']
         for region in other_regions:
             if region in name_lower:
                 return False
@@ -404,7 +419,7 @@ class APISourceManager:
         # Проверка, что это сельское поселение или похоже
         if 'сельское поселение' not in name_lower and 'сельсовет' not in name_lower:
             # Проверяем, не является ли это названием города
-            if name_lower in ['зубцов', 'ржев', 'осташков', 'торжок']:
+            if name_lower in ['зубцов', 'ржев', 'осташков', 'торжок', 'белый', 'нелидово']:
                 return False
             # Проверяем, не является ли это названием водоёма
             if 'водохранилище' in name_lower:
@@ -412,6 +427,90 @@ class APISourceManager:
             return True
         
         return True
+    
+    # ========== ОПРЕДЕЛЕНИЕ ГРАНИЦ РАЙОНА ==========
+    
+    async def _get_district_bounds(self, district: str, district_html: str = None) -> Dict[str, float]:
+        """
+        Определяет границы района (минимальные и максимальные координаты)
+        Использует несколько источников:
+        1. Кэш
+        2. Страница района на dic.academic.ru
+        3. Wikipedia
+        4. Общие границы Тверской области
+        """
+        # Проверяем кэш
+        if district in self.district_bounds_cache:
+            return self.district_bounds_cache[district]
+        
+        bounds = {
+            'min_lat': TVER_BOUNDS['min_lat'],
+            'max_lat': TVER_BOUNDS['max_lat'],
+            'min_lon': TVER_BOUNDS['min_lon'],
+            'max_lon': TVER_BOUNDS['max_lon']
+        }
+        
+        # 1. Пробуем найти на странице dic.academic.ru
+        if district_html:
+            soup = BeautifulSoup(district_html, 'html.parser')
+            page_text = soup.get_text().lower()
+            
+            # Ищем упоминания границ
+            # Пример: "расположен на юге Тверской области, граничит с..."
+            # Ищем числовые координаты
+            coords_match = re.findall(r'([0-9]+[.,][0-9]+)\s*[°]?\s*[сcюю]\.?ш\.?\s*[.,]?\s*([0-9]+[.,][0-9]+)\s*[°]?\s*[ввзз]\.?д\.?', page_text)
+            if coords_match:
+                try:
+                    lats = [float(m[0].replace(',', '.')) for m in coords_match]
+                    lons = [float(m[1].replace(',', '.')) for m in coords_match]
+                    if lats and lons:
+                        bounds['min_lat'] = min(lats)
+                        bounds['max_lat'] = max(lats)
+                        bounds['min_lon'] = min(lons)
+                        bounds['max_lon'] = max(lons)
+                        logger.info(f"  📍 Границы района из dic.academic.ru: {bounds}")
+                except:
+                    pass
+        
+        # 2. Пробуем найти на Wikipedia
+        try:
+            # Находим страницу района на Wikipedia
+            wiki_page = await self._find_wikipedia_district_page(district)
+            if wiki_page:
+                html = await self._fetch_page(wiki_page)
+                if html:
+                    soup = BeautifulSoup(html, 'html.parser')
+                    
+                    # Ищем инфобокс с координатами
+                    infobox = soup.find('table', class_='infobox')
+                    if infobox:
+                        for row in infobox.find_all('tr'):
+                            header = row.find('th')
+                            if header and 'координаты' in header.get_text().lower():
+                                coord_cell = row.find('td')
+                                if coord_cell:
+                                    coord_text = coord_cell.get_text()
+                                    # Ищем координаты центра
+                                    coords = await self._parse_wikipedia_coordinates(html, district)
+                                    if coords:
+                                        lat, lon = map(float, coords)
+                                        # Расширяем границы на 0.5 градуса от центра
+                                        bounds['min_lat'] = lat - 0.5
+                                        bounds['max_lat'] = lat + 0.5
+                                        bounds['min_lon'] = lon - 0.5
+                                        bounds['max_lon'] = lon + 0.5
+                                        logger.info(f"  📍 Границы района из Wikipedia (по центру): {bounds}")
+        except Exception as e:
+            logger.debug(f"  Ошибка получения границ из Wikipedia: {e}")
+        
+        # Сохраняем в кэш
+        self.district_bounds_cache[district] = bounds
+        return bounds
+    
+    def _check_coordinate_in_district(self, lat: float, lon: float, district_bounds: Dict[str, float]) -> bool:
+        """Проверяет, находятся ли координаты в границах района"""
+        return (district_bounds['min_lat'] <= lat <= district_bounds['max_lat'] and
+                district_bounds['min_lon'] <= lon <= district_bounds['max_lon'])
     
     # ========== МЕТОДЫ ДЛЯ РАБОТЫ С DIC.ACADEMIC.RU ==========
     
@@ -468,7 +567,8 @@ class APISourceManager:
                             'id': result['id'],
                             'title': result['title'],
                             'url': page_url,
-                            'score': result['score']
+                            'score': result['score'],
+                            'html': html  # сохраняем для определения границ
                         }
                         
                         self.district_cache[cache_key] = district_info
@@ -735,7 +835,7 @@ class APISourceManager:
                     return None
                 
                 # Пропускаем страницы городов
-                if settlement.lower() in ['зубцов', 'ржев', 'осташков', 'торжок'] and "район" not in title_text:
+                if settlement.lower() in ['зубцов', 'ржев', 'осташков', 'торжок', 'белый', 'нелидово'] and "район" not in title_text:
                     logger.debug(f"      Пропускаем страницу города: {best['id']} - {title_text}")
                     return None
                 
@@ -1146,7 +1246,7 @@ class APISourceManager:
                     continue
                 
                 # Пропускаем названия из других регионов
-                other_regions = ['ростовская', 'рязанская', 'волгоградская', 'пермский', 'удмуртия']
+                other_regions = ['ростовская', 'рязанская', 'волгоградская', 'пермский', 'удмуртия', 'владимирская', 'калужская']
                 if any(region in name.lower() for region in other_regions):
                     continue
                 
@@ -1809,6 +1909,10 @@ class APISourceManager:
             logger.warning(f"  ⚠️ Страница района на dic.academic.ru не найдена")
             return []
         
+        # Получаем границы района для фильтрации
+        district_bounds = await self._get_district_bounds(district, district_info.get('html'))
+        logger.info(f"  📍 Границы района {district}: {district_bounds}")
+        
         # Шаг 2: Получаем список сельских поселений
         district_html = await self._fetch_page(district_info['url'])
         settlements = []
@@ -2079,7 +2183,8 @@ class APISourceManager:
                                     coords = await self._parse_wikipedia_coordinates(html, name)
                                     if coords:
                                         lat, lon = coords
-                                        if validate_coordinates(float(lat), float(lon)):
+                                        # Проверяем, что координаты в границах района
+                                        if validate_coordinates(float(lat), float(lon)) and self._check_coordinate_in_district(float(lat), float(lon), district_bounds):
                                             logger.info(f"      ✅ Wikipedia: найдены координаты для {name}: {lat}, {lon}")
                                             return name, {
                                                 "name": name,
@@ -2094,7 +2199,10 @@ class APISourceManager:
                             wiki_url = wikipedia_links[name]
                             coords_data = await self._get_wikipedia_coordinates(wiki_url, name, district)
                             if coords_data and coords_data.get('has_coords'):
-                                return name, coords_data
+                                lat = float(coords_data['lat'])
+                                lon = float(coords_data['lon'])
+                                if validate_coordinates(lat, lon) and self._check_coordinate_in_district(lat, lon, district_bounds):
+                                    return name, coords_data
                         
                         return None, None
                 
