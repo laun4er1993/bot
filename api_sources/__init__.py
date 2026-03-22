@@ -111,7 +111,7 @@ class APISourceManager:
             'from_master_lists': 0,
             'from_former': 0,
             'from_settlements': 0,
-            'from_district_page': 0,  # Новые НП со страницы района
+            'from_district_page': 0,
             'total_unique': 0
         }
         
@@ -2028,19 +2028,14 @@ class APISourceManager:
     async def _fetch_wikipedia_coordinates_batch(self, villages: List[Dict], district: str, district_bounds: Dict[str, float]) -> Dict[str, Dict]:
         """
         Параллельный поиск координат на Wikipedia для списка деревень
-        Оптимизирован для избежания ошибок 429
         """
-        # Уменьшаем количество параллельных запросов для избежания 429
         semaphore = asyncio.Semaphore(3)
         
         total = len(villages)
         processed = 0
         found_count = 0
         
-        # Кэш для страниц
         village_links_cache = {}
-        
-        # Множество НП, которые уже нашли, чтобы не дублировать
         found_villages = set()
         
         async def fetch_one(village):
@@ -2048,7 +2043,6 @@ class APISourceManager:
             async with semaphore:
                 name = village['name']
                 
-                # Пропускаем уже найденные
                 if name in found_villages:
                     return None, None
                 
@@ -2060,7 +2054,7 @@ class APISourceManager:
                 
                 logger.debug(f"      🔍 Поиск координат для {name} на Wikipedia...")
                 
-                # ВАРИАНТ 1: Прямой URL
+                # Прямой URL
                 encoded_name = quote_plus(name)
                 direct_url = f"{WIKIPEDIA_BASE_URL}/wiki/{encoded_name}"
                 
@@ -2092,7 +2086,7 @@ class APISourceManager:
                 except Exception as e:
                     logger.debug(f"      ❌ Ошибка загрузки {name}: {e}")
                 
-                # ВАРИАНТ 2: Поиск через API
+                # Поиск через API
                 try:
                     search_url = f"{WIKIPEDIA_SEARCH_URL}?action=query&list=search&srsearch={quote_plus(name)}&format=json&utf8=1"
                     search_html = await self._fetch_page(search_url)
@@ -2141,7 +2135,6 @@ class APISourceManager:
                 except Exception as e:
                     logger.debug(f"      ❌ Ошибка поиска Wikipedia для {name}: {e}")
                 
-                # Если координаты не найдены, добавляем в список без координат
                 if name not in found_villages:
                     self.villages_without_coords_list.append(name)
                 
@@ -2168,18 +2161,40 @@ class APISourceManager:
         """
         logger.info(f"  🔍 ШАГ 3: Поиск населенных пунктов на странице района {district}...")
         
+        district_page_url = None
+        
         # Пробуем разные варианты названия района
         district_queries = [
             f"{district} район",
             f"{district} муниципальный округ",
             f"{district} район Тверской области",
-            f"{district} муниципальный округ Тверской области"
+            f"{district} муниципальный округ Тверской области",
+            f"Список населённых пунктов {district} района",
+            f"Населённые пункты {district} района"
         ]
         
-        district_page_url = None
         for dq in district_queries:
             encoded_dq = quote_plus(dq)
             direct_url = f"{WIKIPEDIA_BASE_URL}/wiki/{encoded_dq}"
+            logger.debug(f"    🔎 Пробуем: {direct_url}")
+            html = await self._fetch_page(direct_url)
+            if html:
+                soup = BeautifulSoup(html, 'html.parser')
+                no_article = soup.find('div', class_='noarticletext')
+                if not no_article:
+                    title = soup.find('h1')
+                    if title:
+                        title_text = title.get_text().lower()
+                        if ('район' in title_text or 'округ' in title_text) and 'город' not in title_text:
+                            district_page_url = direct_url
+                            logger.info(f"    🌐 Найдена страница района/округа: {direct_url}")
+                            break
+            await asyncio.sleep(0.5)
+        
+        # Если не нашли, пробуем прямой URL для "Ржевский район"
+        if not district_page_url:
+            direct_url = f"{WIKIPEDIA_BASE_URL}/wiki/{quote_plus(f'{district} район')}"
+            logger.debug(f"    🔎 Пробуем прямой URL: {direct_url}")
             html = await self._fetch_page(direct_url)
             if html:
                 soup = BeautifulSoup(html, 'html.parser')
@@ -2188,9 +2203,35 @@ class APISourceManager:
                     title = soup.find('h1')
                     if title and ('район' in title.get_text().lower() or 'округ' in title.get_text().lower()):
                         district_page_url = direct_url
-                        logger.info(f"    🌐 Найдена страница района/округа: {district_page_url}")
-                        break
-            await asyncio.sleep(0.5)
+                        logger.info(f"    🌐 Найдена страница района/округа: {direct_url}")
+        
+        # Если не нашли, пробуем поиск через API
+        if not district_page_url:
+            logger.info(f"    🔎 Пробуем поиск через API Wikipedia")
+            try:
+                search_url = f"{WIKIPEDIA_SEARCH_URL}?action=query&list=search&srsearch={quote_plus(f'{district} район Тверской области')}&format=json&utf8=1"
+                search_html = await self._fetch_page(search_url)
+                if search_html:
+                    data = json.loads(search_html)
+                    if 'query' in data and 'search' in data['query']:
+                        for result in data['query']['search'][:10]:
+                            title = result['title']
+                            if 'район' in title.lower() or 'округ' in title.lower():
+                                page_url = f"{WIKIPEDIA_BASE_URL}/wiki/{quote_plus(title)}"
+                                logger.debug(f"    🔎 Проверяем через API: {page_url}")
+                                html = await self._fetch_page(page_url)
+                                if html:
+                                    soup = BeautifulSoup(html, 'html.parser')
+                                    no_article = soup.find('div', class_='noarticletext')
+                                    if not no_article:
+                                        title_elem = soup.find('h1')
+                                        if title_elem and ('район' in title_elem.get_text().lower() or 'округ' in title_elem.get_text().lower()):
+                                            district_page_url = page_url
+                                            logger.info(f"    🌐 Найдена страница района/округа через API: {page_url}")
+                                            break
+                                await asyncio.sleep(0.3)
+            except Exception as e:
+                logger.debug(f"    Ошибка API поиска: {e}")
         
         if not district_page_url:
             logger.warning(f"    ⚠️ Страница района {district} не найдена")
@@ -2204,17 +2245,36 @@ class APISourceManager:
         
         soup = BeautifulSoup(html, 'html.parser')
         
-        # Ищем таблицы с населенными пунктами
-        tables = soup.find_all('table', class_=['standard', 'wikitable', 'sortable', 'collapsible'])
+        # Ищем раздел "Населённые пункты"
+        settlements_section = None
+        for header in soup.find_all(['h2', 'h3']):
+            header_text = header.get_text().lower()
+            if 'населённые пункты' in header_text or 'населенные пункты' in header_text:
+                settlements_section = header
+                break
         
-        district_villages = {}  # {название: {тип, url}}
+        # Ищем таблицу после заголовка
+        tables = []
+        if settlements_section:
+            current = settlements_section.find_next_sibling()
+            while current:
+                if current.name == 'table':
+                    tables.append(current)
+                    break
+                current = current.find_next_sibling()
+        
+        # Если не нашли таблицу после заголовка, ищем все таблицы на странице
+        if not tables:
+            tables = soup.find_all('table', class_=['standard', 'wikitable', 'sortable', 'collapsible'])
+        
+        district_villages = {}
         
         for table in tables:
             rows = table.find_all('tr')
             if len(rows) < 2:
                 continue
             
-            # Определяем колонки
+            # Определяем колонки по заголовкам
             headers = []
             header_row = rows[0]
             header_cells = header_row.find_all(['th', 'td'])
@@ -2231,7 +2291,7 @@ class APISourceManager:
                 elif 'тип' in header:
                     type_col_idx = i
             
-            # Если не нашли по заголовкам, пробуем определить по первой строке
+            # Если не нашли по заголовкам, пробуем по первой строке
             if name_col_idx is None and len(rows) > 1:
                 sample_row = rows[1]
                 sample_cells = sample_row.find_all('td')
@@ -2258,6 +2318,9 @@ class APISourceManager:
                 if not name or len(name) < MIN_NAME_LENGTH:
                     continue
                 
+                if name in ['ИТОГО', 'Всего', 'Итого', 'ИТОГО:', 'Всего:']:
+                    continue
+                
                 # Определяем тип
                 village_type = 'деревня'
                 if type_col_idx is not None and type_col_idx < len(cells):
@@ -2270,12 +2333,16 @@ class APISourceManager:
                         village_type = 'село'
                     elif 'станция' in type_text:
                         village_type = 'станция'
+                    elif 'хутор' in type_text:
+                        village_type = 'хутор'
                 
                 # Ищем ссылку на страницу НП
                 link = name_cell.find('a')
                 page_url = None
                 if link and link.get('href', '').startswith('/wiki/'):
-                    page_url = f"{WIKIPEDIA_BASE_URL}{link['href']}"
+                    href = link['href']
+                    if 'район' not in href.lower() and 'список' not in href.lower() and ':' not in href:
+                        page_url = f"{WIKIPEDIA_BASE_URL}{href}"
                 
                 district_villages[name] = {
                     'type': village_type,
@@ -2285,18 +2352,16 @@ class APISourceManager:
         
         logger.info(f"    📊 На странице района найдено {len(district_villages)} населенных пунктов")
         
-        # Находим новые НП и ищем для них координаты
+        # Находим новые НП и НП без координат
         new_villages = {}
         updated_villages = {}
         
         for name, data in district_villages.items():
             if name not in existing_villages:
-                # Новый НП
                 if self._is_valid_name(name, district):
                     new_villages[name] = data
                     logger.info(f"      🆕 Найден новый НП на странице района: {name} ({data['type']})")
             else:
-                # Существующий НП, у которого нет координат
                 existing = existing_villages[name]
                 if not existing.get('has_coords', False) and existing.get('lat', '') == '':
                     updated_villages[name] = data
@@ -2308,7 +2373,7 @@ class APISourceManager:
         if updated_villages:
             logger.info(f"    🔄 Найдено {len(updated_villages)} существующих НП без координат")
         
-        # Ищем координаты для новых НП и для НП без координат
+        # Ищем координаты
         all_villages_to_search = []
         
         for name, data in new_villages.items():
@@ -2339,19 +2404,48 @@ class APISourceManager:
             logger.info(f"    ℹ️ Нет новых НП и НП без координат для обработки")
             return {}
         
-        # Поиск координат для этих НП
         logger.info(f"    🔍 Поиск координат для {len(all_villages_to_search)} НП...")
         
         found_coords = {}
+        semaphore = asyncio.Semaphore(5)
         
-        for village in all_villages_to_search:
-            name = village['name']
-            wiki_url = village.get('wiki_url')
-            
-            # Пробуем сначала по ссылке со страницы района
-            if wiki_url:
+        async def fetch_coords(village):
+            async with semaphore:
+                name = village['name']
+                wiki_url = village.get('wiki_url')
+                
+                await asyncio.sleep(random.uniform(0.3, 0.8))
+                
+                # По ссылке со страницы района
+                if wiki_url:
+                    try:
+                        html = await self._fetch_page(wiki_url)
+                        if html:
+                            coords = await self._parse_wikipedia_coordinates(html, name)
+                            if coords:
+                                lat, lon = coords
+                                lat_f = float(lat)
+                                lon_f = float(lon)
+                                if self._check_coordinate_in_district(lat_f, lon_f, TVER_BOUNDS_EXTENDED):
+                                    logger.info(f"      ✅ Найдены координаты для {name} по ссылке: {lat}, {lon}")
+                                    return name, {
+                                        'name': name,
+                                        'type': village['type'],
+                                        'lat': lat,
+                                        'lon': lon,
+                                        'district': district,
+                                        'has_coords': True,
+                                        'is_new': village['is_new']
+                                    }
+                    except Exception as e:
+                        logger.debug(f"      ❌ Ошибка загрузки страницы {name}: {e}")
+                
+                # Прямой URL
+                encoded_name = quote_plus(name)
+                direct_url = f"{WIKIPEDIA_BASE_URL}/wiki/{encoded_name}"
+                
                 try:
-                    html = await self._fetch_page(wiki_url)
+                    html = await self._fetch_page(direct_url)
                     if html:
                         coords = await self._parse_wikipedia_coordinates(html, name)
                         if coords:
@@ -2359,7 +2453,8 @@ class APISourceManager:
                             lat_f = float(lat)
                             lon_f = float(lon)
                             if self._check_coordinate_in_district(lat_f, lon_f, TVER_BOUNDS_EXTENDED):
-                                found_coords[name] = {
+                                logger.info(f"      ✅ Найдены координаты для {name} по прямому URL: {lat}, {lon}")
+                                return name, {
                                     'name': name,
                                     'type': village['type'],
                                     'lat': lat,
@@ -2368,41 +2463,18 @@ class APISourceManager:
                                     'has_coords': True,
                                     'is_new': village['is_new']
                                 }
-                                logger.info(f"      ✅ Найдены координаты для {name} по ссылке со страницы района: {lat}, {lon}")
-                                continue
                 except Exception as e:
-                    logger.debug(f"      ❌ Ошибка загрузки страницы {name}: {e}")
-            
-            # Если нет ссылки или не нашли координаты, пробуем прямой поиск
-            encoded_name = quote_plus(name)
-            direct_url = f"{WIKIPEDIA_BASE_URL}/wiki/{encoded_name}"
-            
-            try:
-                html = await self._fetch_page(direct_url)
-                if html:
-                    coords = await self._parse_wikipedia_coordinates(html, name)
-                    if coords:
-                        lat, lon = coords
-                        lat_f = float(lat)
-                        lon_f = float(lon)
-                        if self._check_coordinate_in_district(lat_f, lon_f, TVER_BOUNDS_EXTENDED):
-                            found_coords[name] = {
-                                'name': name,
-                                'type': village['type'],
-                                'lat': lat,
-                                'lon': lon,
-                                'district': district,
-                                'has_coords': True,
-                                'is_new': village['is_new']
-                            }
-                            logger.info(f"      ✅ Найдены координаты для {name} по прямому URL: {lat}, {lon}")
-                            continue
-            except Exception as e:
-                logger.debug(f"      ❌ Ошибка загрузки {name}: {e}")
-            
-            # Если не нашли, добавляем в список без координат
-            self.villages_without_coords_list.append(name)
-            logger.debug(f"      ❌ Координаты не найдены для {name}")
+                    logger.debug(f"      ❌ Ошибка загрузки {name}: {e}")
+                
+                logger.debug(f"      ❌ Координаты не найдены для {name}")
+                return None, None
+        
+        tasks = [fetch_coords(v) for v in all_villages_to_search]
+        results = await asyncio.gather(*tasks)
+        
+        for name, data in results:
+            if data:
+                found_coords[name] = data
         
         logger.info(f"    📊 Найдено координат для {len(found_coords)} НП со страницы района")
         
@@ -2573,12 +2645,10 @@ class APISourceManager:
                         additional_list_ids = await self._find_master_list_links(former_np_html, district)
                         
                         for list_id in additional_list_ids:
-                            # Пропускаем, если это страница бывших НП текущего СП
                             if list_id == former_np_id:
                                 logger.info(f"      ⏭️ Пропускаем ID {list_id} (это страница бывших НП текущего СП)")
                                 continue
                             
-                            # Пропускаем, если это страница бывших НП уже обработана
                             if list_id in self.processed_former_np_ids:
                                 logger.info(f"      ⏭️ Пропускаем ID {list_id} (уже обработана как страница бывших НП)")
                                 continue
@@ -2694,10 +2764,8 @@ class APISourceManager:
                             break
             
             # ========== 3. ШАГ 3: ПОИСК НА СТРАНИЦЕ РАЙОНА ==========
-            # Сохраняем текущее состояние для сравнения
             current_villages_dict = {v['name']: v for v in all_villages}
             
-            # Ищем новые НП на странице района
             district_page_coords = await self._fetch_villages_from_district_page(district, current_villages_dict)
             
             if district_page_coords:
@@ -2715,7 +2783,6 @@ class APISourceManager:
                             found_in_existing = True
                             break
                     
-                    # Если НП не было в списке, добавляем его
                     if not found_in_existing:
                         if self._is_valid_name(name, district):
                             all_villages.append({
@@ -2752,7 +2819,6 @@ class APISourceManager:
         final_with_coords = sum(1 for v in all_villages if v.get('has_coords'))
         all_villages.sort(key=lambda x: x['name'])
         
-        # Удаляем служебные поля перед сохранением
         for v in all_villages:
             if 'has_coords' in v:
                 del v['has_coords']
