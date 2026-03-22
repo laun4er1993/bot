@@ -74,11 +74,6 @@ def parse_dic_coordinates(text: str, cell=None) -> Tuple[Optional[float], Option
 async def parse_wikipedia_coordinates(html: str, village_name: str) -> Optional[Tuple[str, str]]:
     """
     Парсит координаты из HTML страницы Wikipedia.
-    Ищет:
-    1. Класс coordinates с data-param (основной формат)
-    2. geo span (старый формат)
-    3. DMS формат в тексте
-    4. Инфобокс с координатами
     """
     try:
         soup = BeautifulSoup(html, 'html.parser')
@@ -86,7 +81,6 @@ async def parse_wikipedia_coordinates(html: str, village_name: str) -> Optional[
         # ВАРИАНТ 1: Ищем coordinates с data-param
         coord_elem = soup.find('span', class_='coordinates')
         if coord_elem:
-            # Пробуем data-mw-kartographer
             maplink = coord_elem.find('a', class_='mw-kartographer-maplink')
             if maplink and maplink.get('data-mw-kartographer'):
                 try:
@@ -101,7 +95,6 @@ async def parse_wikipedia_coordinates(html: str, village_name: str) -> Optional[
                 except Exception as e:
                     logger.debug(f"          Ошибка парсинга data-mw-kartographer: {e}")
             
-            # Пробуем geo span
             geo = coord_elem.find('span', class_='geo')
             if geo:
                 lat_span = geo.find('span', class_='latitude')
@@ -117,9 +110,7 @@ async def parse_wikipedia_coordinates(html: str, village_name: str) -> Optional[
                     except:
                         pass
             
-            # Пробуем DMS формат в coordinates
             coord_text = coord_elem.get_text()
-            # Формат: 56°13′41″ с.ш. 34°08′10″ в.д.
             dms_pattern = r'(\d+)°(\d+)′([\d.]+)″\s*([сю])\.[^\d]*(\d+)°(\d+)′([\d.]+)″\s*([зв])\.[^\d]*'
             match = re.search(dms_pattern, coord_text)
             if match:
@@ -150,7 +141,6 @@ async def parse_wikipedia_coordinates(html: str, village_name: str) -> Optional[
                 if header and ('координаты' in header.get_text().lower()):
                     coord_cell = row.find('td')
                     if coord_cell:
-                        # Ищем geo span в инфобоксе
                         geo_span = coord_cell.find('span', class_='geo')
                         if geo_span:
                             lat_span = geo_span.find('span', class_='latitude')
@@ -166,7 +156,6 @@ async def parse_wikipedia_coordinates(html: str, village_name: str) -> Optional[
                                 except:
                                     pass
                         
-                        # Ищем координаты в тексте ячейки
                         coord_text = coord_cell.get_text()
                         dms_pattern = r'(\d+)°(\d+)′([\d.]+)″\s*([сю])\.[^\d]*(\d+)°(\d+)′([\d.]+)″\s*([зв])\.[^\d]*'
                         match = re.search(dms_pattern, coord_text)
@@ -193,11 +182,9 @@ async def parse_wikipedia_coordinates(html: str, village_name: str) -> Optional[
         # ВАРИАНТ 3: Ищем координаты в формате DMS в любом месте страницы
         text = soup.get_text()
         
-        # Формат: 56°13′41″ с. ш. 34°08′10″ в. д.
         dms_pattern = r'(\d+)°(\d+)′([\d.]+)″\s*([сю])\.[\s]*ш\.\s*(\d+)°(\d+)′([\d.]+)″\s*([зв])\.[\s]*д\.'
         match = re.search(dms_pattern, text)
         if not match:
-            # Альтернативный формат: 56°13′41″ N 34°08′10″ E
             dms_pattern = r'(\d+)°(\d+)′([\d.]+)″\s*([NS])\s+(\d+)°(\d+)′([\d.]+)″\s*([EW])'
             match = re.search(dms_pattern, text)
         
