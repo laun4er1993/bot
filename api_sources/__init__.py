@@ -31,12 +31,20 @@ from .coordinates import parse_dic_coordinates, parse_wikipedia_coordinates
 
 logger = logging.getLogger(__name__)
 
-# Общие границы Тверской области
+# Общие границы Тверской области (немного расширенные)
 TVER_BOUNDS = {
     'min_lat': 55.0,
     'max_lat': 58.5,
     'min_lon': 30.0,
     'max_lon': 38.5
+}
+
+# Расширенные границы для учета пограничных НП (буфер 0.3 градуса)
+TVER_BOUNDS_EXTENDED = {
+    'min_lat': 54.7,
+    'max_lat': 58.8,
+    'min_lon': 29.7,
+    'max_lon': 38.8
 }
 
 
@@ -61,7 +69,7 @@ class APISourceManager:
         self.settlement_pages_cache: Dict[str, str] = {}
         self.page_cache: Dict[str, Tuple[str, float]] = {}
         self.processed_article_ids: Set[str] = set()
-        self.processed_former_np_ids: Set[str] = set()  # Отдельный сет для бывших НП
+        self.processed_former_np_ids: Set[str] = set()
         
         # Словарь для хранения ссылок на отдельные страницы НП
         self.village_links: Dict[str, str] = {}
@@ -521,10 +529,10 @@ class APISourceManager:
             return self.district_bounds_cache[district]
         
         bounds = {
-            'min_lat': TVER_BOUNDS['min_lat'],
-            'max_lat': TVER_BOUNDS['max_lat'],
-            'min_lon': TVER_BOUNDS['min_lon'],
-            'max_lon': TVER_BOUNDS['max_lon']
+            'min_lat': TVER_BOUNDS_EXTENDED['min_lat'],
+            'max_lat': TVER_BOUNDS_EXTENDED['max_lat'],
+            'min_lon': TVER_BOUNDS_EXTENDED['min_lon'],
+            'max_lon': TVER_BOUNDS_EXTENDED['max_lon']
         }
         
         self.district_bounds_cache[district] = bounds
@@ -1064,7 +1072,7 @@ class APISourceManager:
                                 row_text = ' '.join([c.get_text() for c in cells])
                                 lat, lon = parse_dic_coordinates(row_text, None)
                         
-                        if lat and lon and validate_coordinates(lat, lon):
+                        if lat and lon and self._check_coordinate_in_district(lat, lon, TVER_BOUNDS_EXTENDED):
                             lat_rounded = round(lat, 5)
                             lon_rounded = round(lon, 5)
                             logger.info(f"          ✅ {name}: координаты {lat_rounded}, {lon_rounded}")
@@ -1080,7 +1088,7 @@ class APISourceManager:
                             coords_found_in_table += 1
                             self.coords_stats['from_former'] += 1
                         else:
-                            logger.debug(f"          ⚠️ {name}: координаты не найдены")
+                            logger.debug(f"          ⚠️ {name}: координаты не найдены или вне области")
                             results.append({
                                 "name": name,
                                 "type": village_type,
@@ -1205,6 +1213,7 @@ class APISourceManager:
                 type_idx = None
                 name_idx = None
                 
+                # Определяем колонки по заголовкам
                 for i, cell in enumerate(header_cells):
                     cell_text = cell.get_text().strip().lower()
                     if 'тип' in cell_text:
@@ -1212,6 +1221,7 @@ class APISourceManager:
                     elif 'название' in cell_text or 'населённый пункт' in cell_text or 'населенный пункт' in cell_text:
                         name_idx = i
                 
+                # Если не нашли по заголовкам, пробуем по первой строке данных
                 if type_idx is None or name_idx is None:
                     if len(rows) > 1:
                         sample_row = rows[1]
@@ -1236,6 +1246,8 @@ class APISourceManager:
                     else:
                         type_idx = 0
                 
+                logger.info(f"        Таблица: name_idx={name_idx}, type_idx={type_idx}")
+                
                 for row in rows[1:]:
                     try:
                         cells = row.find_all('td')
@@ -1258,6 +1270,7 @@ class APISourceManager:
                         if not self._is_valid_name(name, district):
                             continue
                         
+                        # Ищем ссылку на отдельную страницу НП
                         link = name_cell.find('a')
                         article_id_from_link = None
                         if link:
@@ -1268,6 +1281,20 @@ class APISourceManager:
                                 self.village_links[name] = article_id_from_link
                                 links_found += 1
                                 logger.info(f"        🔗 Найдена ссылка для {name}: ID {article_id_from_link}")
+                        
+                        # Также проверяем, может быть ссылка в другой колонке
+                        if not article_id_from_link:
+                            for cell in cells:
+                                link = cell.find('a')
+                                if link and link.get_text().strip() == name:
+                                    href = link.get('href', '')
+                                    match = re.search(r'(\d+)', href)
+                                    if match:
+                                        article_id_from_link = match.group(1)
+                                        self.village_links[name] = article_id_from_link
+                                        links_found += 1
+                                        logger.info(f"        🔗 Найдена ссылка для {name} (альт): ID {article_id_from_link}")
+                                        break
                         
                         results.append({
                             "name": name,
@@ -1282,6 +1309,7 @@ class APISourceManager:
                     except Exception as e:
                         continue
                 
+                # Если не нашли ссылок в основной колонке, ищем по всей таблице
                 if links_found == 0:
                     for row in rows:
                         cells = row.find_all('td')
@@ -1311,7 +1339,7 @@ class APISourceManager:
                                     article_id_from_link = match.group(1)
                                     self.village_links[name] = article_id_from_link
                                     links_found += 1
-                                    logger.info(f"        🔗 Найдена ссылка (альт) для {name}: ID {article_id_from_link}")
+                                    logger.info(f"        🔗 Найдена ссылка (альт2) для {name}: ID {article_id_from_link}")
                                     
                                     results.append({
                                         "name": name,
@@ -1323,7 +1351,7 @@ class APISourceManager:
                                         "article_id": article_id_from_link
                                     })
             
-            logger.info(f"        Всего найдено ссылок: {links_found}")
+            logger.info(f"        Всего найдено ссылок: {links_found}, НП: {len(results)}")
             return results
             
         except Exception as e:
@@ -1657,7 +1685,7 @@ class APISourceManager:
                     try:
                         lat_candidate = float(match.group(1))
                         lon_candidate = float(match.group(2))
-                        if validate_coordinates(lat_candidate, lon_candidate):
+                        if self._check_coordinate_in_district(lat_candidate, lon_candidate, TVER_BOUNDS_EXTENDED):
                             lat = lat_candidate
                             lon = lon_candidate
                             source = "десятичные в тексте"
@@ -1683,7 +1711,7 @@ class APISourceManager:
                             logger.debug(f"        ❌ Ошибка парсинга geo-dms: {e}")
             
             if lat and lon:
-                if not validate_coordinates(lat, lon):
+                if not self._check_coordinate_in_district(lat, lon, TVER_BOUNDS_EXTENDED):
                     logger.debug(f"        ❌ Координаты вне Тверской области: {lat}, {lon}")
                     return None
                 logger.info(f"        ✅ ИТОГО: координаты для {name}: {lat:.5f}, {lon:.5f} (из {source})")
@@ -1974,7 +2002,7 @@ class APISourceManager:
             
             if coords:
                 lat, lon = coords
-                if validate_coordinates(float(lat), float(lon)):
+                if self._check_coordinate_in_district(float(lat), float(lon), TVER_BOUNDS_EXTENDED):
                     logger.info(f"      ✅ Wikipedia: найдены координаты для {village_name}: {lat}, {lon}")
                     return {
                         "name": village_name,
@@ -2032,7 +2060,7 @@ class APISourceManager:
                                 lat, lon = coords
                                 lat_f = float(lat)
                                 lon_f = float(lon)
-                                if validate_coordinates(lat_f, lon_f):
+                                if self._check_coordinate_in_district(lat_f, lon_f, TVER_BOUNDS_EXTENDED):
                                     logger.info(f"      ✅ Wikipedia: найдены координаты для {name}: {lat}, {lon}")
                                     return name, {
                                         "name": name,
@@ -2079,7 +2107,7 @@ class APISourceManager:
                                         lat, lon = coords
                                         lat_f = float(lat)
                                         lon_f = float(lon)
-                                        if validate_coordinates(lat_f, lon_f):
+                                        if self._check_coordinate_in_district(lat_f, lon_f, TVER_BOUNDS_EXTENDED):
                                             logger.info(f"      ✅ Wikipedia: найдены координаты для {name} через поиск: {lat}, {lon} (страница: {title})")
                                             return name, {
                                                 "name": name,
@@ -2145,6 +2173,7 @@ class APISourceManager:
         district_former_id = await self._find_district_former_np_page(district, district_html)
         if district_former_id and district_former_id not in self.processed_former_np_ids:
             self.processed_former_np_ids.add(district_former_id)
+            logger.info(f"  📌 Обрабатываем общий список бывших НП района (ID: {district_former_id})")
             district_former_data = await self._parse_former_np_page(district_former_id, district, "всего района")
             for village in district_former_data:
                 key = f"{village['name']}_{village['district']}"
@@ -2234,6 +2263,7 @@ class APISourceManager:
                 
                 if main_page_id and main_page_id not in self.processed_article_ids:
                     self.processed_article_ids.add(main_page_id)
+                    logger.info(f"    🔍 Обрабатываем основную страницу СП {settlement} (ID: {main_page_id})")
                     main_page_data = await self._parse_settlement_main_page(main_page_id, district, settlement)
                     
                     main_new = 0
@@ -2242,6 +2272,7 @@ class APISourceManager:
                         
                         if village.get('article_id'):
                             self.village_links[village['name']] = village['article_id']
+                            logger.debug(f"      Сохранена ссылка для {village['name']}: ID {village['article_id']}")
                         
                         village_copy = village.copy()
                         village_copy.pop('article_id', None)
@@ -2414,9 +2445,14 @@ class APISourceManager:
         final_with_coords = sum(1 for v in all_villages if v.get('has_coords'))
         all_villages.sort(key=lambda x: x['name'])
         
+        # Удаляем служебные поля перед сохранением
         for v in all_villages:
             if 'has_coords' in v:
                 del v['has_coords']
+            if 'source' in v:
+                del v['source']
+            if 'article_id' in v:
+                del v['article_id']
         
         total_time = time.time() - self.start_time
         logger.info(f"  ✅ Всего уникальных записей: {len(all_villages)}")
