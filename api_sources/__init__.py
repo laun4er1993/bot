@@ -678,22 +678,20 @@ class APISourceManager:
         district_lower = district.lower()
         settlement_lower = settlement.lower()
         
-        # Исправленные запросы: используем "район" вместо "района"
+        # Используем правильные запросы с именительным падежом
         queries = [
             f"Список бывших населённых пунктов на территории сельского поселения {settlement} {district} район",
             f"Список бывших населенных пунктов на территории сельского поселения {settlement} {district} район",
             f"Список бывших населённых пунктов {settlement} {district} район",
             f"Бывшие населённые пункты {settlement} СП",
             f"Список бывших населённых пунктов {settlement} сельского поселения",
-            f"{settlement} бывшие населенные пункты",
-            f"Список бывших населённых пунктов {settlement}",
-            f"Бывшие населённые пункты {settlement}"
+            f"{settlement} бывшие населенные пункты"
         ]
         
         all_results = []
         
         for query in queries:
-            results = await self._search_with_pagination(query, max_pages=10)
+            results = await self._search_with_pagination(query, max_pages=15)
             all_results.extend(results)
             await asyncio.sleep(1.5)
         
@@ -707,8 +705,8 @@ class APISourceManager:
         # Сортируем результаты по позиции (чем выше позиция, тем релевантнее)
         all_results.sort(key=lambda x: x['position'] if x['position'] > 0 else 999)
         
-        # Проверяем первые 15 результатов
-        for result in all_results[:15]:
+        # Проверяем первые 20 результатов
+        for result in all_results[:20]:
             title_lower = result['title'].lower()
             full_text_lower = result['full_text'].lower()
             
