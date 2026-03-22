@@ -112,7 +112,7 @@ class APISourceManager:
         }
         
         # Параллельные запросы
-        self.max_concurrent_requests = 10  # Увеличено для Wikipedia
+        self.max_concurrent_requests = 5  # Уменьшено для избежания 429
         self.max_concurrent_dic = 2
         
         # Стандартные заголовки
@@ -191,7 +191,8 @@ class APISourceManager:
                     html = await response.text()
                     return html
                 elif response.status == 429:
-                    base_wait = (2 ** retry_count) * random.uniform(1.0, 2.0)
+                    # Увеличиваем задержку при 429 ошибке
+                    base_wait = (2 ** retry_count) * random.uniform(2.0, 4.0)
                     wait_time = base_wait
                     logger.warning(f"Ошибка 429 для {url}, повтор через {wait_time:.1f}с (попытка {retry_count + 1}/{self.max_retries})")
                     await asyncio.sleep(wait_time)
@@ -378,7 +379,7 @@ class APISourceManager:
                 variants.append(f"{stem}его")
                 variants.append(f"{stem}ему")
                 variants.append(f"{stem}им")
-                variants.append(f"{stem}ем")
+                variants.append(f"{stem}ем)
         
         elif base.endswith('ой'):
             stem = base[:-2]
@@ -2029,21 +2030,18 @@ class APISourceManager:
     async def _fetch_wikipedia_coordinates_batch(self, villages: List[Dict], district: str, district_bounds: Dict[str, float]) -> Dict[str, Dict]:
         """
         Параллельный поиск координат на Wikipedia для списка деревень
-        Оптимизирован для высокой скорости
-        Добавлен поиск через страницы сельских поселений
+        Оптимизирован для избежания ошибок 429
         """
-        # Увеличиваем количество параллельных запросов для ускорения
-        semaphore = asyncio.Semaphore(10)  # 10 параллельных запросов
+        # Уменьшаем количество параллельных запросов для избежания 429
+        semaphore = asyncio.Semaphore(5)  # 5 параллельных запросов
         
         # Счетчики для отслеживания прогресса
         total = len(villages)
         processed = 0
         found_count = 0
         
-        # Кэш для страниц сельских поселений, чтобы не загружать их повторно
+        # Кэш для страниц сельских поселений
         settlement_pages_cache = {}
-        
-        # Кэш для результатов поиска поселений
         settlement_search_cache = {}
         
         async def fetch_one(village):
@@ -2051,8 +2049,8 @@ class APISourceManager:
             async with semaphore:
                 name = village['name']
                 
-                # Уменьшенная задержка между запросами
-                await asyncio.sleep(random.uniform(0.1, 0.3))
+                # Увеличиваем задержку для избежания 429
+                await asyncio.sleep(random.uniform(0.5, 1.0))
                 
                 processed += 1
                 if processed % 20 == 0 or processed == total:
@@ -2093,7 +2091,7 @@ class APISourceManager:
                 except Exception as e:
                     logger.debug(f"      ❌ Ошибка загрузки {name}: {e}")
                 
-                # ВАРИАНТ 2: Поиск через API (только если прямой URL не дал результата)
+                # ВАРИАНТ 2: Поиск через API
                 try:
                     search_url = f"{WIKIPEDIA_SEARCH_URL}?action=query&list=search&srsearch={quote_plus(name)}&format=json&utf8=1"
                     search_html = await self._fetch_page(search_url)
@@ -2101,18 +2099,15 @@ class APISourceManager:
                     if search_html:
                         data = json.loads(search_html)
                         if 'query' in data and 'search' in data['query']:
-                            for result in data['query']['search'][:5]:  # 5 результатов
+                            for result in data['query']['search'][:3]:
                                 title = result['title']
                                 
-                                # Проверяем, что это не список
                                 if 'список' in title.lower() and name.lower() not in title.lower():
                                     continue
                                 
-                                # Проверяем, что это не район и не город
                                 if 'район' in title.lower() or 'город' in title.lower():
                                     continue
                                 
-                                # Проверяем, что название похоже на искомое
                                 if name.lower() not in title.lower() and title.lower() not in name.lower():
                                     if len(name) > 5 and name.lower() not in title.lower():
                                         continue
@@ -2142,18 +2137,15 @@ class APISourceManager:
                                 except Exception as e:
                                     logger.debug(f"      Ошибка при загрузке {title}: {e}")
                                 
-                                await asyncio.sleep(0.1)
+                                await asyncio.sleep(0.3)
                 except Exception as e:
                     logger.debug(f"      ❌ Ошибка поиска Wikipedia для {name}: {e}")
                 
-                # ВАРИАНТ 3: Поиск через страницы сельских поселений Ржевского района
-                # Это специальный поиск для НП, которые не имеют отдельных страниц
+                # ВАРИАНТ 3: Поиск через страницы сельских поселений
                 try:
-                    # Формируем ключ для кэша поиска поселений
                     cache_key = f"settlement_search_{district}"
                     
                     if cache_key not in settlement_search_cache:
-                        # Формируем запрос для поиска страниц сельских поселений
                         settlement_search = f"{district} район Тверской области сельские поселения"
                         search_url = f"{WIKIPEDIA_SEARCH_URL}?action=query&list=search&srsearch={quote_plus(settlement_search)}&format=json&utf8=1"
                         search_html = await self._fetch_page(search_url)
@@ -2163,7 +2155,7 @@ class APISourceManager:
                             try:
                                 data = json.loads(search_html)
                                 if 'query' in data and 'search' in data['query']:
-                                    for result in data['query']['search'][:20]:  # Берем первые 20 страниц поселений
+                                    for result in data['query']['search'][:15]:
                                         title = result['title']
                                         if 'сельское поселение' in title.lower() or 'сельского поселения' in title.lower():
                                             settlement_titles.append(title)
@@ -2175,8 +2167,7 @@ class APISourceManager:
                     
                     settlement_titles = settlement_search_cache[cache_key]
                     
-                    # Проверяем каждую страницу поселения
-                    for title in settlement_titles[:15]:  # Ограничиваем 15 поселениями для скорости
+                    for title in settlement_titles[:10]:
                         if title in settlement_pages_cache:
                             page_html = settlement_pages_cache[title]
                         else:
@@ -2188,28 +2179,22 @@ class APISourceManager:
                                 continue
                         
                         soup = BeautifulSoup(page_html, 'html.parser')
-                        
-                        # Ищем на странице таблицу с населенными пунктами
                         tables = soup.find_all('table', class_=['standard', 'wikitable', 'sortable'])
                         
                         for table in tables:
-                            # Проверяем, есть ли в таблице наш НП
                             table_text = table.get_text().lower()
                             if name.lower() not in table_text:
                                 continue
                             
-                            # Парсим координаты из таблицы
                             rows = table.find_all('tr')
                             for row in rows:
                                 row_text = row.get_text().lower()
                                 if name.lower() not in row_text:
                                     continue
                                 
-                                # Ищем координаты в строке
                                 cells = row.find_all('td')
                                 for cell in cells:
                                     coord_text = cell.get_text().strip()
-                                    # Проверяем, есть ли координаты в ячейке
                                     if '°' in coord_text or 'координат' in coord_text.lower():
                                         lat, lon = parse_dic_coordinates(coord_text, cell)
                                         if lat and lon and self._check_coordinate_in_district(lat, lon, TVER_BOUNDS_EXTENDED):
@@ -2226,27 +2211,24 @@ class APISourceManager:
                                                 "has_coords": True
                                             }
                             
-                            # Если нашли НП, но не нашли координаты, пробуем найти координаты в других колонках
-                            if name.lower() in table_text:
-                                # Ищем координаты в тексте страницы
-                                coords = await self._parse_wikipedia_coordinates(page_html, name)
-                                if coords:
-                                    lat, lon = coords
-                                    lat_f = float(lat)
-                                    lon_f = float(lon)
-                                    if self._check_coordinate_in_district(lat_f, lon_f, TVER_BOUNDS_EXTENDED):
-                                        found_count += 1
-                                        logger.info(f"      ✅ Wikipedia: найдены координаты для {name} в странице поселения {title} через парсинг: {lat}, {lon}")
-                                        return name, {
-                                            "name": name,
-                                            "type": village['type'],
-                                            "lat": lat,
-                                            "lon": lon,
-                                            "district": district,
-                                            "has_coords": True
-                                        }
+                            coords = await self._parse_wikipedia_coordinates(page_html, name)
+                            if coords:
+                                lat, lon = coords
+                                lat_f = float(lat)
+                                lon_f = float(lon)
+                                if self._check_coordinate_in_district(lat_f, lon_f, TVER_BOUNDS_EXTENDED):
+                                    found_count += 1
+                                    logger.info(f"      ✅ Wikipedia: найдены координаты для {name} в странице поселения {title} через парсинг: {lat}, {lon}")
+                                    return name, {
+                                        "name": name,
+                                        "type": village['type'],
+                                        "lat": lat,
+                                        "lon": lon,
+                                        "district": district,
+                                        "has_coords": True
+                                    }
                         
-                        await asyncio.sleep(0.1)
+                        await asyncio.sleep(0.3)
                         
                 except Exception as e:
                     logger.debug(f"      ❌ Ошибка поиска в поселениях для {name}: {e}")
@@ -2254,7 +2236,6 @@ class APISourceManager:
                 logger.debug(f"      ❌ Wikipedia: координаты не найдены для {name}")
                 return None, None
         
-        # Запускаем все задачи параллельно
         tasks = [fetch_one(v) for v in villages]
         results = await asyncio.gather(*tasks)
         
@@ -2432,6 +2413,16 @@ class APISourceManager:
                         additional_list_ids = await self._find_master_list_links(former_np_html, district)
                         
                         for list_id in additional_list_ids:
+                            # Пропускаем, если это страница бывших НП текущего СП
+                            if list_id == former_np_id:
+                                logger.info(f"      ⏭️ Пропускаем ID {list_id} (это страница бывших НП текущего СП)")
+                                continue
+                            
+                            # Пропускаем, если это страница бывших НП уже обработана
+                            if list_id in self.processed_former_np_ids:
+                                logger.info(f"      ⏭️ Пропускаем ID {list_id} (уже обработана как страница бывших НП)")
+                                continue
+                            
                             if list_id not in processed_master_lists and list_id not in self.processed_article_ids:
                                 list_info = await self._get_article_info(list_id)
                                 if list_info and self._check_district_in_text(list_info.get('title', ''), district):
