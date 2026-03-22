@@ -317,6 +317,18 @@ class APISourceManager:
         except:
             return False
     
+    def _normalize_text(self, text: str) -> str:
+        """Нормализует текст: убирает кавычки, скобки, лишние пробелы"""
+        if not text:
+            return ""
+        # Убираем различные виды кавычек
+        text = re.sub(r'[„“«»"\'`]', '', text)
+        # Убираем скобки
+        text = re.sub(r'[\(\)\[\]\{\}]', '', text)
+        # Убираем лишние пробелы
+        text = re.sub(r'\s+', ' ', text).strip()
+        return text.lower()
+    
     def _is_valid_name(self, name: str, district: str = "") -> bool:
         """Проверяет, является ли текст валидным названием населенного пункта"""
         if not name or len(name) < MIN_NAME_LENGTH or len(name) > MAX_NAME_LENGTH:
@@ -678,7 +690,7 @@ class APISourceManager:
         all_results = []
         
         for query in queries:
-            results = await self._search_with_pagination(query, max_pages=15)
+            results = await self._search_with_pagination(query, max_pages=10)
             all_results.extend(results)
             await asyncio.sleep(1.5)
         
@@ -688,65 +700,56 @@ class APISourceManager:
         district_lower = district.lower()
         settlement_lower = settlement.lower()
         
-        for result in all_results:
+        # Нормализуем название СП для сравнения
+        settlement_normalized = self._normalize_text(settlement_lower)
+        
+        # Сортируем результаты по позиции (чем выше позиция, тем выше релевантность)
+        all_results.sort(key=lambda x: x['position'] if x['position'] > 0 else 999)
+        
+        # Проверяем первые 10 результатов
+        for result in all_results[:10]:
             title_lower = result['title'].lower()
             full_text_lower = result['full_text'].lower()
             
-            # Проверяем, что страница относится к нужному району
+            # Нормализуем заголовок для сравнения
+            title_normalized = self._normalize_text(title_lower)
+            
+            # Проверяем, что результат относится к нужному району
             if district_lower not in full_text_lower and district_lower not in title_lower:
-                result['score'] = 0
                 continue
             
-            # Высокий балл за точное совпадение
-            if "список бывших" in title_lower and settlement_lower in title_lower:
-                result['score'] = 200
-            elif "бывшие" in title_lower and settlement_lower in title_lower:
-                result['score'] = 150
-            elif "список бывших" in full_text_lower and settlement_lower in full_text_lower:
-                result['score'] = 100
-            else:
-                result['score'] = self._score_settlement_relevance(result, settlement, district)
+            # Проверяем, что в заголовке есть "бывших"
+            if 'бывших' not in title_lower and 'бывшие' not in title_lower:
+                continue
             
-            # Бонус за упоминание района
-            if district_lower in full_text_lower:
-                result['score'] += 20
+            # Проверяем, что в заголовке есть название СП (с учётом нормализации)
+            if settlement_normalized not in title_normalized:
+                continue
             
-            # Бонус за "Тверская область"
-            if "тверская область" in full_text_lower or "тверской области" in full_text_lower:
-                result['score'] += 15
-            
-            # Бонус за наличие "населённых пунктов" в тексте
-            if "населённых пунктов" in full_text_lower or "населенных пунктов" in full_text_lower:
-                result['score'] += 15
-            
-            # Штраф, если в названии есть "сельское поселение" (это страница СП, а не бывших НП)
-            if "сельское поселение" in title_lower and "список бывших" not in title_lower:
-                result['score'] -= 30
-        
-        # Фильтруем результаты с достаточным score
-        filtered_results = [r for r in all_results if r['score'] >= 40]
-        
-        if not filtered_results:
-            return None
-        
-        # Сортируем по score
-        filtered_results.sort(key=lambda x: x['score'], reverse=True)
-        
-        # Проверяем лучшие результаты
-        for result in filtered_results[:5]:
+            # Загружаем страницу для проверки
             page_url = DIC_ACADEMIC_ARTICLE_URL.format(result['id'])
             html = await self._fetch_page(page_url)
-            if html:
-                soup = BeautifulSoup(html, 'html.parser')
-                # Проверяем, что страница содержит таблицы с бывшими НП
-                tables = soup.find_all('table', class_=['standard', 'sortable'])
-                if tables:
-                    logger.info(f"      Найдена страница бывших НП для СП {settlement} (ID: {result['id']}, score: {result['score']})")
+            
+            if not html:
+                continue
+            
+            soup = BeautifulSoup(html, 'html.parser')
+            
+            # Проверяем наличие таблицы с бывшими НП
+            tables = soup.find_all('table', class_=['standard', 'sortable'])
+            
+            for table in tables:
+                # Проверяем, есть ли колонка "Координаты" или "Год упразднения"
+                headers = [h.get_text().strip().lower() for h in table.find_all('th')]
+                has_coords = any('координат' in h for h in headers)
+                has_year = any('год' in h and ('упраздн' in h or 'упразднения' in h) for h in headers)
+                
+                if has_coords or has_year:
+                    logger.info(f"      Найдена страница бывших НП для СП {settlement} (ID: {result['id']}, позиция: {result['position']})")
                     self.former_np_pages_cache[cache_key] = result['id']
                     return result['id']
-                else:
-                    logger.debug(f"      Страница ID {result['id']} не содержит таблиц, пропускаем")
         
+        logger.debug(f"      Страница бывших НП для СП {settlement} не найдена")
         return None
     
     async def _find_settlement_main_page(self, settlement: str, district: str) -> Optional[str]:
