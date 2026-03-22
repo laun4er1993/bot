@@ -35,11 +35,6 @@ logger = logging.getLogger(__name__)
 class APISourceManager:
     """
     Универсальный менеджер для загрузки данных из dic.academic.ru и Wikipedia
-    
-    Алгоритм:
-    1. Сбор НП с dic.academic.ru (общие списки, бывшие НП, сельские поселения)
-    2. Поиск координат на dic.academic.ru (по ссылкам из СП)
-    3. Для НП без координат - поиск на Wikipedia
     """
     
     def __init__(self):
@@ -59,11 +54,11 @@ class APISourceManager:
         self.page_cache: Dict[str, Tuple[str, float]] = {}
         self.processed_article_ids: Set[str] = set()
         
-        # Словарь для хранения ссылок на отдельные страницы НП (с dic.academic.ru)
-        self.village_links: Dict[str, str] = {}  # название НП -> ID статьи
+        # Словарь для хранения ссылок на отдельные страницы НП
+        self.village_links: Dict[str, str] = {}
         
         # Словарь для хранения Wikipedia ссылок на НП
-        self.wikipedia_links: Dict[str, str] = {}  # название НП -> URL статьи
+        self.wikipedia_links: Dict[str, str] = {}
         
         # Кэш координат из Wikipedia
         self.wikipedia_coords_cache: Dict[str, Tuple[str, str]] = {}
@@ -97,8 +92,8 @@ class APISourceManager:
         }
         
         # Параллельные запросы
-        self.max_concurrent_requests = 3   # к Wikipedia
-        self.max_concurrent_dic = 2        # к dic.academic.ru
+        self.max_concurrent_requests = 3
+        self.max_concurrent_dic = 2
         
         # Стандартные заголовки
         self.default_headers = {
@@ -310,41 +305,111 @@ class APISourceManager:
         except:
             return False
     
-    def _is_valid_name(self, name: str) -> bool:
+    def _is_valid_name(self, name: str, district: str = "") -> bool:
+        """Проверяет, является ли текст валидным названием населенного пункта"""
         if not name or len(name) < MIN_NAME_LENGTH or len(name) > MAX_NAME_LENGTH:
             return False
         
         name_lower = name.lower()
+        
+        # Проверка на служебные слова
         for word in SERVICE_VILLAGE_WORDS:
             if word in name_lower:
                 return False
         
+        # Проверка на наличие русских букв
         if not re.search(r'[а-яА-ЯёЁ]', name):
             return False
         
         if name.isdigit():
             return False
         
+        # Фильтрация явно невалидных названий
+        if any(x in name_lower for x in ['фильм', 'сериал', 'картина', 'спектакль', 'трасса', 'дорога', 'система', 'гидросистема', 'водохранилище']):
+            return False
+        
+        # Фильтрация фамилий с инициалами
+        if re.search(r'[А-Я]\.\s*[А-Я]\.', name):
+            return False
+        if re.search(r'[А-Я][а-я]+\s+[А-Я]\.', name):
+            return False
+        
+        # Фильтрация известных личностей
+        for personality in KNOWN_PERSONALITIES:
+            if personality.lower() in name_lower:
+                return False
+        
+        # Фильтрация названий из других регионов
+        other_regions = ['ростовская', 'рязанская', 'волгоградская', 'пермский', 'удмуртия', 'московская']
+        for region in other_regions:
+            if region in name_lower:
+                return False
+        
+        # Фильтрация служебных названий
+        if name_lower in ['список', 'категория', 'статья', 'примечания', 'ссылки', 'культура', 'искусство']:
+            return False
+        
+        # Проверка, что название не начинается с цифры
+        if name[0].isdigit():
+            return False
+        
         return True
     
-    def _is_valid_settlement_name(self, name: str) -> bool:
+    def _is_valid_settlement_name(self, name: str, district: str = "") -> bool:
+        """Проверяет, является ли текст валидным названием сельского поселения"""
         if not name or len(name) < 3 or len(name) > 50:
             return False
         
         name_lower = name.lower()
         
+        # Проверка на даты
         if re.match(r'^\d+\s+(мая|января|февраля|марта|апреля|июня|июля|августа|сентября|октября|ноября|декабря)', name_lower):
             return False
         
         if name.isdigit():
             return False
         
+        # Проверка на служебные слова
         for word in SERVICE_SETTLEMENT_WORDS:
             if word in name_lower:
                 return False
         
+        # Проверка на наличие русских букв
         if not re.search(r'[а-яА-ЯёЁ]', name):
             return False
+        
+        # Фильтрация людей
+        if re.search(r'[А-Я]\.\s*[А-Я]\.', name):
+            return False
+        if re.search(r'[А-Я][а-я]+\s+[А-Я]\.', name):
+            return False
+        if re.search(r'[А-Я][а-я]+\s+[А-Я][а-я]+', name) and len(name.split()) >= 2:
+            return False
+        
+        # Фильтрация известных личностей
+        for personality in KNOWN_PERSONALITIES:
+            if personality.lower() in name_lower:
+                return False
+        
+        # Фильтрация названий из других регионов
+        other_regions = ['ростовская', 'рязанская', 'волгоградская', 'пермский']
+        for region in other_regions:
+            if region in name_lower:
+                return False
+        
+        # Фильтрация мусорных названий
+        if any(x in name_lower for x in ['водохранилище', 'культура', 'список', 'категория']):
+            return False
+        
+        # Проверка, что это сельское поселение или похоже
+        if 'сельское поселение' not in name_lower and 'сельсовет' not in name_lower:
+            # Проверяем, не является ли это названием города
+            if name_lower in ['зубцов', 'ржев', 'осташков', 'торжок']:
+                return False
+            # Проверяем, не является ли это названием водоёма
+            if 'водохранилище' in name_lower:
+                return False
+            return True
         
         return True
     
@@ -464,10 +529,13 @@ class APISourceManager:
             return False
     
     async def _extract_settlements_from_page(self, html: str, district: str) -> List[str]:
+        """Извлекает список сельских поселений со страницы района с усиленной фильтрацией"""
         try:
             soup = BeautifulSoup(html, 'html.parser')
             found_settlements = []
+            district_lower = district.lower()
             
+            # Ищем раздел "Сельские поселения" или "Муниципальное устройство"
             for header in soup.find_all(['h2', 'h3', 'h4']):
                 header_text = header.get_text().lower()
                 if any(keyword in header_text for keyword in SETTLEMENT_KEYWORDS):
@@ -481,26 +549,27 @@ class APISourceManager:
                                     text = re.sub(r'\[[0-9]+\]', '', text).strip()
                                     text = re.sub(r'\s+', ' ', text).strip()
                                     
-                                    match = re.search(r'«([^»]+)»', text)
-                                    if match:
-                                        settlement = match.group(1).strip()
-                                    else:
-                                        settlement = re.sub(r'^сельское\s+поселение\s*', '', text, flags=re.IGNORECASE)
-                                        settlement = re.sub(r'\s+\(.*?\)', '', settlement).strip()
-                                    
-                                    if settlement and len(settlement) > 2:
-                                        if not re.match(r'^\d+\s+(мая|января|февраля|марта|апреля|июня|июля|августа|сентября|октября|ноября|декабря)', settlement, re.IGNORECASE):
-                                            if self._is_valid_settlement_name(settlement):
+                                    # Проверяем, что это ссылка на сельское поселение
+                                    if 'сельское поселение' in text.lower() or 'сельсовет' in text.lower():
+                                        match = re.search(r'«([^»]+)»', text)
+                                        if match:
+                                            settlement = match.group(1).strip()
+                                        else:
+                                            settlement = re.sub(r'^сельское\s+поселение\s*', '', text, flags=re.IGNORECASE)
+                                            settlement = re.sub(r'\s+\(.*?\)', '', settlement).strip()
+                                        
+                                        if settlement and len(settlement) > 2:
+                                            if self._is_valid_settlement_name(settlement, district_lower):
                                                 found_settlements.append(settlement)
                                     else:
+                                        # Если это просто ссылка, проверяем текст
                                         link_text = link.get_text().strip()
                                         if link_text and len(link_text) > 2:
                                             clean_text = re.sub(r'^сельское\s+поселение\s*', '', link_text, flags=re.IGNORECASE)
                                             clean_text = re.sub(r'\s+\(.*?\)', '', clean_text).strip()
                                             if clean_text and len(clean_text) > 2:
-                                                if not re.match(r'^\d+\s+(мая|января)', clean_text, re.IGNORECASE):
-                                                    if self._is_valid_settlement_name(clean_text):
-                                                        found_settlements.append(clean_text)
+                                                if self._is_valid_settlement_name(clean_text, district_lower):
+                                                    found_settlements.append(clean_text)
                         
                         for table in parent.find_all('table', class_=['standard', 'wikitable', 'sortable']):
                             for row in table.find_all('tr'):
@@ -517,14 +586,14 @@ class APISourceManager:
                                                 settlement = re.sub(r'\s+\(.*?\)', '', settlement).strip()
                                             
                                             if settlement and len(settlement) > 2:
-                                                if not re.match(r'^\d+\s+(мая|января)', settlement, re.IGNORECASE):
-                                                    if self._is_valid_settlement_name(settlement):
-                                                        found_settlements.append(settlement)
+                                                if self._is_valid_settlement_name(settlement, district_lower):
+                                                    found_settlements.append(settlement)
             
+            # Если не нашли через заголовки, ищем по прямым ссылкам
             if not found_settlements:
                 for link in soup.find_all('a', href=re.compile(r'/dic\.nsf/ruwiki/\d+')):
                     link_text = link.get_text().strip()
-                    if 'сельское поселение' in link_text.lower():
+                    if 'сельское поселение' in link_text.lower() or 'сельсовет' in link_text.lower():
                         match = re.search(r'«([^»]+)»', link_text)
                         if match:
                             settlement = match.group(1).strip()
@@ -533,10 +602,10 @@ class APISourceManager:
                             settlement = re.sub(r'\s+\(.*?\)', '', settlement).strip()
                         
                         if settlement and len(settlement) > 2:
-                            if not re.match(r'^\d+\s+(мая|января)', settlement, re.IGNORECASE):
-                                if self._is_valid_settlement_name(settlement):
-                                    found_settlements.append(settlement)
+                            if self._is_valid_settlement_name(settlement, district_lower):
+                                found_settlements.append(settlement)
             
+            # Убираем дубликаты и фильтруем
             unique_settlements = sorted(list(set(found_settlements)))
             valid_settlements = []
             for s in unique_settlements:
@@ -544,7 +613,7 @@ class APISourceManager:
                     continue
                 if len(s) < 3:
                     continue
-                if any(word in s.lower() for word in ['список', 'статья', 'категория']):
+                if any(word in s.lower() for word in ['список', 'статья', 'категория', 'информация', 'сведения', 'культура']):
                     continue
                 valid_settlements.append(s)
             
@@ -583,14 +652,38 @@ class APISourceManager:
         
         for result in all_results:
             title_lower = result['title'].lower()
+            full_text_lower = result['full_text'].lower()
+            district_lower = district.lower()
+            
+            if district_lower not in full_text_lower and district_lower not in title_lower:
+                result['score'] = 0
+                continue
+            
             if "список бывших" in title_lower and settlement.lower() in title_lower:
                 result['score'] = 150
             else:
                 result['score'] = self._score_settlement_relevance(result, settlement, district)
+            
+            if district_lower in full_text_lower:
+                result['score'] += 20
         
-        best = max(all_results, key=lambda x: x['score'])
+        filtered_results = [r for r in all_results if r['score'] >= 50 and district.lower() in (r['full_text'].lower() + r['title'].lower())]
         
+        if not filtered_results:
+            return None
+        
+        best = max(filtered_results, key=lambda x: x['score'])
+        
+        # Проверяем, что страница содержит таблицы с НП (не универсальная заглушка)
         if best['score'] >= 50:
+            page_url = DIC_ACADEMIC_ARTICLE_URL.format(best['id'])
+            html = await self._fetch_page(page_url)
+            if html:
+                soup = BeautifulSoup(html, 'html.parser')
+                tables = soup.find_all('table', class_=['standard', 'sortable'])
+                if not tables:
+                    logger.debug(f"      Страница ID {best['id']} не содержит таблиц, пропускаем")
+                    return None
             logger.info(f"      Найдена страница бывших НП для СП {settlement} (ID: {best['id']}, score: {best['score']})")
             self.former_np_pages_cache[cache_key] = best['id']
             return best['id']
@@ -628,6 +721,35 @@ class APISourceManager:
         best = max(all_results, key=lambda x: x['score'])
         
         if best['score'] >= 40:
+            # Проверяем, что это не страница района и не мусорная страница
+            page_url = DIC_ACADEMIC_ARTICLE_URL.format(best['id'])
+            html = await self._fetch_page(page_url)
+            if html:
+                soup = BeautifulSoup(html, 'html.parser')
+                title_elem = soup.find('h1')
+                title_text = title_elem.get_text().lower() if title_elem else ""
+                
+                # Пропускаем страницы района
+                if "район" in title_text and "сельское поселение" not in title_text:
+                    logger.debug(f"      Пропускаем страницу района: {best['id']} - {title_text}")
+                    return None
+                
+                # Пропускаем страницы городов
+                if settlement.lower() in ['зубцов', 'ржев', 'осташков', 'торжок'] and "район" not in title_text:
+                    logger.debug(f"      Пропускаем страницу города: {best['id']} - {title_text}")
+                    return None
+                
+                # Проверяем, что страница содержит раздел с населенными пунктами
+                has_settlements = False
+                for header in soup.find_all(['h2', 'h3', 'h4']):
+                    if any(kw in header.get_text().lower() for kw in SETTLEMENTS_SECTION_KEYWORDS):
+                        has_settlements = True
+                        break
+                if not has_settlements:
+                    tables = soup.find_all('table', class_=['standard', 'sortable', 'wikitable'])
+                    if not tables:
+                        logger.debug(f"      Страница ID {best['id']} не содержит НП, пропускаем")
+                        return None
             logger.info(f"      Найдена основная страница СП {settlement} (ID: {best['id']}, score: {best['score']})")
             self.settlement_pages_cache[cache_key] = best['id']
             return best['id']
@@ -647,6 +769,8 @@ class APISourceManager:
         
         if "сельское поселение" in title_lower:
             score += 40
+        elif "сельское поселение" in full_text_lower:
+            score += 20
         
         if district_lower in title_lower or district_lower in full_text_lower:
             score += 20
@@ -663,6 +787,15 @@ class APISourceManager:
         html = await self._fetch_page(url)
         
         if not html:
+            return []
+        
+        # Проверяем, что страница относится к нужному району
+        soup = BeautifulSoup(html, 'html.parser')
+        page_text = soup.get_text().lower()
+        district_lower = district.lower()
+        
+        if district_lower not in page_text:
+            logger.debug(f"      Страница ID {article_id} не относится к району {district}, пропускаем")
             return []
         
         loop = asyncio.get_event_loop()
@@ -713,7 +846,7 @@ class APISourceManager:
                         if not name or name in ['ИТОГО', 'Всего']:
                             continue
                         
-                        if not self._is_valid_name(name):
+                        if not self._is_valid_name(name, district):
                             continue
                         
                         village_type = 'деревня'
@@ -729,6 +862,7 @@ class APISourceManager:
                             row_text = ' '.join([c.get_text() for c in cells])
                             lat, lon = parse_dic_coordinates(row_text, None)
                         
+                        # Если есть координаты, проверяем, что они в Тверской области
                         if lat and lon and validate_coordinates(lat, lon):
                             self.coords_stats['from_former'] += 1
                         else:
@@ -757,6 +891,15 @@ class APISourceManager:
         html = await self._fetch_page(url)
         
         if not html:
+            return []
+        
+        # Проверяем, что страница относится к нужному району
+        soup = BeautifulSoup(html, 'html.parser')
+        page_text = soup.get_text().lower()
+        district_lower = district.lower()
+        
+        if district_lower not in page_text:
+            logger.debug(f"      Страница ID {article_id} не относится к району {district}, пропускаем")
             return []
         
         loop = asyncio.get_event_loop()
@@ -891,10 +1034,10 @@ class APISourceManager:
                         name = re.sub(r'^\d+\s*', '', name)
                         name = re.sub(r'\s+', ' ', name).strip()
                         
-                        if not name or len(name) < 2:
+                        if not name or len(name) < MIN_NAME_LENGTH or len(name) > MAX_NAME_LENGTH:
                             continue
                         
-                        if not self._is_valid_name(name):
+                        if not self._is_valid_name(name, district):
                             continue
                         
                         link = name_cell.find('a')
@@ -931,10 +1074,10 @@ class APISourceManager:
                                 name = re.sub(r'^\d+\s*', '', name)
                                 name = re.sub(r'\s+', ' ', name).strip()
                                 
-                                if not name or len(name) < 2:
+                                if not name or len(name) < MIN_NAME_LENGTH or len(name) > MAX_NAME_LENGTH:
                                     continue
                                 
-                                if not self._is_valid_name(name):
+                                if not self._is_valid_name(name, district):
                                     continue
                                 
                                 type_text = 'деревня'
@@ -985,10 +1128,30 @@ class APISourceManager:
                 name = re.sub(r'^\d+\s*', '', name)
                 name = re.sub(r'\s+', ' ', name).strip()
                 
-                if not name or len(name) < 2 or name in seen_names:
+                if not name or len(name) < MIN_NAME_LENGTH or len(name) > MAX_NAME_LENGTH:
+                    continue
+                if name in seen_names:
                     continue
                 
-                if not self._is_valid_name(name):
+                # Жесткая фильтрация мусора
+                if not self._is_valid_name(name, district):
+                    continue
+                
+                # Пропускаем имена людей
+                if re.search(r'[А-Я]\.\s*[А-Я]\.', name):
+                    continue
+                if re.search(r'[А-Я][а-я]+\s+[А-Я]\.', name):
+                    continue
+                if re.search(r'[А-Я][а-я]+\s+[А-Я][а-я]+', name) and len(name.split()) >= 2:
+                    continue
+                
+                # Пропускаем названия из других регионов
+                other_regions = ['ростовская', 'рязанская', 'волгоградская', 'пермский', 'удмуртия']
+                if any(region in name.lower() for region in other_regions):
+                    continue
+                
+                # Пропускаем служебные названия
+                if any(word in name.lower() for word in ['список', 'категория', 'фильм', 'сериал', 'статья', 'трасса', 'дорога', 'система', 'водохранилище']):
                     continue
                 
                 village_type = 'деревня'
@@ -1030,6 +1193,7 @@ class APISourceManager:
         try:
             soup = BeautifulSoup(html, 'html.parser')
             found_ids = []
+            district_lower = district.lower()
             
             for link in soup.find_all('a', href=re.compile(r'/dic\.nsf/ruwiki/\d+')):
                 href = link.get('href', '')
@@ -1044,12 +1208,14 @@ class APISourceManager:
                 
                 for keyword in LIST_KEYWORDS:
                     if keyword in full_context:
-                        match = re.search(r'/dic\.nsf/ruwiki/(\d+)', href)
-                        if match:
-                            article_id = match.group(1)
-                            found_ids.append(article_id)
-                            logger.info(f"      Найдена ссылка на список НП: ID {article_id} - {link.get_text()}")
-                            break
+                        # Проверяем, что ссылка относится к нужному району
+                        if district_lower in full_context:
+                            match = re.search(r'/dic\.nsf/ruwiki/(\d+)', href)
+                            if match:
+                                article_id = match.group(1)
+                                found_ids.append(article_id)
+                                logger.info(f"      Найдена ссылка на список НП: ID {article_id} - {link.get_text()}")
+                                break
             
             see_also_patterns = ['см. также', 'смотри также', 'см также']
             
@@ -1063,13 +1229,14 @@ class APISourceManager:
                             
                             for keyword in LIST_KEYWORDS:
                                 if keyword in text:
-                                    match = re.search(r'/dic\.nsf/ruwiki/(\d+)', href)
-                                    if match:
-                                        article_id = match.group(1)
-                                        if article_id not in found_ids:
-                                            found_ids.append(article_id)
-                                            logger.info(f"      Найдена ссылка на список НП в 'См. также': ID {article_id} - {link.get_text()}")
-                                        break
+                                    if district_lower in text:
+                                        match = re.search(r'/dic\.nsf/ruwiki/(\d+)', href)
+                                        if match:
+                                            article_id = match.group(1)
+                                            if article_id not in found_ids:
+                                                found_ids.append(article_id)
+                                                logger.info(f"      Найдена ссылка на список НП в 'См. также': ID {article_id} - {link.get_text()}")
+                                            break
             
             return list(set(found_ids))
             
@@ -1082,6 +1249,15 @@ class APISourceManager:
         html = await self._fetch_page(url)
         
         if not html:
+            return []
+        
+        # Проверяем, что страница относится к нужному району
+        soup = BeautifulSoup(html, 'html.parser')
+        page_text = soup.get_text().lower()
+        district_lower = district.lower()
+        
+        if district_lower not in page_text:
+            logger.debug(f"      Страница ID {article_id} не относится к району {district}, пропускаем")
             return []
         
         loop = asyncio.get_event_loop()
@@ -1151,7 +1327,7 @@ class APISourceManager:
                         name = re.sub(r'^\d+\s*', '', name)
                         name = re.sub(r'\s+', ' ', name).strip()
                         
-                        if not self._is_valid_name(name):
+                        if not self._is_valid_name(name, district):
                             continue
                         
                         village_type = 'деревня'
@@ -1184,8 +1360,6 @@ class APISourceManager:
             return []
     
     async def _parse_individual_village_page(self, article_id: str, district: str) -> Optional[Dict]:
-        """Парсит отдельную страницу населенного пункта для извлечения координат (dic.academic.ru)"""
-        # Увеличиваем задержку для dic.academic.ru
         await asyncio.sleep(random.uniform(1.5, 3.0))
         
         url = DIC_ACADEMIC_ARTICLE_URL.format(article_id)
@@ -1228,7 +1402,7 @@ class APISourceManager:
                     name = full_title.replace(f', {possible_type}', '').strip()
                     village_type = expand_type(possible_type)
             
-            if not self._is_valid_name(name):
+            if not self._is_valid_name(name, district):
                 logger.debug(f"        ❌ Невалидное название: {name}")
                 return None
             
@@ -1544,7 +1718,7 @@ class APISourceManager:
                     name = re.sub(r'\[\d+\]', '', name).strip()
                     name = re.sub(r'^\d+\s*', '', name).strip()
                     
-                    if name and self._is_valid_name(name):
+                    if name and self._is_valid_name(name, district):
                         full_url = f"{WIKIPEDIA_BASE_URL}{link['href']}"
                         links[name] = full_url
                         logger.debug(f"      🔗 Найдена ссылка из таблицы: {name}")
@@ -1561,7 +1735,7 @@ class APISourceManager:
                     name = re.sub(r'\[\d+\]', '', name).strip()
                     name = re.sub(r'^\d+\s*', '', name).strip()
                     
-                    if name and self._is_valid_name(name):
+                    if name and self._is_valid_name(name, district):
                         full_url = f"{WIKIPEDIA_BASE_URL}{href}"
                         links[name] = full_url
                         logger.debug(f"      🔗 Найдена ссылка из списка: {name}")
@@ -1590,15 +1764,16 @@ class APISourceManager:
             
             if coords:
                 lat, lon = coords
-                logger.info(f"      ✅ Wikipedia: найдены координаты для {village_name}: {lat}, {lon}")
-                return {
-                    "name": village_name,
-                    "type": 'деревня',
-                    "lat": lat,
-                    "lon": lon,
-                    "district": district,
-                    "has_coords": True
-                }
+                if validate_coordinates(float(lat), float(lon)):
+                    logger.info(f"      ✅ Wikipedia: найдены координаты для {village_name}: {lat}, {lon}")
+                    return {
+                        "name": village_name,
+                        "type": 'деревня',
+                        "lat": lat,
+                        "lon": lon,
+                        "district": district,
+                        "has_coords": True
+                    }
             
             return None
             
@@ -1795,7 +1970,6 @@ class APISourceManager:
             logger.info(f"    • Сохраненных ссылок на dic.academic.ru: {len(self.village_links)}")
             
             # ========== 1. СНАЧАЛА ИЩЕМ КООРДИНАТЫ ПО ССЫЛКАМ ИЗ СП (DIC.ACADEMIC.RU) ==========
-            # Сортируем НП без координат: сначала те, у кого есть ссылка на dic.academic.ru
             with_links = [v for v in villages_without_coords if v['name'] in self.village_links]
             without_links = [v for v in villages_without_coords if v['name'] not in self.village_links]
             
@@ -1803,7 +1977,6 @@ class APISourceManager:
             logger.info(f"    • С ссылками: {len(with_links)}")
             logger.info(f"    • Без ссылок: {len(without_links)}")
             
-            # Обрабатываем сначала деревни/села/посёлки, потом остальные
             priority_with = [v for v in with_links if v['type'] in ['деревня', 'село', 'посёлок']]
             other_with = [v for v in with_links if v['type'] not in ['деревня', 'село', 'посёлок']]
             priority_without = [v for v in without_links if v['type'] in ['деревня', 'село', 'посёлок']]
@@ -1814,7 +1987,6 @@ class APISourceManager:
             link_found = 0
             total_to_process = len(sorted_for_coords)
             
-            # Параллельная обработка dic.academic.ru
             semaphore_dic = asyncio.Semaphore(self.max_concurrent_dic)
             
             async def fetch_dic(village, idx):
@@ -1828,7 +2000,6 @@ class APISourceManager:
                             return name, coords_data
                     return None, None
             
-            # Обрабатываем небольшими партиями
             batch_size = 10
             for batch_start in range(0, total_to_process, batch_size):
                 batch_end = min(batch_start + batch_size, total_to_process)
@@ -1850,7 +2021,7 @@ class APISourceManager:
                                 break
                 
                 logger.info(f"      Обработано {batch_end}/{total_to_process} записей, найдено {link_found}")
-                await asyncio.sleep(2.0)  # пауза между батчами
+                await asyncio.sleep(2.0)
             
             logger.info(f"  ✅ Найдено координат на dic.academic.ru: {link_found}")
             
@@ -1862,7 +2033,6 @@ class APISourceManager:
                 logger.info(f"  📊 Осталось без координат после dic.academic.ru: {total_without}")
                 logger.info(f"  🌐 Поиск координат на Wikipedia...")
                 
-                # Находим страницу района на Wikipedia
                 wikipedia_page_url = await self._find_wikipedia_district_page(district)
                 wikipedia_links = {}
                 
@@ -1872,7 +2042,6 @@ class APISourceManager:
                 else:
                     logger.warning(f"  ⚠️ Страница района на Wikipedia не найдена")
                 
-                # Сортируем НП без координат: сначала те, у кого есть ссылки в Wikipedia
                 with_wiki_links = [v for v in villages_without_coords if v['name'] in wikipedia_links]
                 without_wiki_links = [v for v in villages_without_coords if v['name'] not in wikipedia_links]
                 
@@ -1890,7 +2059,6 @@ class APISourceManager:
                 wiki_found = 0
                 total_to_process = len(sorted_for_wiki)
                 
-                # Параллельные запросы к Wikipedia
                 semaphore_wiki = asyncio.Semaphore(self.max_concurrent_requests)
                 
                 async def fetch_wiki(village, idx):
@@ -1898,7 +2066,6 @@ class APISourceManager:
                         name = village['name']
                         await asyncio.sleep(random.uniform(1.0, 2.5))
                         
-                        # Пробуем прямую ссылку
                         encoded_name = quote_plus(name)
                         direct_url = f"{WIKIPEDIA_BASE_URL}/wiki/{encoded_name}"
                         
@@ -1923,7 +2090,6 @@ class APISourceManager:
                                                 "has_coords": True
                                             }
                         
-                        # Если не нашли, пробуем по ссылке из Wikipedia
                         if name in wikipedia_links:
                             wiki_url = wikipedia_links[name]
                             coords_data = await self._get_wikipedia_coordinates(wiki_url, name, district)
@@ -1932,7 +2098,6 @@ class APISourceManager:
                         
                         return None, None
                 
-                # Обрабатываем партиями по 10 НП
                 batch_size = 10
                 for batch_start in range(0, total_to_process, batch_size):
                     batch_end = min(batch_start + batch_size, total_to_process)
@@ -1954,7 +2119,7 @@ class APISourceManager:
                                     break
                     
                     logger.info(f"      Обработано {batch_end}/{total_to_process} записей, найдено {wiki_found}")
-                    await asyncio.sleep(2.0)  # пауза между батчами
+                    await asyncio.sleep(2.0)
                 
                 logger.info(f"  ✅ Найдено координат на Wikipedia: {wiki_found}")
             
@@ -1980,7 +2145,6 @@ class APISourceManager:
         final_with_coords = sum(1 for v in all_villages if v.get('has_coords'))
         all_villages.sort(key=lambda x: x['name'])
         
-        # Удаляем поле has_coords из финальных данных
         for v in all_villages:
             if 'has_coords' in v:
                 del v['has_coords']
