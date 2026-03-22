@@ -321,11 +321,8 @@ class APISourceManager:
         """Нормализует текст: убирает кавычки, скобки, лишние пробелы"""
         if not text:
             return ""
-        # Убираем различные виды кавычек
         text = re.sub(r'[„“«»"\'`]', '', text)
-        # Убираем скобки
         text = re.sub(r'[\(\)\[\]\{\}]', '', text)
-        # Убираем лишние пробелы
         text = re.sub(r'\s+', ' ', text).strip()
         return text.lower()
     
@@ -336,44 +333,36 @@ class APISourceManager:
         
         name_lower = name.lower()
         
-        # Проверка на служебные слова
         for word in SERVICE_VILLAGE_WORDS:
             if word in name_lower:
                 return False
         
-        # Проверка на наличие русских букв
         if not re.search(r'[а-яА-ЯёЁ]', name):
             return False
         
         if name.isdigit():
             return False
         
-        # Фильтрация явно невалидных названий
         if any(x in name_lower for x in ['фильм', 'сериал', 'картина', 'спектакль', 'трасса', 'дорога', 'система', 'гидросистема', 'водохранилище']):
             return False
         
-        # Фильтрация фамилий с инициалами
         if re.search(r'[А-Я]\.\s*[А-Я]\.', name):
             return False
         if re.search(r'[А-Я][а-я]+\s+[А-Я]\.', name):
             return False
         
-        # Фильтрация известных личностей
         for personality in KNOWN_PERSONALITIES:
             if personality.lower() in name_lower:
                 return False
         
-        # Фильтрация названий из других регионов
         other_regions = ['ростовская', 'рязанская', 'волгоградская', 'пермский', 'удмуртия', 'московская', 'владимирская', 'калужская']
         for region in other_regions:
             if region in name_lower:
                 return False
         
-        # Фильтрация служебных названий
         if name_lower in ['список', 'категория', 'статья', 'примечания', 'ссылки', 'культура', 'искусство']:
             return False
         
-        # Проверка, что название не начинается с цифры
         if name[0].isdigit():
             return False
         
@@ -386,23 +375,19 @@ class APISourceManager:
         
         name_lower = name.lower()
         
-        # Проверка на даты
         if re.match(r'^\d+\s+(мая|января|февраля|марта|апреля|июня|июля|августа|сентября|октября|ноября|декабря)', name_lower):
             return False
         
         if name.isdigit():
             return False
         
-        # Проверка на служебные слова
         for word in SERVICE_SETTLEMENT_WORDS:
             if word in name_lower:
                 return False
         
-        # Проверка на наличие русских букв
         if not re.search(r'[а-яА-ЯёЁ]', name):
             return False
         
-        # Фильтрация людей
         if re.search(r'[А-Я]\.\s*[А-Я]\.', name):
             return False
         if re.search(r'[А-Я][а-я]+\s+[А-Я]\.', name):
@@ -410,22 +395,19 @@ class APISourceManager:
         if re.search(r'[А-Я][а-я]+\s+[А-Я][а-я]+', name) and len(name.split()) >= 2:
             return False
         
-        # Фильтрация известных личностей
         for personality in KNOWN_PERSONALITIES:
             if personality.lower() in name_lower:
                 return False
         
-        # Фильтрация названий из других регионов
         other_regions = ['ростовская', 'рязанская', 'волгоградская', 'пермский']
         for region in other_regions:
             if region in name_lower:
                 return False
         
-        # Фильтрация мусорных названий
         if any(x in name_lower for x in ['водохранилище', 'культура', 'список', 'категория', 'уезд']):
             return False
         
-        # Если в названии есть "сельское поселение", убираем его для проверки
+        # Если в названии есть "сельское поселение", убираем его
         if 'сельское поселение' in name_lower or 'сельсовет' in name_lower:
             name_clean = re.sub(r'^сельское\s+поселение\s*', '', name_lower, flags=re.IGNORECASE)
             name_clean = re.sub(r'\s+\(.*?\)', '', name_clean).strip()
@@ -445,7 +427,6 @@ class APISourceManager:
     # ========== ОПРЕДЕЛЕНИЕ ГРАНИЦ РАЙОНА ==========
     
     async def _get_district_bounds(self, district: str, district_html: str = None) -> Dict[str, float]:
-        """Определяет границы района"""
         if district in self.district_bounds_cache:
             return self.district_bounds_cache[district]
         
@@ -460,7 +441,6 @@ class APISourceManager:
         return bounds
     
     def _check_coordinate_in_district(self, lat: float, lon: float, district_bounds: Dict[str, float]) -> bool:
-        """Проверяет, находятся ли координаты в границах района"""
         return (district_bounds['min_lat'] <= lat <= district_bounds['max_lat'] and
                 district_bounds['min_lon'] <= lon <= district_bounds['max_lon'])
     
@@ -581,7 +561,6 @@ class APISourceManager:
             return False
     
     async def _extract_settlements_from_page(self, html: str, district: str) -> List[str]:
-        """Извлекает список сельских поселений со страницы района"""
         try:
             soup = BeautifulSoup(html, 'html.parser')
             found_settlements = []
@@ -690,65 +669,76 @@ class APISourceManager:
         
         all_results = []
         
+        logger.info(f"    🔍 Поиск бывших НП для СП {settlement}...")
+        
         for query in queries:
             results = await self._search_with_pagination(query, max_pages=15)
             all_results.extend(results)
+            logger.info(f"      Запрос '{query[:80]}...' дал {len(results)} результатов")
             await asyncio.sleep(1.5)
         
         if not all_results:
-            logger.debug(f"      Поиск бывших НП для СП {settlement} не дал результатов")
+            logger.info(f"      ❌ Поиск бывших НП для СП {settlement} не дал результатов")
             return None
         
-        # Нормализуем название СП для сравнения
-        settlement_normalized = self._normalize_text(settlement_lower)
+        logger.info(f"      Всего результатов поиска: {len(all_results)}")
         
-        # Сортируем результаты по позиции (чем выше позиция, тем релевантнее)
+        # Сортируем по позиции
         all_results.sort(key=lambda x: x['position'] if x['position'] > 0 else 999)
         
         # Проверяем первые 20 результатов
-        for result in all_results[:20]:
+        for i, result in enumerate(all_results[:20]):
             title_lower = result['title'].lower()
             full_text_lower = result['full_text'].lower()
             
-            # Нормализуем заголовок для сравнения
-            title_normalized = self._normalize_text(title_lower)
+            logger.info(f"        Результат {i+1}: ID {result['id']} - {result['title'][:100]}...")
             
             # Проверяем, что результат относится к нужному району
             if district_lower not in full_text_lower and district_lower not in title_lower:
+                logger.info(f"          ❌ Не относится к району {district}")
                 continue
             
             # Проверяем, что в заголовке есть "бывших"
             if 'бывших' not in title_lower and 'бывшие' not in title_lower:
+                logger.info(f"          ❌ Нет слова 'бывших' в заголовке")
                 continue
             
-            # Проверяем, что в заголовке есть название СП (с учётом нормализации)
-            if settlement_normalized not in title_normalized:
+            # Проверяем, что в заголовке есть название СП
+            if settlement_lower not in title_lower and self._normalize_text(settlement_lower) not in self._normalize_text(title_lower):
+                logger.info(f"          ❌ Нет названия СП '{settlement}' в заголовке")
                 continue
+            
+            logger.info(f"          ✅ Прошел проверки, загружаем страницу...")
             
             # Загружаем страницу для проверки
             page_url = DIC_ACADEMIC_ARTICLE_URL.format(result['id'])
             html = await self._fetch_page(page_url)
             
             if not html:
+                logger.info(f"          ❌ Не удалось загрузить страницу")
                 continue
             
             soup = BeautifulSoup(html, 'html.parser')
             
             # Проверяем наличие таблицы с бывшими НП
             tables = soup.find_all('table', class_=['standard', 'sortable'])
+            logger.info(f"          Найдено таблиц: {len(tables)}")
             
             for table in tables:
-                # Проверяем, есть ли колонка "Координаты" или "Год упразднения"
                 headers = [h.get_text().strip().lower() for h in table.find_all('th')]
                 has_coords = any('координат' in h for h in headers)
                 has_year = any('год' in h and ('упраздн' in h or 'упразднения' in h) for h in headers)
                 
+                logger.info(f"          Таблица: колонки {headers}, has_coords={has_coords}, has_year={has_year}")
+                
                 if has_coords or has_year:
-                    logger.info(f"      Найдена страница бывших НП для СП {settlement} (ID: {result['id']}, позиция: {result['position']})")
+                    logger.info(f"      ✅ Найдена страница бывших НП для СП {settlement} (ID: {result['id']})")
                     self.former_np_pages_cache[cache_key] = result['id']
                     return result['id']
+            
+            logger.info(f"          ❌ Нет таблицы с координатами или годом упразднения")
         
-        logger.debug(f"      Страница бывших НП для СП {settlement} не найдена")
+        logger.info(f"      ❌ Страница бывших НП для СП {settlement} не найдена")
         return None
     
     async def _find_settlement_main_page(self, settlement: str, district: str) -> Optional[str]:
@@ -1838,7 +1828,6 @@ class APISourceManager:
     # ========== ПАРАЛЛЕЛЬНЫЙ ПОИСК КООРДИНАТ НА WIKIPEDIA ==========
     
     async def _fetch_wikipedia_coordinates_batch(self, villages: List[Dict], district: str, district_bounds: Dict[str, float]) -> Dict[str, Dict]:
-        """Параллельно ищет координаты на Wikipedia для всех НП без координат"""
         semaphore = asyncio.Semaphore(self.max_concurrent_requests)
         
         async def fetch_one(village):
@@ -2063,7 +2052,6 @@ class APISourceManager:
             logger.info(f"    • Сохраненных ссылок на dic.academic.ru: {len(self.village_links)}")
             
             # ========== 1. СНАЧАЛА ИЩЕМ КООРДИНАТЫ НА DIC.ACADEMIC.RU ==========
-            # По ссылкам из СП
             with_links = [v for v in villages_without_coords if v['name'] in self.village_links]
             
             if with_links:
