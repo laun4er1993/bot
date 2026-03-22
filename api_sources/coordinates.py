@@ -66,6 +66,7 @@ async def parse_wikipedia_coordinates(html: str, village_name: str) -> Optional[
     1. Класс coordinates с data-param (основной формат)
     2. geo span (старый формат)
     3. DMS формат в тексте
+    4. Инфобокс с координатами
     """
     try:
         soup = BeautifulSoup(html, 'html.parser')
@@ -73,6 +74,7 @@ async def parse_wikipedia_coordinates(html: str, village_name: str) -> Optional[
         # ВАРИАНТ 1: Ищем coordinates с data-param
         coord_elem = soup.find('span', class_='coordinates')
         if coord_elem:
+            # Пробуем data-mw-kartographer
             maplink = coord_elem.find('a', class_='mw-kartographer-maplink')
             if maplink and maplink.get('data-mw-kartographer'):
                 try:
@@ -80,12 +82,12 @@ async def parse_wikipedia_coordinates(html: str, village_name: str) -> Optional[
                     if 'lat' in data and 'lon' in data:
                         lat = float(data['lat'])
                         lon = float(data['lon'])
-                        if validate_coordinates(lat, lon):
-                            logger.info(f"          ✅ Wikipedia: найдены координаты через data-param: {lat:.5f}, {lon:.5f}")
-                            return (str(round(lat, 5)), str(round(lon, 5)))
+                        logger.debug(f"          ✅ Wikipedia: найдены координаты через data-param: {lat:.5f}, {lon:.5f}")
+                        return (str(round(lat, 5)), str(round(lon, 5)))
                 except Exception as e:
                     logger.debug(f"          Ошибка парсинга data-mw-kartographer: {e}")
             
+            # Пробуем geo span
             geo = coord_elem.find('span', class_='geo')
             if geo:
                 lat_span = geo.find('span', class_='latitude')
@@ -94,13 +96,14 @@ async def parse_wikipedia_coordinates(html: str, village_name: str) -> Optional[
                     try:
                         lat = float(lat_span.get_text().strip())
                         lon = float(lon_span.get_text().strip())
-                        if validate_coordinates(lat, lon):
-                            logger.info(f"          ✅ Wikipedia: найдены координаты через geo span: {lat:.5f}, {lon:.5f}")
-                            return (str(round(lat, 5)), str(round(lon, 5)))
+                        logger.debug(f"          ✅ Wikipedia: найдены координаты через geo span: {lat:.5f}, {lon:.5f}")
+                        return (str(round(lat, 5)), str(round(lon, 5)))
                     except:
                         pass
             
+            # Пробуем DMS формат в coordinates
             coord_text = coord_elem.get_text()
+            # Формат: 56°13′41″ с.ш. 34°08′10″ в.д.
             dms_pattern = r'(\d+)°(\d+)′([\d.]+)″\s*([сю])\.[^\d]*(\d+)°(\d+)′([\d.]+)″\s*([зв])\.[^\d]*'
             match = re.search(dms_pattern, coord_text)
             if match:
@@ -116,9 +119,8 @@ async def parse_wikipedia_coordinates(html: str, village_name: str) -> Optional[
                     if lon_dir == 'з':
                         lon = -lon
                     
-                    if validate_coordinates(lat, lon):
-                        logger.info(f"          ✅ Wikipedia: найдены координаты через DMS в coordinates: {lat:.5f}, {lon:.5f}")
-                        return (str(round(lat, 5)), str(round(lon, 5)))
+                    logger.debug(f"          ✅ Wikipedia: найдены координаты через DMS в coordinates: {lat:.5f}, {lon:.5f}")
+                    return (str(round(lat, 5)), str(round(lon, 5)))
                 except:
                     pass
         
@@ -130,6 +132,7 @@ async def parse_wikipedia_coordinates(html: str, village_name: str) -> Optional[
                 if header and ('координаты' in header.get_text().lower()):
                     coord_cell = row.find('td')
                     if coord_cell:
+                        # Ищем geo span в инфобоксе
                         geo_span = coord_cell.find('span', class_='geo')
                         if geo_span:
                             lat_span = geo_span.find('span', class_='latitude')
@@ -138,16 +141,44 @@ async def parse_wikipedia_coordinates(html: str, village_name: str) -> Optional[
                                 try:
                                     lat = float(lat_span.get_text().strip())
                                     lon = float(lon_span.get_text().strip())
-                                    if validate_coordinates(lat, lon):
-                                        logger.info(f"          ✅ Wikipedia: найдены координаты в инфобоксе: {lat:.5f}, {lon:.5f}")
-                                        return (str(round(lat, 5)), str(round(lon, 5)))
+                                    logger.debug(f"          ✅ Wikipedia: найдены координаты в инфобоксе: {lat:.5f}, {lon:.5f}")
+                                    return (str(round(lat, 5)), str(round(lon, 5)))
                                 except:
                                     pass
+                        
+                        # Ищем координаты в тексте ячейки
+                        coord_text = coord_cell.get_text()
+                        dms_pattern = r'(\d+)°(\d+)′([\d.]+)″\s*([сю])\.[^\d]*(\d+)°(\d+)′([\d.]+)″\s*([зв])\.[^\d]*'
+                        match = re.search(dms_pattern, coord_text)
+                        if match:
+                            try:
+                                lat_deg, lat_min, lat_sec, lat_dir = match.group(1, 2, 3, 4)
+                                lon_deg, lon_min, lon_sec, lon_dir = match.group(5, 6, 7, 8)
+                                
+                                lat = float(lat_deg) + float(lat_min)/60 + float(lat_sec)/3600
+                                lon = float(lon_deg) + float(lon_min)/60 + float(lon_sec)/3600
+                                
+                                if lat_dir == 'ю':
+                                    lat = -lat
+                                if lon_dir == 'з':
+                                    lon = -lon
+                                
+                                logger.debug(f"          ✅ Wikipedia: найдены координаты через DMS в инфобоксе: {lat:.5f}, {lon:.5f}")
+                                return (str(round(lat, 5)), str(round(lon, 5)))
+                            except:
+                                pass
         
         # ВАРИАНТ 3: Ищем координаты в формате DMS в любом месте страницы
-        dms_pattern = r'(\d+)°(\d+)′([\d.]+)″([NS])\s+(\d+)°(\d+)′([\d.]+)″([EW])'
         text = soup.get_text()
+        
+        # Формат: 56°13′41″ с. ш. 34°08′10″ в. д.
+        dms_pattern = r'(\d+)°(\d+)′([\d.]+)″\s*([сю])\.[\s]*ш\.\s*(\d+)°(\d+)′([\d.]+)″\s*([зв])\.[\s]*д\.'
         match = re.search(dms_pattern, text)
+        if not match:
+            # Альтернативный формат: 56°13′41″ N 34°08′10″ E
+            dms_pattern = r'(\d+)°(\d+)′([\d.]+)″\s*([NS])\s+(\d+)°(\d+)′([\d.]+)″\s*([EW])'
+            match = re.search(dms_pattern, text)
+        
         if match:
             try:
                 lat_deg, lat_min, lat_sec, lat_dir = match.group(1, 2, 3, 4)
@@ -156,14 +187,13 @@ async def parse_wikipedia_coordinates(html: str, village_name: str) -> Optional[
                 lat = float(lat_deg) + float(lat_min)/60 + float(lat_sec)/3600
                 lon = float(lon_deg) + float(lon_min)/60 + float(lon_sec)/3600
                 
-                if lat_dir == 'S':
+                if lat_dir in ['S', 'ю']:
                     lat = -lat
-                if lon_dir == 'W':
+                if lon_dir in ['W', 'з']:
                     lon = -lon
                 
-                if validate_coordinates(lat, lon):
-                    logger.info(f"          ✅ Wikipedia: найдены координаты через DMS: {lat:.5f}, {lon:.5f}")
-                    return (str(round(lat, 5)), str(round(lon, 5)))
+                logger.debug(f"          ✅ Wikipedia: найдены координаты через DMS в тексте: {lat:.5f}, {lon:.5f}")
+                return (str(round(lat, 5)), str(round(lon, 5)))
             except:
                 pass
         
@@ -175,8 +205,29 @@ async def parse_wikipedia_coordinates(html: str, village_name: str) -> Optional[
                 lat = float(match.group(1))
                 lon = float(match.group(2))
                 if validate_coordinates(lat, lon):
-                    logger.info(f"          ✅ Wikipedia: найдены координаты через десятичные: {lat:.5f}, {lon:.5f}")
+                    logger.debug(f"          ✅ Wikipedia: найдены координаты через десятичные: {lat:.5f}, {lon:.5f}")
                     return (str(round(lat, 5)), str(round(lon, 5)))
+            except:
+                pass
+        
+        # ВАРИАНТ 5: Ищем координаты в формате с градусами и минутами
+        deg_min_pattern = r'(\d+)°(\d+)′\s*([сю])\.[^\d]*(\d+)°(\d+)′\s*([зв])\.[^\d]*'
+        match = re.search(deg_min_pattern, text)
+        if match:
+            try:
+                lat_deg, lat_min, lat_dir = match.group(1, 2, 3)
+                lon_deg, lon_min, lon_dir = match.group(4, 5, 6)
+                
+                lat = float(lat_deg) + float(lat_min)/60
+                lon = float(lon_deg) + float(lon_min)/60
+                
+                if lat_dir == 'ю':
+                    lat = -lat
+                if lon_dir == 'з':
+                    lon = -lon
+                
+                logger.debug(f"          ✅ Wikipedia: найдены координаты через градусы и минуты: {lat:.5f}, {lon:.5f}")
+                return (str(round(lat, 5)), str(round(lon, 5)))
             except:
                 pass
         
