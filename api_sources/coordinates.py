@@ -11,6 +11,14 @@ from .utils import validate_coordinates
 
 logger = logging.getLogger(__name__)
 
+# Расширенные границы Тверской области (буфер 0.3 градуса)
+TVER_BOUNDS_EXTENDED = {
+    'min_lat': 54.7,
+    'max_lat': 58.8,
+    'min_lon': 29.7,
+    'max_lon': 38.8
+}
+
 
 def parse_dic_coordinates(text: str, cell=None) -> Tuple[Optional[float], Optional[float]]:
     """Парсит координаты из dic.academic.ru"""
@@ -24,7 +32,9 @@ def parse_dic_coordinates(text: str, cell=None) -> Tuple[Optional[float], Option
                     try:
                         lat = float(lat_span.get_text().strip())
                         lon = float(lon_span.get_text().strip())
-                        if validate_coordinates(lat, lon):
+                        # Проверяем по расширенным границам
+                        if (TVER_BOUNDS_EXTENDED['min_lat'] <= lat <= TVER_BOUNDS_EXTENDED['max_lat'] and
+                            TVER_BOUNDS_EXTENDED['min_lon'] <= lon <= TVER_BOUNDS_EXTENDED['max_lon']):
                             return lat, lon
                     except:
                         pass
@@ -36,7 +46,8 @@ def parse_dic_coordinates(text: str, cell=None) -> Tuple[Optional[float], Option
             lon_deg, lon_min, lon_sec = map(float, match.group(4, 5, 6))
             lat = lat_deg + lat_min/60 + lat_sec/3600
             lon = lon_deg + lon_min/60 + lon_sec/3600
-            if validate_coordinates(lat, lon):
+            if (TVER_BOUNDS_EXTENDED['min_lat'] <= lat <= TVER_BOUNDS_EXTENDED['max_lat'] and
+                TVER_BOUNDS_EXTENDED['min_lon'] <= lon <= TVER_BOUNDS_EXTENDED['max_lon']):
                 return lat, lon
         
         decimal_pattern = r'([0-9]+\.[0-9]+)[,\s]+([0-9]+\.[0-9]+)'
@@ -44,14 +55,16 @@ def parse_dic_coordinates(text: str, cell=None) -> Tuple[Optional[float], Option
         if match:
             lat = float(match.group(1))
             lon = float(match.group(2))
-            if validate_coordinates(lat, lon):
+            if (TVER_BOUNDS_EXTENDED['min_lat'] <= lat <= TVER_BOUNDS_EXTENDED['max_lat'] and
+                TVER_BOUNDS_EXTENDED['min_lon'] <= lon <= TVER_BOUNDS_EXTENDED['max_lon']):
                 return lat, lon
         
         numbers = re.findall(r'[\d.]+', text)
         if len(numbers) >= 2:
             lat = float(numbers[0])
             lon = float(numbers[1])
-            if validate_coordinates(lat, lon):
+            if (TVER_BOUNDS_EXTENDED['min_lat'] <= lat <= TVER_BOUNDS_EXTENDED['max_lat'] and
+                TVER_BOUNDS_EXTENDED['min_lon'] <= lon <= TVER_BOUNDS_EXTENDED['max_lon']):
                 return lat, lon
         
         return None, None
@@ -82,8 +95,11 @@ async def parse_wikipedia_coordinates(html: str, village_name: str) -> Optional[
                     if 'lat' in data and 'lon' in data:
                         lat = float(data['lat'])
                         lon = float(data['lon'])
-                        logger.debug(f"          ✅ Wikipedia: найдены координаты через data-param: {lat:.5f}, {lon:.5f}")
-                        return (str(round(lat, 5)), str(round(lon, 5)))
+                        # Проверяем по расширенным границам
+                        if (TVER_BOUNDS_EXTENDED['min_lat'] <= lat <= TVER_BOUNDS_EXTENDED['max_lat'] and
+                            TVER_BOUNDS_EXTENDED['min_lon'] <= lon <= TVER_BOUNDS_EXTENDED['max_lon']):
+                            logger.debug(f"          ✅ Wikipedia: найдены координаты через data-param: {lat:.5f}, {lon:.5f}")
+                            return (str(round(lat, 5)), str(round(lon, 5)))
                 except Exception as e:
                     logger.debug(f"          Ошибка парсинга data-mw-kartographer: {e}")
             
@@ -96,8 +112,10 @@ async def parse_wikipedia_coordinates(html: str, village_name: str) -> Optional[
                     try:
                         lat = float(lat_span.get_text().strip())
                         lon = float(lon_span.get_text().strip())
-                        logger.debug(f"          ✅ Wikipedia: найдены координаты через geo span: {lat:.5f}, {lon:.5f}")
-                        return (str(round(lat, 5)), str(round(lon, 5)))
+                        if (TVER_BOUNDS_EXTENDED['min_lat'] <= lat <= TVER_BOUNDS_EXTENDED['max_lat'] and
+                            TVER_BOUNDS_EXTENDED['min_lon'] <= lon <= TVER_BOUNDS_EXTENDED['max_lon']):
+                            logger.debug(f"          ✅ Wikipedia: найдены координаты через geo span: {lat:.5f}, {lon:.5f}")
+                            return (str(round(lat, 5)), str(round(lon, 5)))
                     except:
                         pass
             
@@ -119,8 +137,10 @@ async def parse_wikipedia_coordinates(html: str, village_name: str) -> Optional[
                     if lon_dir == 'з':
                         lon = -lon
                     
-                    logger.debug(f"          ✅ Wikipedia: найдены координаты через DMS в coordinates: {lat:.5f}, {lon:.5f}")
-                    return (str(round(lat, 5)), str(round(lon, 5)))
+                    if (TVER_BOUNDS_EXTENDED['min_lat'] <= lat <= TVER_BOUNDS_EXTENDED['max_lat'] and
+                        TVER_BOUNDS_EXTENDED['min_lon'] <= lon <= TVER_BOUNDS_EXTENDED['max_lon']):
+                        logger.debug(f"          ✅ Wikipedia: найдены координаты через DMS в coordinates: {lat:.5f}, {lon:.5f}")
+                        return (str(round(lat, 5)), str(round(lon, 5)))
                 except:
                     pass
         
@@ -141,8 +161,10 @@ async def parse_wikipedia_coordinates(html: str, village_name: str) -> Optional[
                                 try:
                                     lat = float(lat_span.get_text().strip())
                                     lon = float(lon_span.get_text().strip())
-                                    logger.debug(f"          ✅ Wikipedia: найдены координаты в инфобоксе: {lat:.5f}, {lon:.5f}")
-                                    return (str(round(lat, 5)), str(round(lon, 5)))
+                                    if (TVER_BOUNDS_EXTENDED['min_lat'] <= lat <= TVER_BOUNDS_EXTENDED['max_lat'] and
+                                        TVER_BOUNDS_EXTENDED['min_lon'] <= lon <= TVER_BOUNDS_EXTENDED['max_lon']):
+                                        logger.debug(f"          ✅ Wikipedia: найдены координаты в инфобоксе: {lat:.5f}, {lon:.5f}")
+                                        return (str(round(lat, 5)), str(round(lon, 5)))
                                 except:
                                     pass
                         
@@ -163,8 +185,10 @@ async def parse_wikipedia_coordinates(html: str, village_name: str) -> Optional[
                                 if lon_dir == 'з':
                                     lon = -lon
                                 
-                                logger.debug(f"          ✅ Wikipedia: найдены координаты через DMS в инфобоксе: {lat:.5f}, {lon:.5f}")
-                                return (str(round(lat, 5)), str(round(lon, 5)))
+                                if (TVER_BOUNDS_EXTENDED['min_lat'] <= lat <= TVER_BOUNDS_EXTENDED['max_lat'] and
+                                    TVER_BOUNDS_EXTENDED['min_lon'] <= lon <= TVER_BOUNDS_EXTENDED['max_lon']):
+                                    logger.debug(f"          ✅ Wikipedia: найдены координаты через DMS в инфобоксе: {lat:.5f}, {lon:.5f}")
+                                    return (str(round(lat, 5)), str(round(lon, 5)))
                             except:
                                 pass
         
@@ -192,8 +216,10 @@ async def parse_wikipedia_coordinates(html: str, village_name: str) -> Optional[
                 if lon_dir in ['W', 'з']:
                     lon = -lon
                 
-                logger.debug(f"          ✅ Wikipedia: найдены координаты через DMS в тексте: {lat:.5f}, {lon:.5f}")
-                return (str(round(lat, 5)), str(round(lon, 5)))
+                if (TVER_BOUNDS_EXTENDED['min_lat'] <= lat <= TVER_BOUNDS_EXTENDED['max_lat'] and
+                    TVER_BOUNDS_EXTENDED['min_lon'] <= lon <= TVER_BOUNDS_EXTENDED['max_lon']):
+                    logger.debug(f"          ✅ Wikipedia: найдены координаты через DMS в тексте: {lat:.5f}, {lon:.5f}")
+                    return (str(round(lat, 5)), str(round(lon, 5)))
             except:
                 pass
         
@@ -204,7 +230,8 @@ async def parse_wikipedia_coordinates(html: str, village_name: str) -> Optional[
             try:
                 lat = float(match.group(1))
                 lon = float(match.group(2))
-                if validate_coordinates(lat, lon):
+                if (TVER_BOUNDS_EXTENDED['min_lat'] <= lat <= TVER_BOUNDS_EXTENDED['max_lat'] and
+                    TVER_BOUNDS_EXTENDED['min_lon'] <= lon <= TVER_BOUNDS_EXTENDED['max_lon']):
                     logger.debug(f"          ✅ Wikipedia: найдены координаты через десятичные: {lat:.5f}, {lon:.5f}")
                     return (str(round(lat, 5)), str(round(lon, 5)))
             except:
@@ -226,8 +253,10 @@ async def parse_wikipedia_coordinates(html: str, village_name: str) -> Optional[
                 if lon_dir == 'з':
                     lon = -lon
                 
-                logger.debug(f"          ✅ Wikipedia: найдены координаты через градусы и минуты: {lat:.5f}, {lon:.5f}")
-                return (str(round(lat, 5)), str(round(lon, 5)))
+                if (TVER_BOUNDS_EXTENDED['min_lat'] <= lat <= TVER_BOUNDS_EXTENDED['max_lat'] and
+                    TVER_BOUNDS_EXTENDED['min_lon'] <= lon <= TVER_BOUNDS_EXTENDED['max_lon']):
+                    logger.debug(f"          ✅ Wikipedia: найдены координаты через градусы и минуты: {lat:.5f}, {lon:.5f}")
+                    return (str(round(lat, 5)), str(round(lon, 5)))
             except:
                 pass
         
