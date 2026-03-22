@@ -1023,6 +1023,8 @@ class APISourceManager:
                     logger.warning(f"        Таблица {table_idx}: не найдена колонка с названиями")
                     continue
                 
+                coords_found_in_table = 0
+                
                 for row_idx, row in enumerate(rows[1:], 1):
                     try:
                         cells = row.find_all('td')
@@ -1070,8 +1072,10 @@ class APISourceManager:
                                 "lat": str(lat_rounded),
                                 "lon": str(lon_rounded),
                                 "district": district,
-                                "has_coords": True
+                                "has_coords": True,
+                                "source": "former"
                             })
+                            coords_found_in_table += 1
                             self.coords_stats['from_former'] += 1
                         else:
                             logger.debug(f"          ⚠️ {name}: координаты не найдены")
@@ -1081,12 +1085,16 @@ class APISourceManager:
                                 "lat": "",
                                 "lon": "",
                                 "district": district,
-                                "has_coords": False
+                                "has_coords": False,
+                                "source": "former"
                             })
                         
                     except Exception as e:
                         logger.debug(f"        Ошибка парсинга строки {row_idx} в таблице {table_idx}: {e}")
                         continue
+                
+                if coords_found_in_table > 0:
+                    logger.info(f"        Таблица {table_idx}: найдено координат для {coords_found_in_table} населенных пунктов")
             
             return results
             
@@ -2190,22 +2198,28 @@ class APISourceManager:
                     former_np_data = await self._parse_former_np_page(former_np_id, district, settlement)
                     
                     former_new = 0
+                    former_with_coords = 0
+                    
                     for village in former_np_data:
                         key = f"{village['name']}_{village['district']}"
+                        
+                        if village.get('has_coords'):
+                            former_with_coords += 1
+                            logger.info(f"      📍 Бывший НП с координатами: {village['name']} ({village['lat']}, {village['lon']})")
+                        
                         if key not in seen_villages:
                             seen_villages[key] = village
                             self.collection_stats['from_former'] += 1
                             former_new += 1
-                            logger.info(f"      ➕ Добавлен бывший НП: {village['name']} ({village['type']})")
                         else:
                             existing = seen_villages[key]
                             if not existing.get('has_coords') and village.get('has_coords'):
                                 seen_villages[key] = village
                                 former_new += 1
-                                logger.info(f"      🔄 Обновлены координаты для {village['name']}")
+                                logger.info(f"      🔄 Обновлены координаты для {village['name']} из бывших НП")
                     
                     if former_new > 0:
-                        logger.info(f"    ✅ СП {settlement}: добавлено {former_new} записей из списка бывших НП")
+                        logger.info(f"    ✅ СП {settlement}: добавлено {former_new} записей из списка бывших НП (из них с координатами: {former_with_coords})")
                 else:
                     logger.info(f"    ⚠️ Страница бывших НП для СП {settlement} не найдена")
                 
