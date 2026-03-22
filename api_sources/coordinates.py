@@ -32,7 +32,6 @@ def parse_dic_coordinates(text: str, cell=None) -> Tuple[Optional[float], Option
                     try:
                         lat = float(lat_span.get_text().strip())
                         lon = float(lon_span.get_text().strip())
-                        # Проверяем по расширенным границам
                         if (TVER_BOUNDS_EXTENDED['min_lat'] <= lat <= TVER_BOUNDS_EXTENDED['max_lat'] and
                             TVER_BOUNDS_EXTENDED['min_lon'] <= lon <= TVER_BOUNDS_EXTENDED['max_lon']):
                             return lat, lon
@@ -95,7 +94,6 @@ async def parse_wikipedia_coordinates(html: str, village_name: str) -> Optional[
                     if 'lat' in data and 'lon' in data:
                         lat = float(data['lat'])
                         lon = float(data['lon'])
-                        # Проверяем по расширенным границам
                         if (TVER_BOUNDS_EXTENDED['min_lat'] <= lat <= TVER_BOUNDS_EXTENDED['max_lat'] and
                             TVER_BOUNDS_EXTENDED['min_lon'] <= lon <= TVER_BOUNDS_EXTENDED['max_lon']):
                             logger.debug(f"          ✅ Wikipedia: найдены координаты через data-param: {lat:.5f}, {lon:.5f}")
