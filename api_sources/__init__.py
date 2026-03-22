@@ -675,11 +675,14 @@ class APISourceManager:
         if cache_key in self.former_np_pages_cache:
             return self.former_np_pages_cache[cache_key]
         
-        # Расширенные запросы для поиска страниц бывших НП
+        district_lower = district.lower()
+        settlement_lower = settlement.lower()
+        
+        # Исправленные запросы: используем "район" вместо "района"
         queries = [
-            f"Список бывших населённых пунктов на территории сельского поселения {settlement} {district} района",
-            f"Список бывших населенных пунктов на территории сельского поселения {settlement} {district} района",
-            f"Список бывших населённых пунктов {settlement} {district} района",
+            f"Список бывших населённых пунктов на территории сельского поселения {settlement} {district} район",
+            f"Список бывших населенных пунктов на территории сельского поселения {settlement} {district} район",
+            f"Список бывших населённых пунктов {settlement} {district} район",
             f"Бывшие населённые пункты {settlement} СП",
             f"Список бывших населённых пунктов {settlement} сельского поселения",
             f"{settlement} бывшие населенные пункты",
@@ -695,19 +698,17 @@ class APISourceManager:
             await asyncio.sleep(1.5)
         
         if not all_results:
+            logger.debug(f"      Поиск бывших НП для СП {settlement} не дал результатов")
             return None
-        
-        district_lower = district.lower()
-        settlement_lower = settlement.lower()
         
         # Нормализуем название СП для сравнения
         settlement_normalized = self._normalize_text(settlement_lower)
         
-        # Сортируем результаты по позиции (чем выше позиция, тем выше релевантность)
+        # Сортируем результаты по позиции (чем выше позиция, тем релевантнее)
         all_results.sort(key=lambda x: x['position'] if x['position'] > 0 else 999)
         
-        # Проверяем первые 10 результатов
-        for result in all_results[:10]:
+        # Проверяем первые 15 результатов
+        for result in all_results[:15]:
             title_lower = result['title'].lower()
             full_text_lower = result['full_text'].lower()
             
