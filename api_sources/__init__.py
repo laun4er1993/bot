@@ -112,7 +112,7 @@ class APISourceManager:
         }
         
         # Параллельные запросы
-        self.max_concurrent_requests = 3  # Уменьшено для избежания 429
+        self.max_concurrent_requests = 3
         self.max_concurrent_dic = 2
         
         # Стандартные заголовки
@@ -2023,7 +2023,11 @@ class APISourceManager:
         """
         Параллельный поиск координат на Wikipedia для списка деревень
         Оптимизирован для избежания ошибок 429
-        Добавлен поиск по ссылкам из таблиц сельских поселений
+        Добавлен поиск:
+        1. Прямой URL
+        2. Поиск через API
+        3. Поиск через страницы сельских поселений (по ссылкам)
+        4. Поиск через страницу района/муниципального округа
         """
         # Уменьшаем количество параллельных запросов для избежания 429
         semaphore = asyncio.Semaphore(3)
@@ -2032,15 +2036,23 @@ class APISourceManager:
         processed = 0
         found_count = 0
         
-        # Кэш для страниц сельских поселений и ссылок
+        # Кэш для страниц
+        district_page_cache = {}  # Кэш для страницы района
         settlement_pages_cache = {}
         settlement_search_cache = {}
-        village_links_cache = {}  # Кэш для ссылок на страницы НП
+        village_links_cache = {}
+        
+        # Множество НП, которые уже нашли, чтобы не дублировать
+        found_villages = set()
         
         async def fetch_one(village):
             nonlocal processed, found_count
             async with semaphore:
                 name = village['name']
+                
+                # Пропускаем уже найденные
+                if name in found_villages:
+                    return None, None
                 
                 await asyncio.sleep(random.uniform(0.8, 1.5))
                 
@@ -2069,6 +2081,7 @@ class APISourceManager:
                                     lon_f = float(lon)
                                     if self._check_coordinate_in_district(lat_f, lon_f, TVER_BOUNDS_EXTENDED):
                                         found_count += 1
+                                        found_villages.add(name)
                                         logger.info(f"      ✅ Wikipedia: найдены координаты для {name}: {lat}, {lon}")
                                         return name, {
                                             "name": name,
@@ -2113,6 +2126,7 @@ class APISourceManager:
                                             lon_f = float(lon)
                                             if self._check_coordinate_in_district(lat_f, lon_f, TVER_BOUNDS_EXTENDED):
                                                 found_count += 1
+                                                found_villages.add(name)
                                                 logger.info(f"      ✅ Wikipedia: найдены координаты для {name} через поиск: {lat}, {lon} (страница: {title})")
                                                 return name, {
                                                     "name": name,
@@ -2129,17 +2143,24 @@ class APISourceManager:
                 except Exception as e:
                     logger.debug(f"      ❌ Ошибка поиска Wikipedia для {name}: {e}")
                 
-                # ВАРИАНТ 3: Поиск через страницы сельских поселений и извлечение ссылок на НП
-                if found_count < total * 0.3:
-                    try:
-                        cache_key = f"settlement_search_{district}"
+                # ВАРИАНТ 3: Поиск через страницы сельских поселений
+                try:
+                    cache_key = f"settlement_search_{district}"
+                    
+                    if cache_key not in settlement_search_cache:
+                        # Пробуем разные варианты поиска сельских поселений
+                        settlement_queries = [
+                            f"{district} район Тверской области сельские поселения",
+                            f"{district} муниципальный округ Тверской области сельские поселения",
+                            f"Сельские поселения {district} района",
+                            f"Список сельских поселений {district} района"
+                        ]
                         
-                        if cache_key not in settlement_search_cache:
-                            settlement_search = f"{district} район Тверской области сельские поселения"
-                            search_url = f"{WIKIPEDIA_SEARCH_URL}?action=query&list=search&srsearch={quote_plus(settlement_search)}&format=json&utf8=1"
+                        settlement_titles = []
+                        for sq in settlement_queries[:2]:  # Ограничиваем количество запросов
+                            search_url = f"{WIKIPEDIA_SEARCH_URL}?action=query&list=search&srsearch={quote_plus(sq)}&format=json&utf8=1"
                             search_html = await self._fetch_page(search_url)
                             
-                            settlement_titles = []
                             if search_html:
                                 try:
                                     data = json.loads(search_html)
@@ -2150,84 +2171,169 @@ class APISourceManager:
                                                 settlement_titles.append(title)
                                 except Exception as e:
                                     logger.debug(f"Ошибка поиска поселений: {e}")
-                            
-                            settlement_search_cache[cache_key] = settlement_titles
-                            logger.info(f"      Найдено страниц сельских поселений: {len(settlement_titles)}")
+                            await asyncio.sleep(0.5)
                         
-                        settlement_titles = settlement_search_cache[cache_key]
-                        
-                        for title in settlement_titles[:5]:
-                            if title in settlement_pages_cache:
-                                page_html = settlement_pages_cache[title]
+                        settlement_titles = list(set(settlement_titles))  # Убираем дубликаты
+                        settlement_search_cache[cache_key] = settlement_titles
+                        logger.info(f"      Найдено страниц сельских поселений: {len(settlement_titles)}")
+                    
+                    settlement_titles = settlement_search_cache[cache_key]
+                    
+                    for title in settlement_titles[:5]:
+                        if title in settlement_pages_cache:
+                            page_html = settlement_pages_cache[title]
+                        else:
+                            page_url = f"{WIKIPEDIA_BASE_URL}/wiki/{quote_plus(title)}"
+                            page_html = await self._fetch_page(page_url)
+                            if page_html:
+                                settlement_pages_cache[title] = page_html
                             else:
-                                page_url = f"{WIKIPEDIA_BASE_URL}/wiki/{quote_plus(title)}"
-                                page_html = await self._fetch_page(page_url)
-                                if page_html:
-                                    settlement_pages_cache[title] = page_html
-                                else:
-                                    continue
-                            
-                            soup = BeautifulSoup(page_html, 'html.parser')
-                            
-                            # Ищем таблицы и собираем ссылки на НП
-                            tables = soup.find_all('table', class_=['standard', 'wikitable', 'sortable'])
-                            
-                            for table in tables:
-                                # Ищем все ссылки в таблице
-                                links = table.find_all('a', href=re.compile(r'^/wiki/'))
-                                for link in links:
-                                    link_href = link.get('href', '')
-                                    link_title = link.get('title', '')
-                                    link_text = link.get_text().strip()
-                                    
-                                    # Проверяем, соответствует ли ссылка искомому НП
-                                    if (name.lower() == link_text.lower() or 
-                                        name.lower() == link_title.lower() or
-                                        name.lower() in link_text.lower()):
-                                        
-                                        # Получаем URL страницы НП
-                                        page_url = f"{WIKIPEDIA_BASE_URL}{link_href}"
-                                        
-                                        # Проверяем кэш
-                                        if page_url in village_links_cache:
-                                            page_html = village_links_cache[page_url]
-                                        else:
-                                            page_html = await self._fetch_page(page_url)
-                                            if page_html:
-                                                village_links_cache[page_url] = page_html
-                                            else:
-                                                continue
-                                        
-                                        # Парсим координаты со страницы НП
-                                        coords = await self._parse_wikipedia_coordinates(page_html, name)
-                                        if coords:
-                                            lat, lon = coords
-                                            lat_f = float(lat)
-                                            lon_f = float(lon)
-                                            if self._check_coordinate_in_district(lat_f, lon_f, TVER_BOUNDS_EXTENDED):
-                                                found_count += 1
-                                                logger.info(f"      ✅ Wikipedia: найдены координаты для {name} по ссылке из страницы поселения {title}: {lat}, {lon}")
-                                                return name, {
-                                                    "name": name,
-                                                    "type": village['type'],
-                                                    "lat": lat,
-                                                    "lon": lon,
-                                                    "district": district,
-                                                    "has_coords": True
-                                                }
-                            
-                            # Также ищем координаты прямо в таблице (если есть)
-                            for table in tables:
-                                table_text = table.get_text().lower()
-                                if name.lower() not in table_text:
-                                    continue
+                                continue
+                        
+                        soup = BeautifulSoup(page_html, 'html.parser')
+                        
+                        # Ищем таблицы и собираем ссылки на НП
+                        tables = soup.find_all('table', class_=['standard', 'wikitable', 'sortable'])
+                        
+                        for table in tables:
+                            links = table.find_all('a', href=re.compile(r'^/wiki/'))
+                            for link in links:
+                                link_href = link.get('href', '')
+                                link_title = link.get('title', '')
+                                link_text = link.get_text().strip()
                                 
+                                if (name.lower() == link_text.lower() or 
+                                    name.lower() == link_title.lower() or
+                                    name.lower() in link_text.lower()):
+                                    
+                                    page_url = f"{WIKIPEDIA_BASE_URL}{link_href}"
+                                    
+                                    if page_url in village_links_cache:
+                                        page_html = village_links_cache[page_url]
+                                    else:
+                                        page_html = await self._fetch_page(page_url)
+                                        if page_html:
+                                            village_links_cache[page_url] = page_html
+                                        else:
+                                            continue
+                                    
+                                    coords = await self._parse_wikipedia_coordinates(page_html, name)
+                                    if coords:
+                                        lat, lon = coords
+                                        lat_f = float(lat)
+                                        lon_f = float(lon)
+                                        if self._check_coordinate_in_district(lat_f, lon_f, TVER_BOUNDS_EXTENDED):
+                                            found_count += 1
+                                            found_villages.add(name)
+                                            logger.info(f"      ✅ Wikipedia: найдены координаты для {name} по ссылке из страницы поселения {title}: {lat}, {lon}")
+                                            return name, {
+                                                "name": name,
+                                                "type": village['type'],
+                                                "lat": lat,
+                                                "lon": lon,
+                                                "district": district,
+                                                "has_coords": True
+                                            }
+                        
+                        await asyncio.sleep(0.5)
+                        
+                except Exception as e:
+                    logger.debug(f"      ❌ Ошибка поиска в поселениях для {name}: {e}")
+                
+                # ВАРИАНТ 4: Поиск через страницу района/муниципального округа
+                try:
+                    district_cache_key = f"district_page_{district}"
+                    
+                    if district_cache_key not in district_page_cache:
+                        # Пробуем разные варианты названия района
+                        district_queries = [
+                            f"{district} район",
+                            f"{district} муниципальный округ",
+                            f"{district} район Тверской области",
+                            f"{district} муниципальный округ Тверской области"
+                        ]
+                        
+                        district_page_url = None
+                        for dq in district_queries:
+                            encoded_dq = quote_plus(dq)
+                            direct_url = f"{WIKIPEDIA_BASE_URL}/wiki/{encoded_dq}"
+                            html = await self._fetch_page(direct_url)
+                            if html:
+                                soup = BeautifulSoup(html, 'html.parser')
+                                no_article = soup.find('div', class_='noarticletext')
+                                if not no_article:
+                                    # Проверяем, что это страница района/округа
+                                    title = soup.find('h1')
+                                    if title and ('район' in title.get_text().lower() or 'округ' in title.get_text().lower()):
+                                        district_page_url = direct_url
+                                        break
+                            await asyncio.sleep(0.5)
+                        
+                        if district_page_url:
+                            district_page_cache[district_cache_key] = district_page_url
+                            logger.info(f"      Найдена страница района/округа: {district_page_url}")
+                        else:
+                            district_page_cache[district_cache_key] = None
+                            logger.info(f"      Страница района/округа {district} не найдена")
+                    
+                    district_page_url = district_page_cache[district_cache_key]
+                    
+                    if district_page_url:
+                        html = await self._fetch_page(district_page_url)
+                        if html:
+                            soup = BeautifulSoup(html, 'html.parser')
+                            
+                            # Ищем все таблицы на странице района
+                            tables = soup.find_all('table', class_=['standard', 'wikitable', 'sortable', 'collapsible'])
+                            
+                            for table in tables:
+                                # Ищем строки, содержащие название НП
                                 rows = table.find_all('tr')
                                 for row in rows:
                                     row_text = row.get_text().lower()
                                     if name.lower() not in row_text:
                                         continue
                                     
+                                    # Ищем ссылку на НП
+                                    link = row.find('a', href=re.compile(r'^/wiki/'))
+                                    if link:
+                                        link_href = link.get('href', '')
+                                        link_text = link.get_text().strip()
+                                        
+                                        # Проверяем совпадение названия
+                                        if (name.lower() == link_text.lower() or 
+                                            name.lower() in link_text.lower()):
+                                            
+                                            page_url = f"{WIKIPEDIA_BASE_URL}{link_href}"
+                                            
+                                            if page_url in village_links_cache:
+                                                page_html = village_links_cache[page_url]
+                                            else:
+                                                page_html = await self._fetch_page(page_url)
+                                                if page_html:
+                                                    village_links_cache[page_url] = page_html
+                                                else:
+                                                    continue
+                                            
+                                            coords = await self._parse_wikipedia_coordinates(page_html, name)
+                                            if coords:
+                                                lat, lon = coords
+                                                lat_f = float(lat)
+                                                lon_f = float(lon)
+                                                if self._check_coordinate_in_district(lat_f, lon_f, TVER_BOUNDS_EXTENDED):
+                                                    found_count += 1
+                                                    found_villages.add(name)
+                                                    logger.info(f"      ✅ Wikipedia: найдены координаты для {name} по ссылке со страницы района: {lat}, {lon}")
+                                                    return name, {
+                                                        "name": name,
+                                                        "type": village['type'],
+                                                        "lat": lat,
+                                                        "lon": lon,
+                                                        "district": district,
+                                                        "has_coords": True
+                                                    }
+                                    
+                                    # Если нет ссылки, но есть координаты прямо в таблице
                                     cells = row.find_all('td')
                                     for cell in cells:
                                         coord_text = cell.get_text().strip()
@@ -2235,9 +2341,10 @@ class APISourceManager:
                                             lat, lon = parse_dic_coordinates(coord_text, cell)
                                             if lat and lon and self._check_coordinate_in_district(lat, lon, TVER_BOUNDS_EXTENDED):
                                                 found_count += 1
+                                                found_villages.add(name)
                                                 lat_rounded = round(lat, 5)
                                                 lon_rounded = round(lon, 5)
-                                                logger.info(f"      ✅ Wikipedia: найдены координаты для {name} в таблице поселения {title}: {lat_rounded}, {lon_rounded}")
+                                                logger.info(f"      ✅ Wikipedia: найдены координаты для {name} в таблице страницы района: {lat_rounded}, {lon_rounded}")
                                                 return name, {
                                                     "name": name,
                                                     "type": village['type'],
@@ -2247,10 +2354,45 @@ class APISourceManager:
                                                     "has_coords": True
                                                 }
                             
+                            # Также ищем в разделах "Населенные пункты" на странице района
+                            sections = soup.find_all(['h2', 'h3', 'h4'])
+                            for section in sections:
+                                if 'населенные пункты' in section.get_text().lower() or 'населённые пункты' in section.get_text().lower():
+                                    parent = section.find_parent()
+                                    if parent:
+                                        # Ищем таблицы в этом разделе
+                                        tables = parent.find_all('table', class_=['standard', 'wikitable', 'sortable'])
+                                        for table in tables:
+                                            table_text = table.get_text().lower()
+                                            if name.lower() in table_text:
+                                                # Парсим координаты из таблицы
+                                                rows = table.find_all('tr')
+                                                for row in rows:
+                                                    if name.lower() in row.get_text().lower():
+                                                        cells = row.find_all('td')
+                                                        for cell in cells:
+                                                            coord_text = cell.get_text().strip()
+                                                            if '°' in coord_text or 'координат' in coord_text.lower():
+                                                                lat, lon = parse_dic_coordinates(coord_text, cell)
+                                                                if lat and lon and self._check_coordinate_in_district(lat, lon, TVER_BOUNDS_EXTENDED):
+                                                                    found_count += 1
+                                                                    found_villages.add(name)
+                                                                    lat_rounded = round(lat, 5)
+                                                                    lon_rounded = round(lon, 5)
+                                                                    logger.info(f"      ✅ Wikipedia: найдены координаты для {name} в разделе страницы района: {lat_rounded}, {lon_rounded}")
+                                                                    return name, {
+                                                                        "name": name,
+                                                                        "type": village['type'],
+                                                                        "lat": str(lat_rounded),
+                                                                        "lon": str(lon_rounded),
+                                                                        "district": district,
+                                                                        "has_coords": True
+                                                                    }
+                                    
                             await asyncio.sleep(0.5)
                             
-                    except Exception as e:
-                        logger.debug(f"      ❌ Ошибка поиска в поселениях для {name}: {e}")
+                except Exception as e:
+                    logger.debug(f"      ❌ Ошибка поиска на странице района для {name}: {e}")
                 
                 logger.debug(f"      ❌ Wikipedia: координаты не найдены для {name}")
                 return None, None
@@ -2542,6 +2684,7 @@ class APISourceManager:
                 logger.info(f"  ✅ Найдено координат на Wikipedia: {len(wiki_coords)}")
                 
                 for name, data in wiki_coords.items():
+                    found_in_existing = False
                     for v in all_villages:
                         if v['name'] == name and not v.get('has_coords'):
                             v['lat'] = data['lat']
@@ -2549,19 +2692,25 @@ class APISourceManager:
                             v['has_coords'] = True
                             self.coords_stats['from_wikipedia'] += 1
                             logger.info(f"      ✅ Найдены координаты на Wikipedia: {name} ({v['lat']}, {v['lon']})")
+                            found_in_existing = True
                             break
-                
-                for name, data in wiki_coords.items():
-                    if not any(v['name'] == name for v in all_villages):
-                        all_villages.append({
-                            "name": name,
-                            "type": "деревня",
-                            "lat": data['lat'],
-                            "lon": data['lon'],
-                            "district": district,
-                            "has_coords": True
-                        })
-                        logger.info(f"  ➕ Добавлен новый НП из Wikipedia: {name}")
+                    
+                    # Если НП не было в списке, добавляем его
+                    if not found_in_existing:
+                        if self._is_valid_name(name, district):
+                            lat_f = float(data['lat'])
+                            lon_f = float(data['lon'])
+                            if self._check_coordinate_in_district(lat_f, lon_f, TVER_BOUNDS_EXTENDED):
+                                all_villages.append({
+                                    "name": name,
+                                    "type": data.get('type', 'деревня'),
+                                    "lat": data['lat'],
+                                    "lon": data['lon'],
+                                    "district": district,
+                                    "has_coords": True
+                                })
+                                self.coords_stats['from_wikipedia'] += 1
+                                logger.info(f"  ➕ Добавлен новый НП из Wikipedia: {name} ({data['lat']}, {data['lon']})")
             
             # ========== 3. ФИНАЛЬНАЯ СТАТИСТИКА ==========
             final_with_coords = sum(1 for v in all_villages if v.get('has_coords'))
