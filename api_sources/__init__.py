@@ -376,9 +376,6 @@ class APISourceManager:
         
         # Обязательно должно содержать "сельское поселение"
         if 'сельское поселение' not in name_lower and 'сельсовет' not in name_lower:
-            # Проверяем, не является ли это названием города
-            if name_lower in ['зубцов', 'ржев', 'осташков', 'торжок', 'белый', 'нелидово', 'оленино']:
-                return False
             return False
         
         # Проверка на даты
@@ -435,25 +432,6 @@ class APISourceManager:
             'min_lon': TVER_BOUNDS['min_lon'],
             'max_lon': TVER_BOUNDS['max_lon']
         }
-        
-        # Пробуем найти на странице dic.academic.ru
-        if district_html:
-            soup = BeautifulSoup(district_html, 'html.parser')
-            page_text = soup.get_text().lower()
-            
-            coords_match = re.findall(r'([0-9]+[.,][0-9]+)\s*[°]?\s*[сcюю]\.?ш\.?\s*[.,]?\s*([0-9]+[.,][0-9]+)\s*[°]?\s*[ввзз]\.?д\.?', page_text)
-            if coords_match:
-                try:
-                    lats = [float(m[0].replace(',', '.')) for m in coords_match]
-                    lons = [float(m[1].replace(',', '.')) for m in coords_match]
-                    if lats and lons:
-                        bounds['min_lat'] = min(lats)
-                        bounds['max_lat'] = max(lats)
-                        bounds['min_lon'] = min(lons)
-                        bounds['max_lon'] = max(lons)
-                        logger.info(f"  📍 Границы района из dic.academic.ru: {bounds}")
-                except:
-                    pass
         
         # Сохраняем в кэш
         self.district_bounds_cache[district] = bounds
@@ -585,12 +563,11 @@ class APISourceManager:
         try:
             soup = BeautifulSoup(html, 'html.parser')
             found_settlements = []
-            district_lower = district.lower()
             
-            # Ищем раздел "Состав района" (именно так!)
+            # Ищем раздел "Состав района"
             for header in soup.find_all(['h2', 'h3', 'h4']):
                 header_text = header.get_text().lower()
-                if 'состав района' in header_text or 'муниципальное устройство' in header_text:
+                if 'состав района' in header_text:
                     parent = header.find_parent()
                     if parent:
                         # Ищем списки ul/ol
@@ -615,40 +592,9 @@ class APISourceManager:
                                             settlement = re.sub(r'\s+\(.*?\)', '', settlement).strip()
                                         
                                         if settlement and len(settlement) > 2:
-                                            if self._is_valid_settlement_name(settlement, district_lower):
+                                            if self._is_valid_settlement_name(settlement):
                                                 found_settlements.append(settlement)
                                                 logger.debug(f"        Найдено СП: {settlement}")
-                                    else:
-                                        # Проверяем текст ссылки
-                                        link_text = link.get_text().strip()
-                                        if link_text and len(link_text) > 2:
-                                            if 'сельское поселение' in link_text.lower():
-                                                clean_text = re.sub(r'^сельское\s+поселение\s*', '', link_text, flags=re.IGNORECASE)
-                                                clean_text = re.sub(r'\s+\(.*?\)', '', clean_text).strip()
-                                                if clean_text and len(clean_text) > 2:
-                                                    if self._is_valid_settlement_name(clean_text, district_lower):
-                                                        found_settlements.append(clean_text)
-                                                        logger.debug(f"        Найдено СП: {clean_text}")
-                        
-                        # Также ищем таблицы с сельскими поселениями
-                        for table in parent.find_all('table', class_=['standard', 'wikitable', 'sortable']):
-                            for row in table.find_all('tr'):
-                                cells = row.find_all('td')
-                                if cells:
-                                    for cell in cells:
-                                        cell_text = cell.get_text().strip()
-                                        if 'сельское поселение' in cell_text.lower():
-                                            match = re.search(r'«([^»]+)»', cell_text)
-                                            if match:
-                                                settlement = match.group(1).strip()
-                                            else:
-                                                settlement = re.sub(r'^сельское\s+поселение\s*', '', cell_text, flags=re.IGNORECASE)
-                                                settlement = re.sub(r'\s+\(.*?\)', '', settlement).strip()
-                                            
-                                            if settlement and len(settlement) > 2:
-                                                if self._is_valid_settlement_name(settlement, district_lower):
-                                                    found_settlements.append(settlement)
-                                                    logger.debug(f"        Найдено СП из таблицы: {settlement}")
             
             # Если не нашли через заголовки, ищем по прямым ссылкам на сельские поселения
             if not found_settlements:
@@ -663,7 +609,7 @@ class APISourceManager:
                             settlement = re.sub(r'\s+\(.*?\)', '', settlement).strip()
                         
                         if settlement and len(settlement) > 2:
-                            if self._is_valid_settlement_name(settlement, district_lower):
+                            if self._is_valid_settlement_name(settlement):
                                 found_settlements.append(settlement)
                                 logger.debug(f"        Найдено СП по прямой ссылке: {settlement}")
             
@@ -1863,7 +1809,7 @@ class APISourceManager:
                                 lat, lon = coords
                                 lat_f = float(lat)
                                 lon_f = float(lon)
-                                if validate_coordinates(lat_f, lon_f) and self._check_coordinate_in_district(lat_f, lon_f, district_bounds):
+                                if validate_coordinates(lat_f, lon_f):
                                     logger.info(f"      ✅ Wikipedia: найдены координаты для {name}: {lat}, {lon}")
                                     return name, {
                                         "name": name,
@@ -2066,72 +2012,9 @@ class APISourceManager:
             logger.info(f"    • Без координат: {total_without}")
             logger.info(f"    • Сохраненных ссылок на dic.academic.ru: {len(self.village_links)}")
             
-            # ========== 1. СНАЧАЛА ИЩЕМ КООРДИНАТЫ ПО ССЫЛКАМ ИЗ СП (DIC.ACADEMIC.RU) ==========
-            with_links = [v for v in villages_without_coords if v['name'] in self.village_links]
-            without_links = [v for v in villages_without_coords if v['name'] not in self.village_links]
-            
-            logger.info(f"  📊 Поиск координат на dic.academic.ru по сохранённым ссылкам:")
-            logger.info(f"    • С ссылками: {len(with_links)}")
-            logger.info(f"    • Без ссылок: {len(without_links)}")
-            
-            priority_with = [v for v in with_links if v['type'] in ['деревня', 'село', 'посёлок']]
-            other_with = [v for v in with_links if v['type'] not in ['деревня', 'село', 'посёлок']]
-            priority_without = [v for v in without_links if v['type'] in ['деревня', 'село', 'посёлок']]
-            other_without = [v for v in without_links if v['type'] not in ['деревня', 'село', 'посёлок']]
-            
-            sorted_for_coords = priority_with + other_with + priority_without + other_without
-            
-            link_found = 0
-            total_to_process = len(sorted_for_coords)
-            
-            semaphore_dic = asyncio.Semaphore(self.max_concurrent_dic)
-            
-            async def fetch_dic(village, idx):
-                async with semaphore_dic:
-                    name = village['name']
-                    if name in self.village_links:
-                        article_id = self.village_links[name]
-                        logger.info(f"    📍 [{idx+1}/{total_to_process}] {name}: поиск на dic.academic.ru (ID {article_id})")
-                        coords_data = await self._parse_individual_village_page(article_id, district)
-                        if coords_data and coords_data.get('has_coords'):
-                            lat = float(coords_data['lat'])
-                            lon = float(coords_data['lon'])
-                            if validate_coordinates(lat, lon):
-                                return name, coords_data
-                    return None, None
-            
-            batch_size = 10
-            for batch_start in range(0, total_to_process, batch_size):
-                batch_end = min(batch_start + batch_size, total_to_process)
-                batch = sorted_for_coords[batch_start:batch_end]
-                
-                tasks = [fetch_dic(v, batch_start + i) for i, v in enumerate(batch)]
-                results = await asyncio.gather(*tasks)
-                
-                for name, data in results:
-                    if data:
-                        for v in all_villages:
-                            if v['name'] == name and not v.get('has_coords'):
-                                v['lat'] = data['lat']
-                                v['lon'] = data['lon']
-                                v['has_coords'] = True
-                                link_found += 1
-                                self.coords_stats['from_links'] += 1
-                                logger.info(f"    ✅ Найдены координаты на dic.academic.ru: {name} -> {data['lat']}, {data['lon']}")
-                                break
-                
-                logger.info(f"      Обработано {batch_end}/{total_to_process} записей, найдено {link_found}")
-                await asyncio.sleep(2.0)
-            
-            logger.info(f"  ✅ Найдено координат на dic.academic.ru: {link_found}")
-            
-            # ========== 2. ЗАТЕМ ИЩЕМ НА WIKIPEDIA ДЛЯ ОСТАВШИХСЯ ==========
-            villages_without_coords = [v for v in all_villages if not v.get('has_coords')]
-            total_without = len(villages_without_coords)
-            
-            if total_without > 0:
-                logger.info(f"  📊 Осталось без координат после dic.academic.ru: {total_without}")
-                logger.info(f"  🌐 Поиск координат на Wikipedia...")
+            # ========== 1. СНАЧАЛА ИЩЕМ КООРДИНАТЫ НА WIKIPEDIA ==========
+            if villages_without_coords:
+                logger.info(f"  🌐 Поиск координат на Wikipedia для {len(villages_without_coords)} НП...")
                 
                 wiki_coords = await self._fetch_wikipedia_coordinates_batch(villages_without_coords, district, district_bounds)
                 logger.info(f"  ✅ Найдено координат на Wikipedia: {len(wiki_coords)}")
@@ -2157,6 +2040,43 @@ class APISourceManager:
                             "has_coords": True
                         })
                         logger.info(f"  ➕ Добавлен новый НП из Wikipedia: {name}")
+            
+            # ========== 2. ЗАТЕМ ДЛЯ ОСТАВШИХСЯ, У КОГО ЕСТЬ ССЫЛКА НА DIC.ACADEMIC.RU ==========
+            villages_without_coords = [v for v in all_villages if not v.get('has_coords')]
+            if villages_without_coords:
+                with_links = [v for v in villages_without_coords if v['name'] in self.village_links]
+                if with_links:
+                    logger.info(f"  📊 Осталось без координат после Wikipedia: {len(villages_without_coords)}")
+                    logger.info(f"  🔍 Поиск координат на dic.academic.ru по {len(with_links)} ссылкам")
+                    
+                    semaphore_dic = asyncio.Semaphore(self.max_concurrent_dic)
+                    
+                    async def fetch_dic(village):
+                        async with semaphore_dic:
+                            name = village['name']
+                            if name in self.village_links:
+                                article_id = self.village_links[name]
+                                logger.info(f"    📍 {name}: поиск на dic.academic.ru (ID {article_id})")
+                                coords_data = await self._parse_individual_village_page(article_id, district)
+                                if coords_data and coords_data.get('has_coords'):
+                                    return name, coords_data
+                            return None, None
+                    
+                    tasks = [fetch_dic(v) for v in with_links]
+                    results = await asyncio.gather(*tasks)
+                    
+                    dic_found = 0
+                    for name, data in results:
+                        if data:
+                            for v in all_villages:
+                                if v['name'] == name and not v.get('has_coords'):
+                                    v['lat'] = data['lat']
+                                    v['lon'] = data['lon']
+                                    v['has_coords'] = True
+                                    dic_found += 1
+                                    self.coords_stats['from_links'] += 1
+                                    break
+                    logger.info(f"  ✅ Найдено координат на dic.academic.ru: {dic_found}")
             
             # ========== 3. ФИНАЛЬНАЯ СТАТИСТИКА ==========
             final_with_coords = sum(1 for v in all_villages if v.get('has_coords'))
