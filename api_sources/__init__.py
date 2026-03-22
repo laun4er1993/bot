@@ -191,7 +191,6 @@ class APISourceManager:
                     html = await response.text()
                     return html
                 elif response.status == 429:
-                    # Увеличиваем задержку при 429 ошибке
                     base_wait = (2 ** retry_count) * random.uniform(2.0, 4.0)
                     wait_time = base_wait
                     logger.warning(f"Ошибка 429 для {url}, повтор через {wait_time:.1f}с (попытка {retry_count + 1}/{self.max_retries})")
@@ -285,7 +284,6 @@ class APISourceManager:
             soup = BeautifulSoup(html, 'html.parser')
             results = []
             
-            # Ищем список результатов
             terms_list = soup.find('ul', class_='terms-list')
             if not terms_list:
                 logger.debug(f"    Не найден список результатов на странице {page_num}")
@@ -293,7 +291,6 @@ class APISourceManager:
             
             for item in terms_list.find_all('li', recursive=False):
                 try:
-                    # Ищем ссылку
                     link = item.find('a', href=re.compile(r'/dic\.nsf/ruwiki/\d+'))
                     if not link:
                         continue
@@ -306,7 +303,6 @@ class APISourceManager:
                     article_id = match.group(1)
                     title = link.get_text().strip()
                     
-                    # Ищем описание (текст после ссылки)
                     first_p = item.find('p')
                     full_text = ""
                     if first_p:
@@ -316,11 +312,9 @@ class APISourceManager:
                         else:
                             full_text = p_text
                     
-                    # Определяем позицию (номер в списке)
                     position_match = re.match(r'^(\d+)', full_text)
                     position = int(position_match.group(1)) if position_match else 0
                     
-                    # Убираем номер из full_text
                     if position > 0:
                         full_text = re.sub(r'^\d+\s*', '', full_text).strip()
                     
@@ -379,7 +373,7 @@ class APISourceManager:
                 variants.append(f"{stem}его")
                 variants.append(f"{stem}ему")
                 variants.append(f"{stem}им")
-                variants.append(f"{stem}ем)
+                variants.append(f"{stem}ем")
         
         elif base.endswith('ой'):
             stem = base[:-2]
@@ -755,7 +749,6 @@ class APISourceManager:
         
         soup = BeautifulSoup(district_html, 'html.parser')
         
-        # Ищем в разделе "См. также"
         see_also = soup.find('div', class_='rellink boilerplate seealso')
         if see_also:
             for link in see_also.find_all('a', href=re.compile(r'/dic\.nsf/ruwiki/\d+')):
@@ -768,7 +761,6 @@ class APISourceManager:
                         self.former_np_pages_cache[cache_key] = article_id
                         return article_id
         
-        # Если не нашли в "См. также", ищем по запросу
         queries = [
             f"Список бывших населённых пунктов на территории {district} района Тверской области",
             f"Список бывших населенных пунктов {district} района",
@@ -2032,15 +2024,12 @@ class APISourceManager:
         Параллельный поиск координат на Wikipedia для списка деревень
         Оптимизирован для избежания ошибок 429
         """
-        # Уменьшаем количество параллельных запросов для избежания 429
         semaphore = asyncio.Semaphore(5)  # 5 параллельных запросов
         
-        # Счетчики для отслеживания прогресса
         total = len(villages)
         processed = 0
         found_count = 0
         
-        # Кэш для страниц сельских поселений
         settlement_pages_cache = {}
         settlement_search_cache = {}
         
@@ -2049,7 +2038,6 @@ class APISourceManager:
             async with semaphore:
                 name = village['name']
                 
-                # Увеличиваем задержку для избежания 429
                 await asyncio.sleep(random.uniform(0.5, 1.0))
                 
                 processed += 1
@@ -2086,8 +2074,6 @@ class APISourceManager:
                                             "district": district,
                                             "has_coords": True
                                         }
-                                    else:
-                                        logger.debug(f"      ⚠️ Координаты {name} вне Тверской области: {lat}, {lon}")
                 except Exception as e:
                     logger.debug(f"      ❌ Ошибка загрузки {name}: {e}")
                 
@@ -2104,10 +2090,8 @@ class APISourceManager:
                                 
                                 if 'список' in title.lower() and name.lower() not in title.lower():
                                     continue
-                                
                                 if 'район' in title.lower() or 'город' in title.lower():
                                     continue
-                                
                                 if name.lower() not in title.lower() and title.lower() not in name.lower():
                                     if len(name) > 5 and name.lower() not in title.lower():
                                         continue
@@ -2335,7 +2319,6 @@ class APISourceManager:
                 # Страница с бывшими НП (для конкретного СП)
                 former_np_id = await self._find_former_np_page(settlement, district)
                 
-                # Проверяем, что страница не была обработана как общий список района
                 if former_np_id and former_np_id not in self.processed_former_np_ids:
                     self.processed_former_np_ids.add(former_np_id)
                     logger.info(f"    ✅ Найдена страница бывших НП для СП {settlement} (ID: {former_np_id})")
@@ -2567,7 +2550,6 @@ class APISourceManager:
         final_with_coords = sum(1 for v in all_villages if v.get('has_coords'))
         all_villages.sort(key=lambda x: x['name'])
         
-        # Удаляем служебные поля перед сохранением
         for v in all_villages:
             if 'has_coords' in v:
                 del v['has_coords']
