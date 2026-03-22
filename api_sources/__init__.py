@@ -369,14 +369,10 @@ class APISourceManager:
     
     def _is_valid_settlement_name(self, name: str, district: str = "") -> bool:
         """Проверяет, является ли текст валидным названием сельского поселения"""
-        if not name or len(name) < 3 or len(name) > 50:
+        if not name or len(name) < 2 or len(name) > 50:
             return False
         
         name_lower = name.lower()
-        
-        # Обязательно должно содержать "сельское поселение"
-        if 'сельское поселение' not in name_lower and 'сельсовет' not in name_lower:
-            return False
         
         # Проверка на даты
         if re.match(r'^\d+\s+(мая|января|февраля|марта|апреля|июня|июля|августа|сентября|октября|ноября|декабря)', name_lower):
@@ -417,7 +413,25 @@ class APISourceManager:
         if any(x in name_lower for x in ['водохранилище', 'культура', 'список', 'категория', 'уезд']):
             return False
         
-        return True
+        # Если в названии есть "сельское поселение", убираем его для проверки
+        if 'сельское поселение' in name_lower or 'сельсовет' in name_lower:
+            # Извлекаем основное название
+            name_clean = re.sub(r'^сельское\s+поселение\s*', '', name_lower, flags=re.IGNORECASE)
+            name_clean = re.sub(r'\s+\(.*?\)', '', name_clean).strip()
+            if name_clean and len(name_clean) >= 2:
+                # Проверяем, что это не город
+                if name_clean in ['зубцов', 'ржев', 'осташков', 'торжок', 'белый', 'нелидово', 'оленино']:
+                    return False
+                return True
+        
+        # Для коротких названий (без "сельское поселение") - проверяем, что это похоже на название СП
+        if len(name) <= 20 and re.match(r'^[А-Я][а-я]+$', name):
+            # Проверяем, что это не город
+            if name_lower in ['зубцов', 'ржев', 'осташков', 'торжок', 'белый', 'нелидово', 'оленино']:
+                return False
+            return True
+        
+        return False
     
     # ========== ОПРЕДЕЛЕНИЕ ГРАНИЦ РАЙОНА ==========
     
@@ -564,39 +578,71 @@ class APISourceManager:
             soup = BeautifulSoup(html, 'html.parser')
             found_settlements = []
             
-            # Ищем раздел "Состав района"
+            # Расширенные ключевые слова для поиска заголовков
+            settlement_headers = [
+                'состав района', 'сельские поселения', 'муниципальное устройство',
+                'административное деление', 'список сельских поселений'
+            ]
+            
+            # Ищем заголовки с ключевыми словами
             for header in soup.find_all(['h2', 'h3', 'h4']):
                 header_text = header.get_text().lower()
-                if 'состав района' in header_text:
-                    parent = header.find_parent()
-                    if parent:
-                        # Ищем списки ul/ol
-                        for ul in parent.find_all(['ul', 'ol']):
-                            for li in ul.find_all('li'):
-                                # Ищем ссылку
-                                link = li.find('a')
-                                if link:
-                                    text = link.get_text().strip()
-                                    text = re.sub(r'\[[0-9]+\]', '', text).strip()
-                                    text = re.sub(r'\s+', ' ', text).strip()
-                                    
-                                    # Проверяем, что это ссылка на сельское поселение
-                                    if 'сельское поселение' in text.lower():
-                                        # Извлекаем название
-                                        match = re.search(r'«([^»]+)»', text)
-                                        if match:
-                                            settlement = match.group(1).strip()
-                                        else:
-                                            # Убираем слова "сельское поселение"
-                                            settlement = re.sub(r'^сельское\s+поселение\s*', '', text, flags=re.IGNORECASE)
-                                            settlement = re.sub(r'\s+\(.*?\)', '', settlement).strip()
-                                        
-                                        if settlement and len(settlement) > 2:
-                                            if self._is_valid_settlement_name(settlement):
-                                                found_settlements.append(settlement)
-                                                logger.debug(f"        Найдено СП: {settlement}")
+                header_text = re.sub(r'\s+', ' ', header_text).strip()
+                
+                # Проверяем, подходит ли заголовок
+                is_settlement_header = False
+                for keyword in settlement_headers:
+                    if keyword in header_text:
+                        is_settlement_header = True
+                        break
+                
+                if not is_settlement_header:
+                    continue
+                
+                logger.debug(f"        Найден заголовок: {header_text}")
+                
+                # Ищем списки после заголовка
+                current = header.find_next_sibling()
+                found_lists = []
+                
+                while current and len(found_lists) < 3:
+                    if current.name in ['ul', 'ol']:
+                        found_lists.append(current)
+                        # Если нашли список, проверяем его содержимое
+                        for li in current.find_all('li', recursive=False):
+                            link = li.find('a')
+                            if not link:
+                                continue
+                            
+                            text = link.get_text().strip()
+                            text = re.sub(r'\s+', ' ', text).strip()
+                            
+                            # Проверяем, что это ссылка на сельское поселение
+                            if 'сельское поселение' in text.lower():
+                                # Извлекаем название
+                                match = re.search(r'«([^»]+)»', text)
+                                if match:
+                                    settlement = match.group(1).strip()
+                                else:
+                                    settlement = re.sub(r'^сельское\s+поселение\s*', '', text, flags=re.IGNORECASE)
+                                    settlement = re.sub(r'\s+\(.*?\)', '', settlement).strip()
+                                
+                                if settlement and len(settlement) > 2:
+                                    if self._is_valid_settlement_name(settlement, district):
+                                        found_settlements.append(settlement)
+                                        logger.debug(f"        Найдено СП: {settlement}")
+                        
+                        # Если нашли достаточно списков, выходим
+                        if len(found_lists) >= 2 and found_settlements:
+                            break
+                    
+                    current = current.find_next_sibling()
+                
+                # Если нашли СП, выходим из цикла по заголовкам
+                if found_settlements:
+                    break
             
-            # Если не нашли через заголовки, ищем по прямым ссылкам на сельские поселения
+            # Если не нашли через заголовки, ищем по прямым ссылкам
             if not found_settlements:
                 for link in soup.find_all('a', href=re.compile(r'/dic\.nsf/ruwiki/\d+')):
                     link_text = link.get_text().strip()
@@ -609,7 +655,7 @@ class APISourceManager:
                             settlement = re.sub(r'\s+\(.*?\)', '', settlement).strip()
                         
                         if settlement and len(settlement) > 2:
-                            if self._is_valid_settlement_name(settlement):
+                            if self._is_valid_settlement_name(settlement, district):
                                 found_settlements.append(settlement)
                                 logger.debug(f"        Найдено СП по прямой ссылке: {settlement}")
             
