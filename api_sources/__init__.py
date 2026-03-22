@@ -326,6 +326,48 @@ class APISourceManager:
         text = re.sub(r'\s+', ' ', text).strip()
         return text.lower()
     
+    def _normalize_district_name(self, district: str) -> str:
+        """Нормализует название района для поиска"""
+        # Убираем окончания "ий", "ой", "ого", "его"
+        normalized = district.lower()
+        normalized = re.sub(r'ий$', 'и', normalized)
+        normalized = re.sub(r'ой$', 'о', normalized)
+        normalized = re.sub(r'ого$', 'о', normalized)
+        normalized = re.sub(r'его$', 'е', normalized)
+        return normalized
+    
+    def _check_district_in_text(self, text: str, district: str) -> bool:
+        """Проверяет, есть ли упоминание района в тексте (с учётом падежей)"""
+        text_lower = text.lower()
+        district_lower = district.lower()
+        district_normalized = self._normalize_district_name(district_lower)
+        
+        # Проверяем точное вхождение
+        if district_lower in text_lower:
+            return True
+        
+        # Проверяем нормализованное название
+        if district_normalized in text_lower:
+            return True
+        
+        # Проверяем различные падежи
+        patterns = [
+            district_lower,
+            district_lower + "ий",
+            district_lower + "ого",
+            district_lower + "его",
+            district_lower + "ому",
+            district_lower + "ему",
+            district_lower + "им",
+            district_lower + "ом"
+        ]
+        
+        for pattern in patterns:
+            if pattern in text_lower:
+                return True
+        
+        return False
+    
     def _is_valid_name(self, name: str, district: str = "") -> bool:
         """Проверяет, является ли текст валидным названием населенного пункта"""
         if not name or len(name) < MIN_NAME_LENGTH or len(name) > MAX_NAME_LENGTH:
@@ -686,15 +728,15 @@ class APISourceManager:
         # Сортируем по позиции
         all_results.sort(key=lambda x: x['position'] if x['position'] > 0 else 999)
         
-        # Проверяем первые 20 результатов
-        for i, result in enumerate(all_results[:20]):
+        # Проверяем первые 30 результатов
+        for i, result in enumerate(all_results[:30]):
             title_lower = result['title'].lower()
             full_text_lower = result['full_text'].lower()
             
             logger.info(f"        Результат {i+1}: ID {result['id']} - {result['title'][:100]}...")
             
-            # Проверяем, что результат относится к нужному району
-            if district_lower not in full_text_lower and district_lower not in title_lower:
+            # Проверяем, что результат относится к нужному району (с учётом падежей)
+            if not self._check_district_in_text(title_lower + " " + full_text_lower, district):
                 logger.info(f"          ❌ Не относится к району {district}")
                 continue
             
@@ -704,7 +746,9 @@ class APISourceManager:
                 continue
             
             # Проверяем, что в заголовке есть название СП
-            if settlement_lower not in title_lower and self._normalize_text(settlement_lower) not in self._normalize_text(title_lower):
+            settlement_normalized = self._normalize_text(settlement_lower)
+            title_normalized = self._normalize_text(title_lower)
+            if settlement_lower not in title_lower and settlement_normalized not in title_normalized:
                 logger.info(f"          ❌ Нет названия СП '{settlement}' в заголовке")
                 continue
             
@@ -815,7 +859,7 @@ class APISourceManager:
         elif "сельское поселение" in full_text_lower:
             score += 20
         
-        if district_lower in title_lower or district_lower in full_text_lower:
+        if self._check_district_in_text(title_lower + " " + full_text_lower, district):
             score += 20
         
         if result['position'] == 1:
@@ -834,9 +878,9 @@ class APISourceManager:
         
         soup = BeautifulSoup(html, 'html.parser')
         page_text = soup.get_text().lower()
-        district_lower = district.lower()
         
-        if district_lower not in page_text:
+        # Проверяем, что страница относится к нужному району
+        if not self._check_district_in_text(page_text, district):
             logger.debug(f"      Страница ID {article_id} не относится к району {district}, пропускаем")
             return []
         
@@ -936,9 +980,8 @@ class APISourceManager:
         
         soup = BeautifulSoup(html, 'html.parser')
         page_text = soup.get_text().lower()
-        district_lower = district.lower()
         
-        if district_lower not in page_text:
+        if not self._check_district_in_text(page_text, district):
             logger.debug(f"      Страница ID {article_id} не относится к району {district}, пропускаем")
             return []
         
@@ -1229,7 +1272,6 @@ class APISourceManager:
         try:
             soup = BeautifulSoup(html, 'html.parser')
             found_ids = []
-            district_lower = district.lower()
             
             for link in soup.find_all('a', href=re.compile(r'/dic\.nsf/ruwiki/\d+')):
                 href = link.get('href', '')
@@ -1244,7 +1286,7 @@ class APISourceManager:
                 
                 for keyword in LIST_KEYWORDS:
                     if keyword in full_context:
-                        if district_lower in full_context:
+                        if self._check_district_in_text(full_context, district):
                             match = re.search(r'/dic\.nsf/ruwiki/(\d+)', href)
                             if match:
                                 article_id = match.group(1)
@@ -1264,7 +1306,7 @@ class APISourceManager:
                             
                             for keyword in LIST_KEYWORDS:
                                 if keyword in text:
-                                    if district_lower in text:
+                                    if self._check_district_in_text(text, district):
                                         match = re.search(r'/dic\.nsf/ruwiki/(\d+)', href)
                                         if match:
                                             article_id = match.group(1)
@@ -1288,9 +1330,8 @@ class APISourceManager:
         
         soup = BeautifulSoup(html, 'html.parser')
         page_text = soup.get_text().lower()
-        district_lower = district.lower()
         
-        if district_lower not in page_text:
+        if not self._check_district_in_text(page_text, district):
             logger.debug(f"      Страница ID {article_id} не относится к району {district}, пропускаем")
             return []
         
@@ -1560,7 +1601,7 @@ class APISourceManager:
                     continue
                 
                 cell_text = cells[name_col_idx].get_text().strip().lower()
-                if district_lower in cell_text:
+                if self._check_district_in_text(cell_text, district):
                     link = cells[name_col_idx].find('a')
                     if link and link.get('href', '').startswith('/wiki/'):
                         page_url = f"{WIKIPEDIA_BASE_URL}{link['href']}"
@@ -1569,7 +1610,7 @@ class APISourceManager:
             
             for link in table.find_all('a', href=re.compile(r'^/wiki/')):
                 link_text = link.get_text().strip().lower()
-                if district_lower in link_text:
+                if self._check_district_in_text(link_text, district):
                     page_url = f"{WIKIPEDIA_BASE_URL}{link['href']}"
                     logger.info(f"    ✅ Найдена страница района на странице Тверской области: {page_url}")
                     return page_url
@@ -2001,7 +2042,7 @@ class APISourceManager:
                         for list_id in additional_list_ids:
                             if list_id not in processed_master_lists and list_id not in self.processed_article_ids:
                                 list_info = await self._get_article_info(list_id)
-                                if list_info and district.lower() in list_info.get('title', '').lower():
+                                if list_info and self._check_district_in_text(list_info.get('title', ''), district):
                                     processed_master_lists.add(list_id)
                                     self.processed_article_ids.add(list_id)
                                     logger.info(f"      Обрабатываем дополнительный список ID {list_id}")
