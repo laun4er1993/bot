@@ -2054,9 +2054,13 @@ class APISourceManager:
                 
                 logger.debug(f"      🔍 Поиск координат для {name} на Wikipedia...")
                 
+                # Функция для правильного кодирования URL для Wikipedia
+                def wiki_encode(name: str) -> str:
+                    name_with_underscores = name.replace(' ', '_')
+                    return quote(name_with_underscores, safe='')
+                
                 # Прямой URL
-                encoded_name = quote_plus(name)
-                direct_url = f"{WIKIPEDIA_BASE_URL}/wiki/{encoded_name}"
+                direct_url = f"{WIKIPEDIA_BASE_URL}/wiki/{wiki_encode(name)}"
                 
                 try:
                     html = await self._fetch_page(direct_url)
@@ -2105,7 +2109,7 @@ class APISourceManager:
                                     if len(name) > 5 and name.lower() not in title.lower():
                                         continue
                                 
-                                page_url = f"{WIKIPEDIA_BASE_URL}/wiki/{quote_plus(title)}"
+                                page_url = f"{WIKIPEDIA_BASE_URL}/wiki/{wiki_encode(title)}"
                                 logger.debug(f"      🔍 Проверяем страницу: {title}")
                                 
                                 try:
@@ -2163,8 +2167,13 @@ class APISourceManager:
         
         district_page_url = None
         
+        # Функция для правильного кодирования URL для Wikipedia
+        def wiki_encode(name: str) -> str:
+            name_with_underscores = name.replace(' ', '_')
+            return quote(name_with_underscores, safe='')
+        
         # Сначала пробуем прямой URL для "Ржевский район" (самый вероятный)
-        direct_url = f"{WIKIPEDIA_BASE_URL}/wiki/{quote_plus(f'{district} район')}"
+        direct_url = f"{WIKIPEDIA_BASE_URL}/wiki/{wiki_encode(f'{district} район')}"
         logger.info(f"    🔎 Пробуем прямой URL: {direct_url}")
         html = await self._fetch_page(direct_url)
         if html:
@@ -2187,8 +2196,7 @@ class APISourceManager:
             ]
             
             for dq in district_queries:
-                encoded_dq = quote_plus(dq)
-                direct_url = f"{WIKIPEDIA_BASE_URL}/wiki/{encoded_dq}"
+                direct_url = f"{WIKIPEDIA_BASE_URL}/wiki/{wiki_encode(dq)}"
                 logger.debug(f"    🔎 Пробуем: {direct_url}")
                 html = await self._fetch_page(direct_url)
                 if html:
@@ -2216,7 +2224,7 @@ class APISourceManager:
                         for result in data['query']['search'][:10]:
                             title = result['title']
                             if 'район' in title.lower() or 'округ' in title.lower():
-                                page_url = f"{WIKIPEDIA_BASE_URL}/wiki/{quote_plus(title)}"
+                                page_url = f"{WIKIPEDIA_BASE_URL}/wiki/{wiki_encode(title)}"
                                 logger.debug(f"    🔎 Проверяем через API: {page_url}")
                                 html = await self._fetch_page(page_url)
                                 if html:
@@ -2440,8 +2448,7 @@ class APISourceManager:
                         logger.debug(f"      ❌ Ошибка загрузки страницы {name}: {e}")
                 
                 # Прямой URL
-                encoded_name = quote_plus(name)
-                direct_url = f"{WIKIPEDIA_BASE_URL}/wiki/{encoded_name}"
+                direct_url = f"{WIKIPEDIA_BASE_URL}/wiki/{wiki_encode(name)}"
                 
                 try:
                     html = await self._fetch_page(direct_url)
