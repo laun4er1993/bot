@@ -782,13 +782,16 @@ class APISourceManager:
                     self.former_np_pages_cache[cache_key] = article_id
                     return article_id
         
-        # Если не нашли в "См. также", ищем по запросу
+        # Расширенные запросы для поиска общего списка района
         queries = [
             f"Список бывших населённых пунктов на территории {district} района Тверской области",
             f"Список бывших населенных пунктов {district} района",
             f"Бывшие населенные пункты {district} района",
             f"Список бывших населённых пунктов {district} муниципального округа",
-            f"Список бывших населенных пунктов {district} муниципального округа"
+            f"Список бывших населенных пунктов {district} муниципального округа",
+            f"Бывшие населенные пункты {district} муниципального округа",
+            f"Список бывших населённых пунктов {district} района Тверской области",
+            f"Список бывших населенных пунктов {district} района Тверской области"
         ]
         
         for query in queries:
@@ -820,14 +823,15 @@ class APISourceManager:
         district_lower = district.lower()
         settlement_lower = settlement.lower()
         
-        # Расширенные запросы для поиска страницы бывших НП конкретного СП
+        # Расширенные запросы для поиска страницы бывших НП
         queries = [
             f"Список бывших населённых пунктов на территории сельского поселения {settlement} {district} район",
             f"Список бывших населенных пунктов на территории сельского поселения {settlement} {district} район",
             f"Список бывших населённых пунктов {settlement} {district} район",
             f"Бывшие населённые пункты {settlement} СП",
             f"Список бывших населённых пунктов {settlement} сельского поселения",
-            f"{settlement} бывшие населенные пункты"
+            f"{settlement} бывшие населенные пункты",
+            f"Бывшие населенные пункты {district} района"
         ]
         
         all_results = []
@@ -857,24 +861,29 @@ class APISourceManager:
             
             logger.info(f"        Результат {i+1}: ID {result['id']} - {result['title'][:100]}...")
             
+            # Проверяем принадлежность к району
             if not self._check_district_in_text(title_lower + " " + full_text_lower, district):
                 logger.info(f"          ❌ Не относится к району {district}")
                 continue
             
+            # Проверяем наличие слова "бывших"
             if 'бывших' not in title_lower and 'бывшие' not in title_lower:
                 logger.info(f"          ❌ Нет слова 'бывших' в заголовке")
                 continue
             
-            # Проверяем наличие названия СП в заголовке (не обязательно, но желательно)
-            if (settlement_lower not in title_lower and 
-                settlement_normalized not in title_normalized):
-                # Если нет названия СП, но это может быть общий список района - пропускаем для конкретного СП
-                if 'района' not in title_lower and 'округа' not in title_lower:
-                    logger.info(f"          ❌ Нет названия СП '{settlement}' в заголовке")
-                    continue
-                else:
-                    logger.info(f"          ⚠️ Найден общий список района, а не конкретного СП")
-                    # Не возвращаем, продолжаем поиск
+            # Проверяем наличие названия СП или района
+            has_settlement = (settlement_lower in title_lower or settlement_normalized in title_normalized)
+            has_district = self._check_district_in_text(title_lower, district)
+            
+            # Если нет названия СП, но это общий список района - помечаем как районный список
+            is_district_list = not has_settlement and 'района' in title_lower and has_district
+            
+            if not has_settlement and not is_district_list:
+                logger.info(f"          ❌ Нет названия СП '{settlement}' в заголовке и это не общий список района")
+                continue
+            
+            if is_district_list:
+                logger.info(f"          ℹ️ Найден общий список бывших НП района")
             
             logger.info(f"          ✅ Прошел проверки, загружаем страницу...")
             
@@ -2624,10 +2633,13 @@ class APISourceManager:
                 # Страница с бывшими НП (для конкретного СП)
                 former_np_id = await self._find_former_np_page(settlement, district)
                 
-                # Также ищем общий список бывших НП района (если есть)
-                district_former_id = await self._find_district_former_np_page(district, district_html)
+                # Если не нашли страницу для конкретного СП, используем общий список района
+                if not former_np_id:
+                    district_former_id = await self._find_district_former_np_page(district, district_html)
+                    if district_former_id and district_former_id not in self.processed_former_np_ids:
+                        former_np_id = district_former_id
+                        logger.info(f"    📌 Используем общий список бывших НП района (ID: {district_former_id}) для СП {settlement}")
                 
-                # Проверяем, что страница не была обработана как общий список района
                 if former_np_id and former_np_id not in self.processed_former_np_ids:
                     self.processed_former_np_ids.add(former_np_id)
                     logger.info(f"    ✅ Найдена страница бывших НП для СП {settlement} (ID: {former_np_id})")
@@ -2661,36 +2673,6 @@ class APISourceManager:
                         logger.info(f"    ⚠️ Страница бывших НП для СП {settlement} уже обработана (ID: {former_np_id}), пропускаем")
                     else:
                         logger.info(f"    ⚠️ Страница бывших НП для СП {settlement} не найдена")
-                
-                # Если есть общий список бывших НП района и он не обработан
-                if district_former_id and district_former_id not in self.processed_former_np_ids:
-                    self.processed_former_np_ids.add(district_former_id)
-                    logger.info(f"    📌 Обрабатываем общий список бывших НП района (ID: {district_former_id})")
-                    district_former_data = await self._parse_former_np_page(district_former_id, district, "всего района")
-                    
-                    district_new = 0
-                    district_with_coords = 0
-                    
-                    for village in district_former_data:
-                        key = f"{village['name']}_{village['district']}"
-                        
-                        if village.get('has_coords'):
-                            district_with_coords += 1
-                            logger.info(f"      📍 Бывший НП района с координатами: {village['name']} ({village['lat']}, {village['lon']})")
-                        
-                        if key not in seen_villages:
-                            seen_villages[key] = village
-                            self.collection_stats['from_former'] += 1
-                            district_new += 1
-                        else:
-                            existing = seen_villages[key]
-                            if not existing.get('has_coords') and village.get('has_coords'):
-                                seen_villages[key] = village
-                                district_new += 1
-                                logger.info(f"      🔄 Обновлены координаты для {village['name']} из общего списка бывших НП района")
-                    
-                    if district_new > 0:
-                        logger.info(f"    ✅ Из общего списка бывших НП района добавлено {district_new} записей (из них с координатами: {district_with_coords})")
                 
                 # Основная страница СП
                 main_page_id = await self._find_settlement_main_page(settlement, district)
