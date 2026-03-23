@@ -241,10 +241,10 @@ yd_client = YandexDiskClient(YANDEX_DISK_TOKEN)
 # ========== КЛАСС ДЛЯ РАБОТЫ С БАЗОЙ НАСЕЛЕННЫХ ПУНКТОВ ==========
 
 class VillageDatabase:
-    """База данных населенных пунктов"""
+    """База данных населенных пунктов - сохраняется в TXT файле между перезапусками"""
     
-    def __init__(self, csv_path: str = "data/villages.csv"):
-        self.csv_path = csv_path
+    def __init__(self, txt_path: str = "data/villages.txt"):
+        self.txt_path = txt_path
         self.villages: List[Dict] = []
         self.villages_by_name: Dict[str, List[Dict]] = {}
         self.villages_by_district: Dict[str, List[Dict]] = {}
@@ -252,78 +252,103 @@ class VillageDatabase:
         self._load()
     
     def _load(self):
-        """Загружает базу из CSV файла"""
-        if not os.path.exists(self.csv_path):
+        """Загружает базу из TXT файла"""
+        if not os.path.exists(self.txt_path):
             self._create_empty()
             return
         try:
-            with open(self.csv_path, 'r', encoding='utf-8') as f:
-                reader = csv.DictReader(f)
-                self.villages = list(reader)
-            
-            self.villages_by_name.clear()
-            self.villages_by_district.clear()
-            with_coords = 0
-            for v in self.villages:
-                name_lower = v['name'].lower()
-                if name_lower not in self.villages_by_name:
-                    self.villages_by_name[name_lower] = []
-                self.villages_by_name[name_lower].append(v)
+            with open(self.txt_path, 'r', encoding='utf-8') as f:
+                # Пропускаем заголовок
+                lines = f.readlines()
+                if not lines:
+                    self._create_empty()
+                    return
                 
-                district = v.get('district', '')
-                if district:
-                    if district not in self.villages_by_district:
-                        self.villages_by_district[district] = []
-                    self.villages_by_district[district].append(v)
-                
-                if v.get('lat') and v.get('lon') and v['lat'].strip() and v['lon'].strip():
-                    with_coords += 1
+                # Заголовок: Название Тип Широта Долгота Район
+                for line in lines[1:]:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    
+                    parts = line.split()
+                    if len(parts) >= 5:
+                        # Формат: name type lat lon district
+                        name = parts[0]
+                        village_type = parts[1]
+                        lat = parts[2] if parts[2] != '-' else ''
+                        lon = parts[3] if parts[3] != '-' else ''
+                        district = parts[4]
+                        
+                        # Обработка названий из нескольких слов
+                        if len(parts) > 5:
+                            name = ' '.join(parts[:-4])
+                            village_type = parts[-4]
+                            lat = parts[-3] if parts[-3] != '-' else ''
+                            lon = parts[-2] if parts[-2] != '-' else ''
+                            district = parts[-1]
+                        
+                        village = {
+                            'name': name,
+                            'type': village_type,
+                            'lat': lat,
+                            'lon': lon,
+                            'district': district
+                        }
+                        self.villages.append(village)
             
-            self.stats['total'] = len(self.villages)
-            self.stats['with_coords'] = with_coords
-            logger.info(f"✅ Загружено {self.stats['total']} населенных пунктов")
+            # Построение индексов
+            self._build_indexes()
+            
+            logger.info(f"✅ Загружено {self.stats['total']} населенных пунктов из TXT")
         except Exception as e:
             logger.error(f"❌ Ошибка загрузки: {e}")
             self._create_empty()
     
+    def _build_indexes(self):
+        """Перестраивает индексы"""
+        self.villages_by_name.clear()
+        self.villages_by_district.clear()
+        with_coords = 0
+        
+        for v in self.villages:
+            name_lower = v['name'].lower()
+            if name_lower not in self.villages_by_name:
+                self.villages_by_name[name_lower] = []
+            self.villages_by_name[name_lower].append(v)
+            
+            district = v.get('district', '')
+            if district:
+                if district not in self.villages_by_district:
+                    self.villages_by_district[district] = []
+                self.villages_by_district[district].append(v)
+            
+            if v.get('lat') and v.get('lon') and v['lat'].strip() and v['lon'].strip():
+                with_coords += 1
+        
+        self.stats['total'] = len(self.villages)
+        self.stats['with_coords'] = with_coords
+    
     def _create_empty(self):
         """Создает пустую базу данных"""
-        os.makedirs(os.path.dirname(self.csv_path), exist_ok=True)
-        with open(self.csv_path, 'w', encoding='utf-8') as f:
-            f.write("name,type,lat,lon,district\n")
+        os.makedirs(os.path.dirname(self.txt_path), exist_ok=True)
+        with open(self.txt_path, 'w', encoding='utf-8') as f:
+            f.write("Название Тип Широта Долгота Район\n")
         self.villages = []
         self.villages_by_name = {}
         self.villages_by_district = {}
         self.stats = {'total': 0, 'with_coords': 0, 'last_update': None, 'source_file': None}
     
     def _save(self):
-        """Сохраняет базу в CSV файл"""
+        """Сохраняет базу в TXT файл"""
         if not self.villages:
             return
-        with open(self.csv_path, 'w', encoding='utf-8', newline='') as f:
-            writer = csv.DictWriter(f, fieldnames=['name', 'type', 'lat', 'lon', 'district'])
-            writer.writeheader()
-            writer.writerows(self.villages)
-    
-    def search(self, query: str) -> List[Dict]:
-        """Поиск населенных пунктов по названию"""
-        if not query:
-            return []
-        query_lower = query.lower().strip()
-        results = []
-        seen = set()
-        if query_lower in self.villages_by_name:
-            for v in self.villages_by_name[query_lower]:
-                if v['name'] not in seen:
-                    results.append(v)
-                    seen.add(v['name'])
-        for name, villages in self.villages_by_name.items():
-            if query_lower in name and name != query_lower:
-                for v in villages:
-                    if v['name'] not in seen:
-                        results.append(v)
-                        seen.add(v['name'])
-        return results
+        
+        with open(self.txt_path, 'w', encoding='utf-8') as f:
+            f.write("Название Тип Широта Долгота Район\n")
+            for v in self.villages:
+                lat = v.get('lat', '') if v.get('lat') else '-'
+                lon = v.get('lon', '') if v.get('lon') else '-'
+                f.write(f"{v['name']} {v['type']} {lat} {lon} {v['district']}\n")
     
     def add_village(self, village: Dict) -> Tuple[bool, str]:
         """Добавляет один населенный пункт в каталог с проверкой на дубликат"""
@@ -425,24 +450,8 @@ class VillageDatabase:
         # Удаляем из основного списка
         self.villages = [v for v in self.villages if v.get('district', '') != district]
         
-        # Обновляем индексы
-        self.villages_by_name.clear()
-        self.villages_by_district.clear()
-        
-        for v in self.villages:
-            name_lower = v['name'].lower()
-            if name_lower not in self.villages_by_name:
-                self.villages_by_name[name_lower] = []
-            self.villages_by_name[name_lower].append(v)
-            
-            dist = v.get('district', '')
-            if dist:
-                if dist not in self.villages_by_district:
-                    self.villages_by_district[dist] = []
-                self.villages_by_district[dist].append(v)
-        
-        self.stats['total'] = len(self.villages)
-        self.stats['with_coords'] = sum(1 for v in self.villages if v.get('lat') and v.get('lon') and v['lat'].strip() and v['lon'].strip())
+        # Перестраиваем индексы
+        self._build_indexes()
         self._save()
         
         return removed_count, sum(1 for v in removed_villages if v.get('lat') and v.get('lon') and v['lat'].strip() and v['lon'].strip())
@@ -465,49 +474,64 @@ class VillageDatabase:
         """Возвращает список районов в каталоге"""
         return sorted(self.villages_by_district.keys())
     
-    def replace_with_catalog(self, csv_content: str, source_filename: str) -> Dict:
-        """Заменяет текущий каталог новым из CSV"""
+    def replace_with_txt(self, txt_content: str, source_filename: str) -> Dict:
+        """Заменяет текущий каталог новым из TXT файла"""
         stats = {'loaded': 0, 'with_coords': 0, 'errors': 0}
         try:
-            reader = csv.DictReader(io.StringIO(csv_content))
-            required = ['name', 'type', 'lat', 'lon', 'district']
-            if not all(f in reader.fieldnames for f in required):
-                missing = [f for f in required if f not in reader.fieldnames]
-                raise ValueError(f"Отсутствуют поля: {', '.join(missing)}")
+            lines = txt_content.strip().split('\n')
+            if not lines:
+                raise ValueError("Пустой файл")
+            
+            # Проверяем заголовок
+            if not lines[0].startswith('Название'):
+                raise ValueError("Неверный формат. Ожидается заголовок: Название Тип Широта Долгота Район")
             
             new_villages = []
-            for row in reader:
-                if row['name'].strip():
-                    if row['lat'].strip() and row['lon'].strip():
-                        try:
-                            float(row['lat'])
-                            float(row['lon'])
-                            stats['with_coords'] += 1
-                        except ValueError:
-                            stats['errors'] += 1
-                            continue
-                    new_villages.append(row)
-                    stats['loaded'] += 1
+            for line in lines[1:]:
+                line = line.strip()
+                if not line:
+                    continue
+                
+                parts = line.split()
+                if len(parts) >= 5:
+                    # Формат: name type lat lon district
+                    name = parts[0]
+                    village_type = parts[1]
+                    lat = parts[2] if parts[2] != '-' else ''
+                    lon = parts[3] if parts[3] != '-' else ''
+                    district = parts[4]
+                    
+                    # Обработка названий из нескольких слов
+                    if len(parts) > 5:
+                        name = ' '.join(parts[:-4])
+                        village_type = parts[-4]
+                        lat = parts[-3] if parts[-3] != '-' else ''
+                        lon = parts[-2] if parts[-2] != '-' else ''
+                        district = parts[-1]
+                    
+                    if name:
+                        if lat and lon:
+                            try:
+                                float(lat)
+                                float(lon)
+                                stats['with_coords'] += 1
+                            except ValueError:
+                                stats['errors'] += 1
+                                continue
+                        
+                        new_villages.append({
+                            'name': name,
+                            'type': village_type,
+                            'lat': lat,
+                            'lon': lon,
+                            'district': district
+                        })
+                        stats['loaded'] += 1
             
             self.villages = new_villages
+            self._build_indexes()
             self._save()
             
-            self.villages_by_name.clear()
-            self.villages_by_district.clear()
-            for v in self.villages:
-                name_lower = v['name'].lower()
-                if name_lower not in self.villages_by_name:
-                    self.villages_by_name[name_lower] = []
-                self.villages_by_name[name_lower].append(v)
-                
-                district = v.get('district', '')
-                if district:
-                    if district not in self.villages_by_district:
-                        self.villages_by_district[district] = []
-                    self.villages_by_district[district].append(v)
-            
-            self.stats['total'] = len(self.villages)
-            self.stats['with_coords'] = stats['with_coords']
             self.stats['last_update'] = time.strftime('%Y-%m-%d %H:%M:%S')
             self.stats['source_file'] = source_filename
             return stats
@@ -518,6 +542,24 @@ class VillageDatabase:
     def get_stats(self) -> Dict:
         """Возвращает статистику каталога"""
         return self.stats.copy()
+    
+    def export_to_txt(self, filename: str = None) -> str:
+        """Экспортирует каталог в TXT файл и возвращает путь"""
+        if not filename:
+            filename = f"населенные_пункты_{time.strftime('%Y%m%d_%H%M%S')}.txt"
+        
+        export_dir = "data/export"
+        os.makedirs(export_dir, exist_ok=True)
+        file_path = os.path.join(export_dir, filename)
+        
+        with open(file_path, 'w', encoding='cp1251', newline='') as f:
+            f.write("Название Тип Широта Долгота Район\n")
+            for v in self.villages:
+                lat = v.get('lat', '') if v.get('lat') else '-'
+                lon = v.get('lon', '') if v.get('lon') else '-'
+                f.write(f"{v['name']} {v['type']} {lat} {lon} {v['district']}\n")
+        
+        return file_path
 
 
 village_db = VillageDatabase()
@@ -761,27 +803,19 @@ db = PhotosDatabase()
 
 # ========== ФУНКЦИИ ДЛЯ РАБОТЫ С TXT ==========
 
-def generate_txt_from_data(data: List[Dict], filename: str) -> str:
+def generate_txt_from_villages(villages: List[Dict], filename: str) -> str:
     """Генерирует TXT файл с данными о населенных пунктах"""
-    cleaned = []
-    for v in data:
-        cleaned.append({
-            'name': v.get('name', ''),
-            'type': v.get('type', ''),
-            'lat': v.get('lat', ''),
-            'lon': v.get('lon', ''),
-            'district': v.get('district', '')
-        })
-    cleaned.sort(key=lambda x: x['name'])
-    
     export_dir = "data/export"
     os.makedirs(export_dir, exist_ok=True)
     file_path = os.path.join(export_dir, filename)
     
     with open(file_path, 'w', encoding='cp1251', newline='') as f:
-        f.write('Название Тип Широта Долгота Район\n')
-        for item in cleaned:
-            f.write(f"{item['name']} {item['type']} {item['lat']} {item['lon']} {item['district']}\n")
+        f.write("Название Тип Широта Долгота Район\n")
+        for v in villages:
+            lat = v.get('lat', '') if v.get('lat') else '-'
+            lon = v.get('lon', '') if v.get('lon') else '-'
+            f.write(f"{v['name']} {v['type']} {lat} {lon} {v['district']}\n")
+    
     return file_path
 
 
@@ -790,7 +824,7 @@ def generate_txt_from_data(data: List[Dict], filename: str) -> str:
 class SearchStates(StatesGroup):
     waiting_for_village = State()
     waiting_for_kml = State()
-    waiting_for_csv_upload = State()
+    waiting_for_txt_upload = State()
     waiting_for_district_select = State()
     waiting_for_add_village_name = State()
     waiting_for_add_village_type = State()
@@ -816,8 +850,8 @@ def get_main_keyboard() -> ReplyKeyboardMarkup:
 def get_settings_keyboard() -> InlineKeyboardMarkup:
     """Меню настроек"""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📥 Добавить НП вручную", callback_data="add_village_manual")],
-        [InlineKeyboardButton(text="📤 Добавить НП из CSV", callback_data="add_villages_csv")],
+        [InlineKeyboardButton(text="📝 Добавить НП вручную", callback_data="add_village_manual")],
+        [InlineKeyboardButton(text="📤 Загрузить каталог (TXT)", callback_data="load_catalog_txt")],
         [InlineKeyboardButton(text="🌐 Загрузить из интернета", callback_data="download_from_web_start")],
         [InlineKeyboardButton(text="🗑️ Удалить район", callback_data="delete_district_start")],
         [InlineKeyboardButton(text="🗑️ Очистить весь каталог", callback_data="clear_all_catalog")],
@@ -835,9 +869,6 @@ def get_district_keyboard() -> InlineKeyboardMarkup:
     
     remaining_districts = AVAILABLE_DISTRICTS[5:]
     if remaining_districts:
-        district_buttons = []
-        for district in remaining_districts:
-            district_buttons.append([InlineKeyboardButton(text=f"📍 {district} район", callback_data=f"select_district_{district}")])
         keyboard.append([InlineKeyboardButton(text="📋 Ещё районы ▼", callback_data="show_more_districts")])
     
     keyboard.append([InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_settings")])
@@ -993,7 +1024,8 @@ async def menu_instruction(message: types.Message):
         "• Бот найдет населенные пункты в каждом кадре\n"
         "• Результат покажет статистику по кадрам\n\n"
         "⚙️ <b>НАСТРОЙКИ</b>\n"
-        "• Добавление НП вручную или из CSV\n"
+        "• Добавление НП вручную\n"
+        "• Загрузка каталога из TXT файла\n"
         "• Автоматическая загрузка из интернета (dic.academic.ru + Wikipedia)\n"
         "• Удаление районов или очистка всего каталога\n"
         "• Просмотр статистики каталога\n"
@@ -1078,8 +1110,15 @@ async def add_village_manual_start(callback: CallbackQuery, state: FSMContext):
     await safe_edit_text(
         callback.message,
         "📝 <b>Добавление населенного пункта вручную</b>\n\n"
-        "Введите название населенного пункта:\n\n"
-        "📌 <i>Примеры: Горбово, Полунино, Дураково</i>",
+        "Введите данные в формате:\n"
+        "<code>название,тип,широта,долгота,район</code>\n\n"
+        "📌 <b>Пример:</b>\n"
+        "<code>Горбово,деревня,56.2345,34.1234,Ржевский</code>\n\n"
+        "💡 <b>Примечания:</b>\n"
+        "• Тип может быть: деревня, село, посёлок, хутор, станция, урочище\n"
+        "• Координаты могут быть пустыми: <code>Горбово,деревня,,,Ржевский</code>\n"
+        "• Если НП уже существует, он будет пропущен\n\n"
+        "Введите данные одной строкой:",
         parse_mode="HTML"
     )
     await state.set_state(SearchStates.waiting_for_add_village_name)
@@ -1087,98 +1126,61 @@ async def add_village_manual_start(callback: CallbackQuery, state: FSMContext):
 
 
 @dp.message(SearchStates.waiting_for_add_village_name)
-async def add_village_name(message: types.Message, state: FSMContext):
-    """Получение названия НП"""
-    name = message.text.strip()
-    if len(name) < 2 or len(name) > 50:
-        await message.answer("❌ Название должно быть от 2 до 50 символов. Попробуйте снова:")
-        return
+async def add_village_parse(message: types.Message, state: FSMContext):
+    """Парсинг и добавление НП из строки"""
+    data = message.text.strip()
+    parts = data.split(',')
     
-    await state.update_data(village_name=name)
-    await message.answer(
-        f"📝 <b>Название: {name}</b>\n\n"
-        f"Введите тип населенного пункта:\n\n"
-        f"📌 <i>Варианты: деревня, село, посёлок, хутор, станция, урочище</i>\n"
-        f"<i>Если оставить пустым, будет установлено 'деревня'</i>",
-        parse_mode="HTML"
-    )
-    await state.set_state(SearchStates.waiting_for_add_village_type)
-
-
-@dp.message(SearchStates.waiting_for_add_village_type)
-async def add_village_type(message: types.Message, state: FSMContext):
-    """Получение типа НП"""
-    type_text = message.text.strip() if message.text else "деревня"
-    if not type_text:
-        type_text = "деревня"
-    
-    valid_types = ['деревня', 'село', 'посёлок', 'хутор', 'станция', 'урочище']
-    if type_text not in valid_types:
-        await message.answer(f"❌ Неверный тип. Доступные: {', '.join(valid_types)}\nПопробуйте снова:")
-        return
-    
-    await state.update_data(village_type=type_text)
-    await message.answer(
-        f"📝 <b>Тип: {type_text}</b>\n\n"
-        f"Введите координаты (широта и долгота) через пробел:\n\n"
-        f"📌 <i>Пример: 56.2345 34.1234</i>\n"
-        f"<i>Если координаты неизвестны, оставьте пустым</i>",
-        parse_mode="HTML"
-    )
-    await state.set_state(SearchStates.waiting_for_add_village_coords)
-
-
-@dp.message(SearchStates.waiting_for_add_village_coords)
-async def add_village_coords(message: types.Message, state: FSMContext):
-    """Получение координат НП"""
-    coords_text = message.text.strip()
-    lat, lon = "", ""
-    
-    if coords_text:
-        parts = coords_text.split()
-        if len(parts) >= 2:
-            try:
-                lat = str(float(parts[0]))
-                lon = str(float(parts[1]))
-                if not (-90 <= float(lat) <= 90 and -180 <= float(lon) <= 180):
-                    await message.answer("❌ Координаты вне допустимого диапазона. Попробуйте снова:")
-                    return
-            except ValueError:
-                await message.answer("❌ Неверный формат координат. Введите два числа через пробел:\nПример: 56.2345 34.1234")
-                return
-    
-    await state.update_data(village_lat=lat, village_lon=lon)
-    await message.answer(
-        f"📝 <b>Координаты: {lat if lat else 'не указаны'}, {lon if lon else ''}</b>\n\n"
-        f"Введите район (для Ржевского района введите 'Ржевский'):\n\n"
-        f"📌 <i>Доступные районы: {', '.join(AVAILABLE_DISTRICTS[:5])} и другие</i>",
-        parse_mode="HTML"
-    )
-    await state.set_state(SearchStates.waiting_for_add_village_district)
-
-
-@dp.message(SearchStates.waiting_for_add_village_district)
-async def add_village_district(message: types.Message, state: FSMContext):
-    """Получение района и добавление НП"""
-    district = message.text.strip()
-    
-    # Проверяем, что район существует в списке
-    district_normalized = district.replace(" район", "").strip()
-    if district_normalized not in AVAILABLE_DISTRICTS:
+    if len(parts) < 5:
         await message.answer(
-            f"❌ Район '{district}' не найден в списке.\n\n"
-            f"Доступные районы: {', '.join(AVAILABLE_DISTRICTS[:10])}...\n"
-            f"Введите полное название района (например: Ржевский):"
+            "❌ Неверный формат. Ожидается:\n"
+            "<code>название,тип,широта,долгота,район</code>\n\n"
+            "Пример: <code>Горбово,деревня,56.2345,34.1234,Ржевский</code>",
+            parse_mode="HTML"
         )
         return
     
-    data = await state.get_data()
+    name = parts[0].strip()
+    village_type = parts[1].strip() if parts[1].strip() else "деревня"
+    lat = parts[2].strip() if len(parts) > 2 else ""
+    lon = parts[3].strip() if len(parts) > 3 else ""
+    district = parts[4].strip() if len(parts) > 4 else ""
+    
+    # Проверка названия
+    if not name:
+        await message.answer("❌ Название не может быть пустым")
+        return
+    
+    # Проверка типа
+    valid_types = ['деревня', 'село', 'посёлок', 'хутор', 'станция', 'урочище']
+    if village_type not in valid_types:
+        await message.answer(f"❌ Неверный тип. Доступные: {', '.join(valid_types)}")
+        return
+    
+    # Проверка района
+    district_normalized = district.replace(" район", "").strip()
+    if district_normalized not in AVAILABLE_DISTRICTS:
+        await message.answer(
+            f"❌ Район '{district}' не найден.\n\n"
+            f"Доступные районы: {', '.join(AVAILABLE_DISTRICTS[:10])}...\n"
+            f"Введите полное название района (например: Ржевский)"
+        )
+        return
+    
+    # Проверка координат
+    if lat and lon:
+        try:
+            float(lat)
+            float(lon)
+        except ValueError:
+            await message.answer("❌ Неверный формат координат. Используйте числа с точкой")
+            return
     
     village = {
-        "name": data['village_name'],
-        "type": data['village_type'],
-        "lat": data['village_lat'],
-        "lon": data['village_lon'],
+        "name": name,
+        "type": village_type,
+        "lat": lat,
+        "lon": lon,
         "district": district_normalized
     }
     
@@ -1202,26 +1204,136 @@ async def add_village_district(message: types.Message, state: FSMContext):
     await state.clear()
 
 
-# ========== ОБРАБОТЧИКИ ДОБАВЛЕНИЯ ИЗ CSV ==========
+# ========== ОБРАБОТЧИКИ ЗАГРУЗКИ КАТАЛОГА ИЗ TXT ==========
 
-@dp.callback_query(lambda c: c.data == "add_villages_csv")
-async def add_villages_csv_start(callback: CallbackQuery, state: FSMContext):
-    """Начало добавления НП из CSV"""
+@dp.callback_query(lambda c: c.data == "load_catalog_txt")
+async def load_catalog_txt_start(callback: CallbackQuery, state: FSMContext):
+    """Начало загрузки каталога из TXT"""
     await safe_edit_text(
         callback.message,
-        "📤 <b>Добавление населенных пунктов из CSV</b>\n\n"
-        "Отправьте CSV файл со структурой:\n"
-        "<code>name,type,lat,lon,district</code>\n\n"
+        "📤 <b>Загрузка каталога населенных пунктов</b>\n\n"
+        "Отправьте TXT файл в формате:\n"
+        "<code>Название Тип Широта Долгота Район</code>\n\n"
         "📌 <b>Пример строки:</b>\n"
-        "<code>Горбово,деревня,56.2345,34.1234,Ржевский</code>\n\n"
+        "<code>Горбово деревня 56.2345 34.1234 Ржевский</code>\n"
+        "<code>Полунино деревня - - Ржевский</code>\n\n"
         "⚠️ <b>Важно:</b>\n"
         "• Если НП уже существует в каталоге, он будет пропущен\n"
-        "• Поля lat, lon могут быть пустыми\n"
-        "• Добавятся только новые НП",
+        "• Поля lat, lon могут быть пустыми (используйте -)\n"
+        "• Добавятся только новые НП\n\n"
+        "Отправьте TXT файл:",
         parse_mode="HTML"
     )
-    await state.set_state(SearchStates.waiting_for_csv_upload)
+    await state.set_state(SearchStates.waiting_for_txt_upload)
     await safe_answer_callback(callback)
+
+
+@dp.message(SearchStates.waiting_for_txt_upload, F.document)
+async def process_txt_upload(message: types.Message, state: FSMContext):
+    """Обработка загруженного TXT каталога"""
+    if not message.document.file_name.endswith('.txt'):
+        await message.answer("❌ Отправьте TXT файл (с расширением .txt)")
+        await state.clear()
+        return
+    
+    await message.answer("⏳ Загрузка и обработка файла...")
+    
+    try:
+        file_info = await bot.get_file(message.document.file_id)
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.txt') as tmp:
+            await bot.download_file(file_info.file_path, tmp)
+            tmp_path = tmp.name
+        
+        with open(tmp_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        os.unlink(tmp_path)
+        
+        # Парсим TXT
+        lines = content.strip().split('\n')
+        if not lines:
+            await message.answer("❌ Файл пуст")
+            await state.clear()
+            return
+        
+        # Проверяем заголовок
+        if not lines[0].startswith('Название'):
+            await message.answer(
+                "❌ Неверный формат файла.\n\n"
+                "Ожидается заголовок: <code>Название Тип Широта Долгота Район</code>\n\n"
+                "Первая строка должна начинаться с 'Название'",
+                parse_mode="HTML"
+            )
+            await state.clear()
+            return
+        
+        villages = []
+        for line in lines[1:]:
+            line = line.strip()
+            if not line:
+                continue
+            
+            parts = line.split()
+            if len(parts) >= 5:
+                name = parts[0]
+                village_type = parts[1]
+                lat = parts[2] if parts[2] != '-' else ''
+                lon = parts[3] if parts[3] != '-' else ''
+                district = parts[4]
+                
+                # Обработка названий из нескольких слов
+                if len(parts) > 5:
+                    name = ' '.join(parts[:-4])
+                    village_type = parts[-4]
+                    lat = parts[-3] if parts[-3] != '-' else ''
+                    lon = parts[-2] if parts[-2] != '-' else ''
+                    district = parts[-1]
+                
+                # Проверка района
+                district_normalized = district.replace(" район", "").strip()
+                if district_normalized in AVAILABLE_DISTRICTS:
+                    villages.append({
+                        'name': name,
+                        'type': village_type,
+                        'lat': lat,
+                        'lon': lon,
+                        'district': district_normalized
+                    })
+                else:
+                    logger.warning(f"Пропущен НП {name}: район {district} не найден")
+        
+        if not villages:
+            await message.answer("❌ В файле не найдено корректных записей для добавления")
+            await state.clear()
+            return
+        
+        # Добавляем с проверкой дубликатов
+        stats = village_db.add_villages_batch(villages)
+        
+        await message.answer(
+            f"✅ <b>Обработка TXT завершена!</b>\n\n"
+            f"📊 <b>Результат:</b>\n"
+            f"• Добавлено новых записей: {stats['added']}\n"
+            f"• Пропущено дубликатов: {stats['duplicates']}\n"
+            f"• Ошибок: {stats['errors']}\n\n"
+            f"📊 <b>Текущее состояние каталога:</b>\n"
+            f"• Всего записей: {village_db.stats['total']}\n"
+            f"• С координатами: {village_db.stats['with_coords']}",
+            parse_mode="HTML",
+            reply_markup=back_keyboard()
+        )
+        
+    except Exception as e:
+        logger.error(f"Ошибка: {e}")
+        await message.answer(f"❌ Ошибка при загрузке TXT:\n{str(e)}")
+    
+    await state.clear()
+
+
+@dp.message(SearchStates.waiting_for_txt_upload)
+async def process_txt_invalid(message: types.Message, state: FSMContext):
+    """Обработка неверного ввода в режиме ожидания TXT"""
+    await message.answer("❌ Отправьте TXT файл с расширением .txt")
+    await state.clear()
 
 
 # ========== ОБРАБОТЧИКИ УДАЛЕНИЯ ==========
@@ -1376,7 +1488,7 @@ async def process_district_select(callback: CallbackQuery, state: FSMContext):
                 f"• Нет данных в источниках\n"
                 f"• Проблемы с подключением\n"
                 f"• Превышено время ожидания\n\n"
-                f"Попробуйте другой район или добавьте CSV вручную.",
+                f"Попробуйте другой район или загрузите TXT вручную.",
                 parse_mode="HTML",
                 reply_markup=back_keyboard()
             )
@@ -1386,15 +1498,16 @@ async def process_district_select(callback: CallbackQuery, state: FSMContext):
         timestamp = time.strftime('%Y%m%d_%H%M%S')
         temp_dir = "data/temp"
         os.makedirs(temp_dir, exist_ok=True)
-        temp_csv = os.path.join(temp_dir, f"{district}_{timestamp}.csv")
+        temp_txt = os.path.join(temp_dir, f"{district}_{timestamp}.txt")
         
-        with open(temp_csv, 'w', encoding='utf-8', newline='') as f:
-            writer = csv.DictWriter(f, fieldnames=['name', 'type', 'lat', 'lon', 'district'])
-            writer.writeheader()
-            writer.writerows(villages)
+        with open(temp_txt, 'w', encoding='utf-8') as f:
+            f.write("Название Тип Широта Долгота Район\n")
+            for v in villages:
+                lat = v.get('lat', '') if v.get('lat') else '-'
+                lon = v.get('lon', '') if v.get('lon') else '-'
+                f.write(f"{v['name']} {v['type']} {lat} {lon} {v['district']}\n")
         
-        txt_path = generate_txt_from_data(villages, f"населенные_пункты_{district}_{timestamp}.txt")
-        await state.update_data(temp_csv=temp_csv, temp_txt=txt_path, villages=villages)
+        await state.update_data(temp_txt=temp_txt, villages=villages)
         
         with_coords = sum(1 for v in villages if v.get('lat') and v.get('lon'))
         
@@ -1438,10 +1551,10 @@ async def process_merge(callback: CallbackQuery, state: FSMContext):
     """Обработка действий с загруженными данными"""
     action, district = callback.data.replace("merge_", "").split("_", 1)
     data = await state.get_data()
-    temp_csv = data.get('temp_csv')
+    temp_txt = data.get('temp_txt')
     villages = data.get('villages', [])
     
-    if not temp_csv or not os.path.exists(temp_csv):
+    if not temp_txt or not os.path.exists(temp_txt):
         await safe_edit_text(
             callback.message,
             "❌ Временный файл не найден. Попробуйте загрузить данные заново.",
@@ -1451,12 +1564,10 @@ async def process_merge(callback: CallbackQuery, state: FSMContext):
         return
     
     if action == "download":
-        txt_path = data.get('temp_txt')
-        if txt_path and os.path.exists(txt_path):
-            await callback.message.answer_document(
-                FSInputFile(txt_path, filename=os.path.basename(txt_path)),
-                caption=f"📁 Данные для {district} района"
-            )
+        await callback.message.answer_document(
+            FSInputFile(temp_txt, filename=os.path.basename(temp_txt)),
+            caption=f"📁 Данные для {district} района"
+        )
         await safe_answer_callback(callback)
         return
     
@@ -1465,9 +1576,7 @@ async def process_merge(callback: CallbackQuery, state: FSMContext):
             # Добавляем НП с проверкой на дубликаты
             stats = village_db.add_villages_batch(villages)
             
-            os.unlink(temp_csv)
-            if data.get('temp_txt'):
-                os.unlink(data['temp_txt'])
+            os.unlink(temp_txt)
             
             await state.clear()
             
@@ -1656,11 +1765,10 @@ async def download_villages_txt(callback: CallbackQuery):
         return
     
     try:
-        filename = f"населенные_пункты_{time.strftime('%Y%m%d_%H%M%S')}.txt"
-        filepath = generate_txt_from_data(village_db.villages, filename)
+        filepath = village_db.export_to_txt()
         
         await callback.message.answer_document(
-            FSInputFile(filepath, filename=filename),
+            FSInputFile(filepath, filename=os.path.basename(filepath)),
             caption=f"📁 <b>Каталог населенных пунктов</b>\nВсего: {village_db.stats['total']} записей\nС координатами: {village_db.stats['with_coords']}",
             parse_mode="HTML"
         )
@@ -1826,56 +1934,6 @@ async def process_kml_upload(message: types.Message, state: FSMContext):
 async def process_kml_invalid(message: types.Message, state: FSMContext):
     """Обработка неверного ввода в режиме ожидания KML"""
     await message.answer("❌ Отправьте KML файл (с расширением .kml)")
-    await state.clear()
-
-
-@dp.message(SearchStates.waiting_for_csv_upload, F.document)
-async def process_csv_upload(message: types.Message, state: FSMContext):
-    """Обработка загруженного CSV для добавления НП"""
-    if not message.document.file_name.endswith('.csv'):
-        await message.answer("❌ Отправьте CSV файл (с расширением .csv)")
-        await state.clear()
-        return
-    
-    await message.answer("⏳ Загрузка и обработка файла...")
-    
-    try:
-        file_info = await bot.get_file(message.document.file_id)
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.csv') as tmp:
-            await bot.download_file(file_info.file_path, tmp)
-            tmp_path = tmp.name
-        
-        with open(tmp_path, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            villages = list(reader)
-        os.unlink(tmp_path)
-        
-        stats = village_db.add_villages_batch(villages)
-        
-        await message.answer(
-            f"✅ <b>Обработка CSV завершена!</b>\n\n"
-            f"📊 <b>Результат:</b>\n"
-            f"• Добавлено новых записей: {stats['added']}\n"
-            f"• Пропущено дубликатов: {stats['duplicates']}\n"
-            f"• Ошибок: {stats['errors']}\n\n"
-            f"📊 <b>Текущее состояние каталога:</b>\n"
-            f"• Всего записей: {village_db.stats['total']}\n"
-            f"• С координатами: {village_db.stats['with_coords']}",
-            parse_mode="HTML",
-            reply_markup=back_keyboard()
-        )
-        
-    except Exception as e:
-        logger.error(f"Ошибка: {e}")
-        await message.answer(f"❌ Ошибка при загрузке CSV:\n{str(e)}")
-    
-    await state.clear()
-
-
-@dp.message(SearchStates.waiting_for_csv_upload)
-async def process_csv_invalid(message: types.Message, state: FSMContext):
-    """Обработка неверного ввода в режиме ожидания CSV"""
-    await message.answer("❌ Отправьте CSV файл с расширением .csv")
     await state.clear()
 
 
