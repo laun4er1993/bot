@@ -267,10 +267,6 @@ class APISourceManager:
     def _is_valid_settlement_name(self, name: str, district: str = "") -> bool:
         return is_valid_settlement_name(name, district)
     
-    def _check_coordinate_in_district(self, lat: float, lon: float, district_bounds: Dict[str, float]) -> bool:
-        return (district_bounds['min_lat'] <= lat <= district_bounds['max_lat'] and
-                district_bounds['min_lon'] <= lon <= district_bounds['max_lon'])
-    
     async def _get_district_bounds(self, district: str, district_html: str = None) -> Dict[str, float]:
         if district in self.district_bounds_cache:
             return self.district_bounds_cache[district]
@@ -284,6 +280,10 @@ class APISourceManager:
         
         self.district_bounds_cache[district] = bounds
         return bounds
+    
+    def _check_coordinate_in_district(self, lat: float, lon: float, district_bounds: Dict[str, float]) -> bool:
+        return (district_bounds['min_lat'] <= lat <= district_bounds['max_lat'] and
+                district_bounds['min_lon'] <= lon <= district_bounds['max_lon'])
     
     # ========== МЕТОДЫ ДЛЯ РАБОТЫ С DIC.ACADEMIC.RU ==========
     
