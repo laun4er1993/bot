@@ -1,4 +1,5 @@
 # keyboards/inline.py
+from typing import List
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from api_sources import AVAILABLE_DISTRICTS
 
