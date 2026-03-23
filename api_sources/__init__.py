@@ -2163,47 +2163,46 @@ class APISourceManager:
         
         district_page_url = None
         
-        # Пробуем разные варианты названия района
-        district_queries = [
-            f"{district} район",
-            f"{district} муниципальный округ",
-            f"{district} район Тверской области",
-            f"{district} муниципальный округ Тверской области",
-            f"Список населённых пунктов {district} района",
-            f"Населённые пункты {district} района"
-        ]
+        # Сначала пробуем прямой URL для "Ржевский район" (самый вероятный)
+        direct_url = f"{WIKIPEDIA_BASE_URL}/wiki/{quote_plus(f'{district} район')}"
+        logger.info(f"    🔎 Пробуем прямой URL: {direct_url}")
+        html = await self._fetch_page(direct_url)
+        if html:
+            soup = BeautifulSoup(html, 'html.parser')
+            no_article = soup.find('div', class_='noarticletext')
+            if not no_article:
+                title = soup.find('h1')
+                if title and ('район' in title.get_text().lower() or 'округ' in title.get_text().lower()):
+                    district_page_url = direct_url
+                    logger.info(f"    🌐 Найдена страница района/округа: {direct_url}")
         
-        for dq in district_queries:
-            encoded_dq = quote_plus(dq)
-            direct_url = f"{WIKIPEDIA_BASE_URL}/wiki/{encoded_dq}"
-            logger.debug(f"    🔎 Пробуем: {direct_url}")
-            html = await self._fetch_page(direct_url)
-            if html:
-                soup = BeautifulSoup(html, 'html.parser')
-                no_article = soup.find('div', class_='noarticletext')
-                if not no_article:
-                    title = soup.find('h1')
-                    if title:
-                        title_text = title.get_text().lower()
-                        if ('район' in title_text or 'округ' in title_text) and 'город' not in title_text:
-                            district_page_url = direct_url
-                            logger.info(f"    🌐 Найдена страница района/округа: {direct_url}")
-                            break
-            await asyncio.sleep(0.5)
-        
-        # Если не нашли, пробуем прямой URL для "Ржевский район"
+        # Если не нашли, пробуем другие варианты
         if not district_page_url:
-            direct_url = f"{WIKIPEDIA_BASE_URL}/wiki/{quote_plus(f'{district} район')}"
-            logger.debug(f"    🔎 Пробуем прямой URL: {direct_url}")
-            html = await self._fetch_page(direct_url)
-            if html:
-                soup = BeautifulSoup(html, 'html.parser')
-                no_article = soup.find('div', class_='noarticletext')
-                if not no_article:
-                    title = soup.find('h1')
-                    if title and ('район' in title.get_text().lower() or 'округ' in title.get_text().lower()):
-                        district_page_url = direct_url
-                        logger.info(f"    🌐 Найдена страница района/округа: {direct_url}")
+            district_queries = [
+                f"{district} муниципальный округ",
+                f"{district} район Тверской области",
+                f"{district} муниципальный округ Тверской области",
+                f"Список населённых пунктов {district} района",
+                f"Населённые пункты {district} района"
+            ]
+            
+            for dq in district_queries:
+                encoded_dq = quote_plus(dq)
+                direct_url = f"{WIKIPEDIA_BASE_URL}/wiki/{encoded_dq}"
+                logger.debug(f"    🔎 Пробуем: {direct_url}")
+                html = await self._fetch_page(direct_url)
+                if html:
+                    soup = BeautifulSoup(html, 'html.parser')
+                    no_article = soup.find('div', class_='noarticletext')
+                    if not no_article:
+                        title = soup.find('h1')
+                        if title:
+                            title_text = title.get_text().lower()
+                            if ('район' in title_text or 'округ' in title_text) and 'город' not in title_text:
+                                district_page_url = direct_url
+                                logger.info(f"    🌐 Найдена страница района/округа: {direct_url}")
+                                break
+                await asyncio.sleep(0.5)
         
         # Если не нашли, пробуем поиск через API
         if not district_page_url:
