@@ -46,10 +46,10 @@ class APISourceManager:
         self.session: Optional[aiohttp.ClientSession] = None
         self.thread_pool = ThreadPoolExecutor(max_workers=3)
         
-        # Rate limiting
+        # Rate limiting - увеличен интервал для снижения 429 ошибок
         self.request_count = 0
         self.last_request_time = 0
-        self.min_request_interval = 2.0
+        self.min_request_interval = 3.0  # увеличено с 2.0 до 3.0
         
         # Кэши
         self.article_cache: Dict[str, str] = {}
@@ -66,8 +66,8 @@ class APISourceManager:
         # Кэш границ районов
         self.district_bounds_cache: Dict[str, Dict[str, float]] = {}
         
-        self.cache_ttl = 3600
-        self.max_retries = 5
+        self.cache_ttl = 3600  # не увеличиваем, так как каждый раз новый поиск
+        self.max_retries = 7  # увеличено с 5 до 7
         self.start_time = 0
         
         # Статистика
@@ -75,7 +75,8 @@ class APISourceManager:
             'from_former': 0,
             'from_links': 0,
             'from_wikipedia': 0,
-            'total_without': 0
+            'total_without': 0,
+            'from_district_page': 0  # добавлено
         }
         
         self.collection_stats = {
@@ -86,7 +87,7 @@ class APISourceManager:
             'total_unique': 0
         }
         
-        self.max_concurrent_dic = 2
+        self.max_concurrent_dic = 2  # оставляем как есть
         
         self.default_headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
@@ -115,14 +116,15 @@ class APISourceManager:
         self.processed_former_np_ids.clear()
         self.village_links.clear()
         self.district_bounds_cache.clear()
-        self.coords_stats = {'from_former': 0, 'from_links': 0, 'from_wikipedia': 0, 'total_without': 0}
+        self.coords_stats = {'from_former': 0, 'from_links': 0, 'from_wikipedia': 0, 'total_without': 0, 'from_district_page': 0}
         self.collection_stats = {'from_master_lists': 0, 'from_former': 0, 'from_settlements': 0, 'from_district_page': 0, 'total_unique': 0}
         logger.info("🧹 Кэш очищен")
     
     async def _rate_limit(self):
         current_time = time.time()
         time_since_last = current_time - self.last_request_time
-        actual_interval = self.min_request_interval * random.uniform(0.8, 1.2)
+        # Добавляем jitter для снижения нагрузки
+        actual_interval = self.min_request_interval * random.uniform(0.7, 1.5)
         if time_since_last < actual_interval:
             await asyncio.sleep(actual_interval - time_since_last)
         self.last_request_time = time.time()
@@ -142,16 +144,18 @@ class APISourceManager:
                     return await response.text()
                 elif response.status == 429:
                     wait_time = (2 ** retry_count) * random.uniform(5.0, 10.0)
-                    logger.warning(f"Ошибка 429, повтор через {wait_time:.1f}с")
+                    logger.warning(f"Ошибка 429, повтор через {wait_time:.1f}с (попытка {retry_count + 1}/{self.max_retries})")
                     await asyncio.sleep(wait_time)
                     return await self._fetch_page_with_retry(url, retry_count + 1)
                 elif response.status in [500, 502, 503, 504]:
                     wait_time = 2 ** retry_count
+                    logger.warning(f"Ошибка {response.status}, повтор через {wait_time}с")
                     await asyncio.sleep(wait_time)
                     return await self._fetch_page_with_retry(url, retry_count + 1)
                 return None
         except asyncio.TimeoutError:
             wait_time = 2 ** retry_count
+            logger.warning(f"Таймаут, повтор через {wait_time}с")
             await asyncio.sleep(wait_time)
             return await self._fetch_page_with_retry(url, retry_count + 1)
         except Exception as e:
@@ -866,20 +870,22 @@ class APISourceManager:
         
         logger.info(f"    📊 На странице района найдено {len(district_villages)} НП")
         
-        # Поиск координат для НП без координат
+        # Поиск координат только для НП без координат
         villages_to_search = []
         for name, data in district_villages.items():
             if name in existing_villages:
-                if not existing_villages[name].get('has_coords', False):
+                # Проверяем, есть ли уже координаты у существующего НП
+                if not existing_villages[name].get('has_coords', False) and not existing_villages[name].get('lat'):
                     villages_to_search.append({'name': name, 'type': data['type'], 'wiki_url': data['url'], 'is_new': False})
             else:
                 if self._is_valid_name(name, district):
                     villages_to_search.append({'name': name, 'type': data['type'], 'wiki_url': data['url'], 'is_new': True})
         
         if not villages_to_search:
+            logger.info(f"    ℹ️ Нет НП без координат для поиска")
             return {}
         
-        logger.info(f"    🔍 Поиск координат для {len(villages_to_search)} НП...")
+        logger.info(f"    🔍 Поиск координат для {len(villages_to_search)} НП (из {len(district_villages)} на странице)")
         
         found_coords = {}
         semaphore = asyncio.Semaphore(5)
@@ -899,7 +905,7 @@ class APISourceManager:
                                 lat, lon = coords
                                 lat_f, lon_f = float(lat), float(lon)
                                 if self._check_coordinate_in_district(lat_f, lon_f, TVER_BOUNDS_EXTENDED):
-                                    logger.info(f"      ✅ Найдены координаты для {name} по ссылке: {lat}, {lon}")
+                                    logger.debug(f"      ✅ Найдены координаты для {name} по ссылке: {lat}, {lon}")
                                     return name, {'name': name, 'type': village['type'], 'lat': lat, 'lon': lon, 'is_new': village['is_new']}
                     except Exception as e:
                         logger.debug(f"      Ошибка загрузки {name}: {e}")
@@ -913,7 +919,7 @@ class APISourceManager:
                             lat, lon = coords
                             lat_f, lon_f = float(lat), float(lon)
                             if self._check_coordinate_in_district(lat_f, lon_f, TVER_BOUNDS_EXTENDED):
-                                logger.info(f"      ✅ Найдены координаты для {name} по прямому URL: {lat}, {lon}")
+                                logger.debug(f"      ✅ Найдены координаты для {name} по прямому URL: {lat}, {lon}")
                                 return name, {'name': name, 'type': village['type'], 'lat': lat, 'lon': lon, 'is_new': village['is_new']}
                 except Exception as e:
                     logger.debug(f"      Ошибка загрузки {name}: {e}")
@@ -1154,10 +1160,10 @@ class APISourceManager:
             logger.info(f"    • Без координат: {total_without}")
             logger.info(f"    • Координат из бывших НП: {self.coords_stats['from_former']}")
             
-            # Шаг 1: Поиск на dic.academic.ru по ссылкам из СП
+            # Шаг 1: Поиск на dic.academic.ru по ссылкам из СП (только для НП без координат)
             with_links = [v for v in villages_without_coords if v['name'] in self.village_links]
             if with_links:
-                logger.info(f"  📊 Поиск на dic.academic.ru по {len(with_links)} ссылкам")
+                logger.info(f"  📊 Поиск на dic.academic.ru по {len(with_links)} ссылкам (из {len(self.village_links)} всего)")
                 semaphore = asyncio.Semaphore(self.max_concurrent_dic)
                 
                 async def fetch_dic(village):
@@ -1190,11 +1196,13 @@ class APISourceManager:
             # Шаг 2: ШАГ 3 - поиск на странице района (Wikipedia)
             villages_without_coords = [v for v in all_villages if not v.get('has_coords')]
             if villages_without_coords:
-                logger.info(f"  📊 Осталось без координат: {len(villages_without_coords)}")
+                logger.info(f"  📊 Осталось без координат после dic.academic.ru: {len(villages_without_coords)}")
                 logger.info(f"  🌐 ШАГ 3: Поиск на странице района...")
                 
+                start_time_step3 = time.time()
                 current_villages_dict = {v['name']: v for v in all_villages}
                 district_page_coords = await self._fetch_villages_from_district_page(district, current_villages_dict)
+                step3_time = time.time() - start_time_step3
                 
                 if district_page_coords:
                     wiki_found = 0
@@ -1207,6 +1215,7 @@ class APISourceManager:
                                 v['has_coords'] = True
                                 wiki_found += 1
                                 self.coords_stats['from_wikipedia'] += 1
+                                self.coords_stats['from_district_page'] += 1
                                 logger.info(f"      ✅ Обновлены координаты для {name}: ({v['lat']}, {v['lon']})")
                                 found = True
                                 break
@@ -1220,10 +1229,17 @@ class APISourceManager:
                                 })
                                 wiki_found += 1
                                 self.coords_stats['from_wikipedia'] += 1
+                                self.coords_stats['from_district_page'] += 1
                                 self.collection_stats['from_district_page'] += 1
-                                logger.info(f"  ➕ Добавлен новый НП: {name} ({data['lat']}, {data['lon']})")
+                                logger.info(f"  ➕ Добавлен новый НП со страницы района: {name} ({data['lat']}, {data['lon']})")
                     
-                    logger.info(f"  ✅ Найдено координат на странице района: {wiki_found}")
+                    logger.info(f"  ✅ ШАГ 3: найдено координат для {wiki_found} НП за {step3_time:.1f}с")
+                else:
+                    logger.info(f"  ℹ️ ШАГ 3: не найдено новых координат за {step3_time:.1f}с")
+                
+                # Финальная статистика после ШАГА 3
+                villages_without_coords_final = [v for v in all_villages if not v.get('has_coords')]
+                logger.info(f"  📊 После ШАГА 3 осталось без координат: {len(villages_without_coords_final)}")
             
             # Финальная статистика
             final_with_coords = sum(1 for v in all_villages if v.get('has_coords'))
@@ -1232,9 +1248,12 @@ class APISourceManager:
             logger.info(f"    📊 ИТОГО ПО КООРДИНАТАМ:")
             logger.info(f"      • Из бывших НП: {self.coords_stats['from_former']}")
             logger.info(f"      • По ссылкам из СП: {self.coords_stats['from_links']}")
-            logger.info(f"      • Со страницы района: {self.coords_stats['from_wikipedia']}")
-            logger.info(f"      • Всего найдено: {self.coords_stats['from_former'] + self.coords_stats['from_links'] + self.coords_stats['from_wikipedia']}")
+            logger.info(f"      • Со страницы района: {self.coords_stats['from_district_page']}")
+            logger.info(f"      • Всего найдено: {self.coords_stats['from_former'] + self.coords_stats['from_links'] + self.coords_stats['from_district_page']}")
             logger.info(f"      • Осталось без координат: {len(remaining)}")
+            
+            if remaining and len(remaining) <= 50:
+                logger.info(f"     📝 Список НП без координат: {', '.join([v['name'] for v in remaining])}")
         
         # Очистка и сортировка
         all_villages.sort(key=lambda x: x['name'])
