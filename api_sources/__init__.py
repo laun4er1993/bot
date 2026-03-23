@@ -2055,9 +2055,8 @@ class APISourceManager:
                 logger.debug(f"      🔍 Поиск координат для {name} на Wikipedia...")
                 
                 # Функция для правильного кодирования URL для Wikipedia
-                def wiki_encode(name: str) -> str:
-                    name_with_underscores = name.replace(' ', '_')
-                    return quote(name_with_underscores, safe='')
+                def wiki_encode(s: str) -> str:
+                    return quote(s.replace(' ', '_'), safe='')
                 
                 # Прямой URL
                 direct_url = f"{WIKIPEDIA_BASE_URL}/wiki/{wiki_encode(name)}"
@@ -2098,13 +2097,15 @@ class APISourceManager:
                     if search_html:
                         data = json.loads(search_html)
                         if 'query' in data and 'search' in data['query']:
-                            for result in data['query']['search'][:2]:
+                            for result in data['query']['search'][:3]:
                                 title = result['title']
                                 
-                                if 'список' in title.lower() and name.lower() not in title.lower():
+                                if 'список' in title.lower():
                                     continue
-                                if 'район' in title.lower() or 'город' in title.lower():
+                                if 'район' in title.lower() or 'округ' in title.lower():
                                     continue
+                                
+                                # Проверяем, что название похоже на искомое
                                 if name.lower() not in title.lower() and title.lower() not in name.lower():
                                     if len(name) > 5 and name.lower() not in title.lower():
                                         continue
@@ -2156,12 +2157,13 @@ class APISourceManager:
         logger.info(f"  📊 ИТОГО по Wikipedia: обработано {processed}, найдено {found_count}")
         return found
     
-    # ========== ПОИСК НА СТРАНИЦЕ РАЙОНА (ШАГ 3) ==========
+    # ========== ПОИСК НА СТРАНИЦЕ РАЙОНА (ШАГ 3) - УНИВЕРСАЛЬНЫЙ ==========
     
     async def _fetch_villages_from_district_page(self, district: str, existing_villages: Dict[str, Dict]) -> Dict[str, Dict]:
         """
         Находит страницу района на Wikipedia, извлекает все населенные пункты,
         сравнивает с существующим списком и возвращает новые НП с координатами
+        Универсальная версия для любого района
         """
         logger.info(f"  🔍 ШАГ 3: Поиск населенных пунктов на странице района {district}...")
         
@@ -2169,74 +2171,65 @@ class APISourceManager:
         
         # Функция для правильного кодирования URL для Wikipedia
         def wiki_encode(name: str) -> str:
-            name_with_underscores = name.replace(' ', '_')
-            return quote(name_with_underscores, safe='')
+            return quote(name.replace(' ', '_'), safe='')
         
-        # Сначала пробуем прямой URL для "Ржевский район" (самый вероятный)
-        direct_url = f"{WIKIPEDIA_BASE_URL}/wiki/{wiki_encode(f'{district} район')}"
-        logger.info(f"    🔎 Пробуем прямой URL: {direct_url}")
-        html = await self._fetch_page(direct_url)
-        if html:
-            soup = BeautifulSoup(html, 'html.parser')
-            no_article = soup.find('div', class_='noarticletext')
-            if not no_article:
-                title = soup.find('h1')
-                if title and ('район' in title.get_text().lower() or 'округ' in title.get_text().lower()):
-                    district_page_url = direct_url
-                    logger.info(f"    🌐 Найдена страница района/округа: {direct_url}")
+        # Получаем возможные названия страницы района из config
+        possible_names = DISTRICT_WIKI_NAMES.get(district, [f"{district} район", f"{district} муниципальный округ", district])
         
-        # Если не нашли, пробуем другие варианты
-        if not district_page_url:
-            district_queries = [
-                f"{district} муниципальный округ",
-                f"{district} район Тверской области",
-                f"{district} муниципальный округ Тверской области",
-                f"Список населённых пунктов {district} района",
-                f"Населённые пункты {district} района"
-            ]
-            
-            for dq in district_queries:
-                direct_url = f"{WIKIPEDIA_BASE_URL}/wiki/{wiki_encode(dq)}"
-                logger.debug(f"    🔎 Пробуем: {direct_url}")
-                html = await self._fetch_page(direct_url)
-                if html:
-                    soup = BeautifulSoup(html, 'html.parser')
-                    no_article = soup.find('div', class_='noarticletext')
-                    if not no_article:
-                        title = soup.find('h1')
-                        if title:
-                            title_text = title.get_text().lower()
-                            if ('район' in title_text or 'округ' in title_text) and 'город' not in title_text:
-                                district_page_url = direct_url
-                                logger.info(f"    🌐 Найдена страница района/округа: {direct_url}")
-                                break
-                await asyncio.sleep(0.5)
+        # Пробуем все возможные названия страницы района
+        for name in possible_names:
+            direct_url = f"{WIKIPEDIA_BASE_URL}/wiki/{wiki_encode(name)}"
+            logger.debug(f"    🔎 Пробуем: {direct_url}")
+            html = await self._fetch_page(direct_url)
+            if html:
+                soup = BeautifulSoup(html, 'html.parser')
+                no_article = soup.find('div', class_='noarticletext')
+                if not no_article:
+                    title = soup.find('h1')
+                    if title:
+                        title_text = title.get_text().lower()
+                        # Проверяем, что это страница района/округа, а не города
+                        if ('район' in title_text or 'округ' in title_text) and 'город' not in title_text:
+                            district_page_url = direct_url
+                            logger.info(f"    🌐 Найдена страница района/округа: {direct_url}")
+                            break
+            await asyncio.sleep(0.5)
         
         # Если не нашли, пробуем поиск через API
         if not district_page_url:
             logger.info(f"    🔎 Пробуем поиск через API Wikipedia")
             try:
-                search_url = f"{WIKIPEDIA_SEARCH_URL}?action=query&list=search&srsearch={quote_plus(f'{district} район Тверской области')}&format=json&utf8=1"
-                search_html = await self._fetch_page(search_url)
-                if search_html:
-                    data = json.loads(search_html)
-                    if 'query' in data and 'search' in data['query']:
-                        for result in data['query']['search'][:10]:
-                            title = result['title']
-                            if 'район' in title.lower() or 'округ' in title.lower():
-                                page_url = f"{WIKIPEDIA_BASE_URL}/wiki/{wiki_encode(title)}"
-                                logger.debug(f"    🔎 Проверяем через API: {page_url}")
-                                html = await self._fetch_page(page_url)
-                                if html:
-                                    soup = BeautifulSoup(html, 'html.parser')
-                                    no_article = soup.find('div', class_='noarticletext')
-                                    if not no_article:
-                                        title_elem = soup.find('h1')
-                                        if title_elem and ('район' in title_elem.get_text().lower() or 'округ' in title_elem.get_text().lower()):
-                                            district_page_url = page_url
-                                            logger.info(f"    🌐 Найдена страница района/округа через API: {page_url}")
-                                            break
-                                await asyncio.sleep(0.3)
+                # Пробуем разные запросы для поиска страницы района
+                search_queries = [
+                    f"{district} район",
+                    f"{district} муниципальный округ",
+                    f"{district} район Тверской области",
+                    f"{district} муниципальный округ Тверской области"
+                ]
+                
+                for sq in search_queries[:2]:  # Ограничиваем количество запросов
+                    search_url = f"{WIKIPEDIA_SEARCH_URL}?action=query&list=search&srsearch={quote_plus(sq)}&format=json&utf8=1"
+                    search_html = await self._fetch_page(search_url)
+                    if search_html:
+                        data = json.loads(search_html)
+                        if 'query' in data and 'search' in data['query']:
+                            for result in data['query']['search'][:10]:
+                                title = result['title']
+                                if 'район' in title.lower() or 'округ' in title.lower():
+                                    page_url = f"{WIKIPEDIA_BASE_URL}/wiki/{wiki_encode(title)}"
+                                    logger.debug(f"    🔎 Проверяем через API: {page_url}")
+                                    html = await self._fetch_page(page_url)
+                                    if html:
+                                        soup = BeautifulSoup(html, 'html.parser')
+                                        no_article = soup.find('div', class_='noarticletext')
+                                        if not no_article:
+                                            title_elem = soup.find('h1')
+                                            if title_elem and ('район' in title_elem.get_text().lower() or 'округ' in title_elem.get_text().lower()):
+                                                district_page_url = page_url
+                                                logger.info(f"    🌐 Найдена страница района/округа через API: {page_url}")
+                                                break
+                                    await asyncio.sleep(0.3)
+                    await asyncio.sleep(0.5)
             except Exception as e:
                 logger.debug(f"    Ошибка API поиска: {e}")
         
@@ -2252,12 +2245,18 @@ class APISourceManager:
         
         soup = BeautifulSoup(html, 'html.parser')
         
-        # Ищем раздел "Населённые пункты"
+        # Ищем раздел "Населённые пункты" или "Населенные пункты"
         settlements_section = None
+        section_keywords = ['населённые пункты', 'населенные пункты', 'список населенных пунктов', 'список населённых пунктов']
+        
         for header in soup.find_all(['h2', 'h3']):
             header_text = header.get_text().lower()
-            if 'населённые пункты' in header_text or 'населенные пункты' in header_text:
-                settlements_section = header
+            for keyword in section_keywords:
+                if keyword in header_text:
+                    settlements_section = header
+                    logger.debug(f"    Найден раздел: {header_text[:50]}")
+                    break
+            if settlements_section:
                 break
         
         # Ищем таблицу после заголовка
@@ -2356,6 +2355,37 @@ class APISourceManager:
                     'url': page_url,
                     'has_link': page_url is not None
                 }
+        
+        # Если таблицы не дали результатов, ищем в списках
+        if not district_villages:
+            logger.info(f"    🔍 Таблицы не дали результатов, ищем в списках...")
+            for lst in soup.find_all(['ul', 'ol']):
+                for link in lst.find_all('a', href=re.compile(r'^/wiki/')):
+                    href = link.get('href', '')
+                    if ':' in href or '#' in href:
+                        continue
+                    
+                    name = link.get_text().strip()
+                    name = re.sub(r'\[\d+\]', '', name)
+                    name = re.sub(r'^\d+\s*', '', name)
+                    name = re.sub(r'\s+', ' ', name).strip()
+                    
+                    if not name or len(name) < MIN_NAME_LENGTH:
+                        continue
+                    
+                    if name in district_villages:
+                        continue
+                    
+                    # Проверяем, что это не ссылка на район
+                    if 'район' in name.lower() or 'округ' in name.lower():
+                        continue
+                    
+                    page_url = f"{WIKIPEDIA_BASE_URL}{href}"
+                    district_villages[name] = {
+                        'type': 'деревня',
+                        'url': page_url,
+                        'has_link': True
+                    }
         
         logger.info(f"    📊 На странице района найдено {len(district_villages)} населенных пунктов")
         
