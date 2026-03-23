@@ -576,7 +576,6 @@ class APISourceManager:
                         "name": name, "type": village_type, "district": district,
                         "lat": str(round(lat, 5)), "lon": str(round(lon, 5)), "has_coords": True
                     })
-                    self.coords_stats['from_former'] += 1
                 else:
                     results.append({
                         "name": name, "type": village_type, "district": district,
@@ -962,14 +961,27 @@ class APISourceManager:
             self.processed_former_np_ids.add(district_former_id)
             logger.info(f"  📌 Обрабатываем общий список бывших НП района")
             district_former_data = await self._parse_former_np_page(district_former_id, district, "всего района")
+            former_added = 0
+            former_with_coords = 0
             for village in district_former_data:
                 key = f"{village['name']}_{village['district']}"
                 if key not in seen_villages:
                     seen_villages[key] = village
                     self.collection_stats['from_former'] += 1
+                    former_added += 1
                     if village.get('has_coords'):
+                        former_with_coords += 1
                         self.coords_stats['from_former'] += 1
-            logger.info(f"  ✅ Добавлено {len(district_former_data)} записей из общего списка бывших НП")
+                        logger.info(f"      📍 Бывший НП с координатами: {village['name']} ({village['lat']}, {village['lon']})")
+                else:
+                    existing = seen_villages[key]
+                    if not existing.get('has_coords') and village.get('has_coords'):
+                        seen_villages[key] = village
+                        former_added += 1
+                        former_with_coords += 1
+                        self.coords_stats['from_former'] += 1
+                        logger.info(f"      🔄 Обновлены координаты для {village['name']} из общего списка бывших НП")
+            logger.info(f"  ✅ Из общего списка бывших НП района добавлено {former_added} записей (из них с координатами: {former_with_coords})")
         
         # Шаг 3: Общие списки на странице района
         if district_html:
@@ -979,12 +991,14 @@ class APISourceManager:
                     processed_master_lists.add(list_id)
                     self.processed_article_ids.add(list_id)
                     list_data = await self._parse_master_list_page(list_id, district)
+                    list_added = 0
                     for village in list_data:
                         key = f"{village['name']}_{village['district']}"
                         if key not in seen_villages:
                             seen_villages[key] = village
                             self.collection_stats['from_master_lists'] += 1
-                    logger.info(f"    Из списка ID {list_id} добавлено {len(list_data)} записей")
+                            list_added += 1
+                    logger.info(f"    Из списка ID {list_id} добавлено {list_added} записей")
         
         # Шаг 4: Для каждого СП
         for settlement in settlements:
@@ -1002,40 +1016,120 @@ class APISourceManager:
                     district_former_id = await self._find_district_former_np_page(district, district_html)
                     if district_former_id and district_former_id not in self.processed_former_np_ids:
                         former_np_id = district_former_id
+                        logger.info(f"    📌 Используем общий список бывших НП района для СП {settlement}")
                 
                 if former_np_id and former_np_id not in self.processed_former_np_ids:
                     self.processed_former_np_ids.add(former_np_id)
+                    logger.info(f"    ✅ Найдена страница бывших НП для СП {settlement} (ID: {former_np_id})")
                     former_np_data = await self._parse_former_np_page(former_np_id, district, settlement)
-                    former_added = 0
+                    
+                    former_new = 0
+                    former_with_coords = 0
+                    
                     for village in former_np_data:
                         key = f"{village['name']}_{village['district']}"
+                        
+                        if village.get('has_coords'):
+                            former_with_coords += 1
+                            logger.info(f"      📍 Бывший НП с координатами: {village['name']} ({village['lat']}, {village['lon']})")
+                        
                         if key not in seen_villages:
                             seen_villages[key] = village
                             self.collection_stats['from_former'] += 1
-                            former_added += 1
+                            former_new += 1
                             if village.get('has_coords'):
-                                logger.info(f"      📍 Бывший НП с координатами: {village['name']} ({village['lat']}, {village['lon']})")
-                    if former_added > 0:
-                        logger.info(f"    ✅ Добавлено {former_added} записей из бывших НП")
+                                self.coords_stats['from_former'] += 1
+                        else:
+                            existing = seen_villages[key]
+                            if not existing.get('has_coords') and village.get('has_coords'):
+                                seen_villages[key] = village
+                                former_new += 1
+                                self.coords_stats['from_former'] += 1
+                                logger.info(f"      🔄 Обновлены координаты для {village['name']} из бывших НП")
+                    
+                    if former_new > 0:
+                        logger.info(f"    ✅ СП {settlement}: добавлено {former_new} записей из списка бывших НП (из них с координатами: {former_with_coords})")
+                else:
+                    if former_np_id:
+                        logger.info(f"    ⚠️ Страница бывших НП для СП {settlement} уже обработана (ID: {former_np_id}), пропускаем")
+                    else:
+                        logger.info(f"    ⚠️ Страница бывших НП для СП {settlement} не найдена")
                 
                 # Основная страница СП
                 main_page_id = await self._find_settlement_main_page(settlement, district)
                 if main_page_id and main_page_id not in self.processed_article_ids:
                     self.processed_article_ids.add(main_page_id)
+                    logger.info(f"    🔍 Обрабатываем основную страницу СП {settlement} (ID: {main_page_id})")
                     main_page_data = await self._parse_settlement_main_page(main_page_id, district, settlement)
-                    main_added = 0
+                    
+                    main_new = 0
                     for village in main_page_data:
                         key = f"{village['name']}_{village['district']}"
+                        
+                        if village.get('article_id'):
+                            self.village_links[village['name']] = village['article_id']
+                            logger.debug(f"      Сохранена ссылка для {village['name']}: ID {village['article_id']}")
+                        
+                        village_copy = village.copy()
+                        village_copy.pop('article_id', None)
+                        
                         if key not in seen_villages:
-                            seen_villages[key] = village
+                            seen_villages[key] = village_copy
                             self.collection_stats['from_settlements'] += 1
-                            main_added += 1
-                            logger.info(f"      ➕ Добавлен НП из СП: {village['name']}")
-                    if main_added > 0:
-                        logger.info(f"    ✅ Добавлено {main_added} записей из раздела 'Населенные пункты'")
+                            main_new += 1
+                            logger.info(f"      ➕ Добавлен НП из СП: {village['name']} ({village['type']})")
+                        else:
+                            existing = seen_villages[key]
+                            if not existing.get('has_coords') and village_copy.get('has_coords'):
+                                seen_villages[key] = village_copy
+                                main_new += 1
+                                logger.info(f"      🔄 Обновлены координаты для {village['name']}")
+                    
+                    if main_new > 0:
+                        logger.info(f"    ✅ СП {settlement}: добавлено {main_new} записей из раздела 'Населенные пункты'")
+                
+                # Дополнительные списки на странице бывших НП
+                if former_np_id:
+                    former_np_url = DIC_ACADEMIC_ARTICLE_URL.format(former_np_id)
+                    former_np_html = await self._fetch_page(former_np_url)
+                    
+                    if former_np_html:
+                        additional_list_ids = await self._find_master_list_links(former_np_html, district)
+                        
+                        for list_id in additional_list_ids:
+                            if list_id == former_np_id:
+                                continue
+                            
+                            if list_id in self.processed_former_np_ids:
+                                continue
+                            
+                            if list_id not in processed_master_lists and list_id not in self.processed_article_ids:
+                                list_info = await self._get_article_info(list_id)
+                                if list_info and self._check_district_in_text(list_info.get('title', ''), district):
+                                    processed_master_lists.add(list_id)
+                                    self.processed_article_ids.add(list_id)
+                                    logger.info(f"      Обрабатываем дополнительный список ID {list_id}")
+                                    
+                                    list_data = await self._parse_master_list_page(list_id, district)
+                                    
+                                    list_new = 0
+                                    for village in list_data:
+                                        key = f"{village['name']}_{village['district']}"
+                                        if key not in seen_villages:
+                                            seen_villages[key] = village
+                                            list_new += 1
+                                        else:
+                                            existing = seen_villages[key]
+                                            if not existing.get('has_coords') and village.get('has_coords'):
+                                                seen_villages[key] = village
+                                                list_new += 1
+                                    
+                                    logger.info(f"        Добавлено {list_new} новых записей из дополнительного списка")
                 
             except Exception as e:
                 logger.error(f"    ❌ Ошибка обработки СП {settlement}: {e}")
+                import traceback
+                traceback.print_exc()
         
         all_villages = list(seen_villages.values())
         
@@ -1079,6 +1173,7 @@ class APISourceManager:
                 tasks = [fetch_dic(v) for v in with_links]
                 results = await asyncio.gather(*tasks)
                 
+                dic_found = 0
                 for name, data in results:
                     if data:
                         for v in all_villages:
@@ -1086,9 +1181,11 @@ class APISourceManager:
                                 v['lat'] = data['lat']
                                 v['lon'] = data['lon']
                                 v['has_coords'] = True
+                                dic_found += 1
                                 self.coords_stats['from_links'] += 1
                                 logger.info(f"      ✅ Найдены координаты на dic.academic.ru: {name}")
                                 break
+                logger.info(f"  ✅ Найдено координат на dic.academic.ru: {dic_found}")
             
             # Шаг 2: ШАГ 3 - поиск на странице района (Wikipedia)
             villages_without_coords = [v for v in all_villages if not v.get('has_coords')]
@@ -1100,6 +1197,7 @@ class APISourceManager:
                 district_page_coords = await self._fetch_villages_from_district_page(district, current_villages_dict)
                 
                 if district_page_coords:
+                    wiki_found = 0
                     for name, data in district_page_coords.items():
                         found = False
                         for v in all_villages:
@@ -1107,6 +1205,7 @@ class APISourceManager:
                                 v['lat'] = data['lat']
                                 v['lon'] = data['lon']
                                 v['has_coords'] = True
+                                wiki_found += 1
                                 self.coords_stats['from_wikipedia'] += 1
                                 logger.info(f"      ✅ Обновлены координаты для {name}: ({v['lat']}, {v['lon']})")
                                 found = True
@@ -1119,9 +1218,12 @@ class APISourceManager:
                                     "lat": data['lat'], "lon": data['lon'],
                                     "district": district, "has_coords": True
                                 })
+                                wiki_found += 1
                                 self.coords_stats['from_wikipedia'] += 1
                                 self.collection_stats['from_district_page'] += 1
                                 logger.info(f"  ➕ Добавлен новый НП: {name} ({data['lat']}, {data['lon']})")
+                    
+                    logger.info(f"  ✅ Найдено координат на странице района: {wiki_found}")
             
             # Финальная статистика
             final_with_coords = sum(1 for v in all_villages if v.get('has_coords'))
