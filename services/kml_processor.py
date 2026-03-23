@@ -149,4 +149,77 @@ class KMLProcessor:
             f.write("ОТЧЕТ ПО ОБРАБОТКЕ KML ФАЙЛА\n")
             f.write("=" * 100 + "\n")
             f.write(f"Дата обработки: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write(f"Исходный файл: {filename}\n\n
+            f.write(f"Исходный файл: {filename}\n\n")
+            
+            stats = data['stats']
+            f.write("=" * 100 + "\n")
+            f.write("ОБЩАЯ СТАТИСТИКА\n")
+            f.write("=" * 100 + "\n")
+            f.write(f"Всего обработано снимков: {stats['total_frames']}\n")
+            f.write(f"Снимков с населенными пунктами: {stats['frames_with_np']}\n")
+            f.write(f"Снимков без населенных пунктов: {stats['frames_without_np']}\n")
+            f.write(f"Всего связей (НП в кадрах): {stats['total_relations']}\n")
+            if stats['frames_with_np'] > 0:
+                f.write(f"Среднее количество НП на кадр: {stats['avg_np_per_frame']}\n")
+            f.write("\n")
+            
+            if data['top_frames']:
+                f.write("=" * 100 + "\n")
+                f.write("ТОП-10 СНИМКОВ ПО КОЛИЧЕСТВУ НП\n")
+                f.write("=" * 100 + "\n")
+                for i, frame in enumerate(data['top_frames'][:10], 1):
+                    f.write(f"{i}. {frame['frame']}: {frame['count']} населенных пунктов\n")
+                    if frame.get('description'):
+                        desc_preview = frame['description'][:200] if frame['description'] else ""
+                        f.write(f"   Описание: {desc_preview}...\n")
+                f.write("\n")
+            
+            if data['district_stats']:
+                f.write("=" * 100 + "\n")
+                f.write("СТАТИСТИКА ПО РАЙОНАМ\n")
+                f.write("=" * 100 + "\n")
+                total = stats['total_relations']
+                for district in data['district_stats']:
+                    percent = (district['count'] / total * 100) if total > 0 else 0
+                    f.write(f"{district['district']} район: {district['count']} НП ({percent:.1f}%)\n")
+                f.write("\n")
+            
+            if data['results']:
+                f.write("=" * 100 + "\n")
+                f.write("ДЕТАЛЬНЫЙ СПИСОК ПО КАЖДОМУ СНИМКУ\n")
+                f.write("=" * 100 + "\n\n")
+                
+                for result in data['results']:
+                    f.write("-" * 100 + "\n")
+                    f.write(f"Снимок: {result['photo_num']}\n")
+                    f.write(f"Количество НП: {result['village_count']}\n")
+                    
+                    if result.get('description'):
+                        f.write(f"\n📝 Описание снимка:\n")
+                        f.write(f"{result['description']}\n\n")
+                    
+                    if result['villages_with_district']:
+                        f.write("Населенные пункты в кадре:\n")
+                        for i, v in enumerate(result['villages_with_district'], 1):
+                            coords = f"{v['lat']}, {v['lon']}" if v['lat'] and v['lon'] else "координаты не указаны"
+                            f.write(f"  {i}. {v['name']} ({v['type']}, {v['district']} район)\n")
+                            f.write(f"     Координаты: {coords}\n")
+                    f.write("\n")
+            
+            if data['frames_without_np']:
+                f.write("=" * 100 + "\n")
+                f.write(f"СНИМКИ БЕЗ НАСЕЛЕННЫХ ПУНКТОВ ({len(data['frames_without_np'])} шт.)\n")
+                f.write("=" * 100 + "\n")
+                for frame in data['frames_without_np']:
+                    f.write(f"• {frame['frame']}")
+                    if frame.get('description'):
+                        desc_preview = frame['description'][:100] if frame['description'] else ""
+                        f.write(f" - {desc_preview}...")
+                    f.write("\n")
+                f.write("\n")
+            
+            f.write("=" * 100 + "\n")
+            f.write("КОНЕЦ ОТЧЕТА\n")
+            f.write("=" * 100 + "\n")
+        
+        return file_path
