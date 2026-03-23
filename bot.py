@@ -93,10 +93,7 @@ async def safe_delete_message(message):
 # ========== КЛАСС ДЛЯ РАБОТЫ С ЯНДЕКС.ДИСКОМ ==========
 
 class YandexDiskClient:
-    """
-    Клиент для работы с Яндекс.Диском
-    Обеспечивает поиск и получение ссылок на MBTILES и KMZ файлы аэрофотоснимков
-    """
+    """Клиент для работы с Яндекс.Диском"""
     
     def __init__(self, token: str):
         self.token = token
@@ -169,10 +166,7 @@ class YandexDiskClient:
         return exists
     
     def find_map_files(self, square: str, overlay: str, frame: str) -> Dict[str, List[Dict]]:
-        """
-        Ищет MBTILES и KMZ файлы для указанного снимка
-        Формат: Квадрат-Налёт-Кадр (например: N56E34-237-044)
-        """
+        """Ищет MBTILES и KMZ файлы для указанного снимка"""
         try:
             base_folder = "Компьютер DESKTOP-JMVJ4CL/АФС/КаталогПОСокол"
             square_folder = f"{base_folder}/{square}"
@@ -182,7 +176,6 @@ class YandexDiskClient:
             self.logger.info(f"\n🔍 Поиск файлов для {full_name}:")
             result = {'mbtiles': [], 'kmz': []}
             
-            # Варианты путей для поиска
             paths = [
                 f"{overlay_folder}/{full_name}",
                 overlay_folder,
@@ -248,15 +241,13 @@ yd_client = YandexDiskClient(YANDEX_DISK_TOKEN)
 # ========== КЛАСС ДЛЯ РАБОТЫ С БАЗОЙ НАСЕЛЕННЫХ ПУНКТОВ ==========
 
 class VillageDatabase:
-    """
-    База данных населенных пунктов
-    Хранит названия, типы, координаты и районы
-    """
+    """База данных населенных пунктов"""
     
     def __init__(self, csv_path: str = "data/villages.csv"):
         self.csv_path = csv_path
         self.villages: List[Dict] = []
         self.villages_by_name: Dict[str, List[Dict]] = {}
+        self.villages_by_district: Dict[str, List[Dict]] = {}
         self.stats = {'total': 0, 'with_coords': 0, 'last_update': None, 'source_file': None}
         self._load()
     
@@ -271,12 +262,20 @@ class VillageDatabase:
                 self.villages = list(reader)
             
             self.villages_by_name.clear()
+            self.villages_by_district.clear()
             with_coords = 0
             for v in self.villages:
                 name_lower = v['name'].lower()
                 if name_lower not in self.villages_by_name:
                     self.villages_by_name[name_lower] = []
                 self.villages_by_name[name_lower].append(v)
+                
+                district = v.get('district', '')
+                if district:
+                    if district not in self.villages_by_district:
+                        self.villages_by_district[district] = []
+                    self.villages_by_district[district].append(v)
+                
                 if v.get('lat') and v.get('lon') and v['lat'].strip() and v['lon'].strip():
                     with_coords += 1
             
@@ -294,6 +293,7 @@ class VillageDatabase:
             f.write("name,type,lat,lon,district\n")
         self.villages = []
         self.villages_by_name = {}
+        self.villages_by_district = {}
         self.stats = {'total': 0, 'with_coords': 0, 'last_update': None, 'source_file': None}
     
     def _save(self):
@@ -325,6 +325,146 @@ class VillageDatabase:
                         seen.add(v['name'])
         return results
     
+    def add_village(self, village: Dict) -> Tuple[bool, str]:
+        """Добавляет один населенный пункт в каталог с проверкой на дубликат"""
+        name = village.get('name', '').strip()
+        if not name:
+            return False, "Название не указано"
+        
+        # Проверка на существование
+        name_lower = name.lower()
+        if name_lower in self.villages_by_name:
+            return False, f"Населенный пункт '{name}' уже существует в каталоге"
+        
+        # Проверка обязательных полей
+        if not village.get('type'):
+            village['type'] = 'деревня'
+        if not village.get('district'):
+            village['district'] = ''
+        if not village.get('lat'):
+            village['lat'] = ''
+        if not village.get('lon'):
+            village['lon'] = ''
+        
+        self.villages.append(village)
+        
+        # Обновляем индексы
+        name_lower = village['name'].lower()
+        if name_lower not in self.villages_by_name:
+            self.villages_by_name[name_lower] = []
+        self.villages_by_name[name_lower].append(village)
+        
+        district = village.get('district', '')
+        if district:
+            if district not in self.villages_by_district:
+                self.villages_by_district[district] = []
+            self.villages_by_district[district].append(village)
+        
+        if village.get('lat') and village.get('lon') and village['lat'].strip() and village['lon'].strip():
+            self.stats['with_coords'] += 1
+        
+        self.stats['total'] = len(self.villages)
+        self._save()
+        
+        return True, f"Населенный пункт '{name}' добавлен"
+    
+    def add_villages_batch(self, villages: List[Dict]) -> Dict:
+        """Добавляет список населенных пунктов с проверкой на дубликаты"""
+        stats = {'added': 0, 'duplicates': 0, 'errors': 0, 'villages': []}
+        
+        for village in villages:
+            name = village.get('name', '').strip()
+            if not name:
+                stats['errors'] += 1
+                continue
+            
+            name_lower = name.lower()
+            if name_lower in self.villages_by_name:
+                stats['duplicates'] += 1
+                continue
+            
+            if not village.get('type'):
+                village['type'] = 'деревня'
+            if not village.get('district'):
+                village['district'] = ''
+            if not village.get('lat'):
+                village['lat'] = ''
+            if not village.get('lon'):
+                village['lon'] = ''
+            
+            self.villages.append(village)
+            stats['villages'].append(village)
+            stats['added'] += 1
+            
+            # Обновляем индексы
+            name_lower = village['name'].lower()
+            if name_lower not in self.villages_by_name:
+                self.villages_by_name[name_lower] = []
+            self.villages_by_name[name_lower].append(village)
+            
+            district = village.get('district', '')
+            if district:
+                if district not in self.villages_by_district:
+                    self.villages_by_district[district] = []
+                self.villages_by_district[district].append(village)
+        
+        self.stats['total'] = len(self.villages)
+        self.stats['with_coords'] = sum(1 for v in self.villages if v.get('lat') and v.get('lon') and v['lat'].strip() and v['lon'].strip())
+        self._save()
+        
+        return stats
+    
+    def remove_district(self, district: str) -> Tuple[int, int]:
+        """Удаляет все населенные пункты указанного района"""
+        if district not in self.villages_by_district:
+            return 0, 0
+        
+        removed_villages = self.villages_by_district[district]
+        removed_count = len(removed_villages)
+        
+        # Удаляем из основного списка
+        self.villages = [v for v in self.villages if v.get('district', '') != district]
+        
+        # Обновляем индексы
+        self.villages_by_name.clear()
+        self.villages_by_district.clear()
+        
+        for v in self.villages:
+            name_lower = v['name'].lower()
+            if name_lower not in self.villages_by_name:
+                self.villages_by_name[name_lower] = []
+            self.villages_by_name[name_lower].append(v)
+            
+            dist = v.get('district', '')
+            if dist:
+                if dist not in self.villages_by_district:
+                    self.villages_by_district[dist] = []
+                self.villages_by_district[dist].append(v)
+        
+        self.stats['total'] = len(self.villages)
+        self.stats['with_coords'] = sum(1 for v in self.villages if v.get('lat') and v.get('lon') and v['lat'].strip() and v['lon'].strip())
+        self._save()
+        
+        return removed_count, sum(1 for v in removed_villages if v.get('lat') and v.get('lon') and v['lat'].strip() and v['lon'].strip())
+    
+    def clear_all(self) -> int:
+        """Очищает весь каталог"""
+        removed_count = len(self.villages)
+        self.villages = []
+        self.villages_by_name.clear()
+        self.villages_by_district.clear()
+        self.stats = {'total': 0, 'with_coords': 0, 'last_update': None, 'source_file': None}
+        self._save()
+        return removed_count
+    
+    def get_villages_by_district(self, district: str) -> List[Dict]:
+        """Возвращает населенные пункты по району"""
+        return self.villages_by_district.get(district, [])
+    
+    def get_districts(self) -> List[str]:
+        """Возвращает список районов в каталоге"""
+        return sorted(self.villages_by_district.keys())
+    
     def replace_with_catalog(self, csv_content: str, source_filename: str) -> Dict:
         """Заменяет текущий каталог новым из CSV"""
         stats = {'loaded': 0, 'with_coords': 0, 'errors': 0}
@@ -353,11 +493,18 @@ class VillageDatabase:
             self._save()
             
             self.villages_by_name.clear()
+            self.villages_by_district.clear()
             for v in self.villages:
                 name_lower = v['name'].lower()
                 if name_lower not in self.villages_by_name:
                     self.villages_by_name[name_lower] = []
                 self.villages_by_name[name_lower].append(v)
+                
+                district = v.get('district', '')
+                if district:
+                    if district not in self.villages_by_district:
+                        self.villages_by_district[district] = []
+                    self.villages_by_district[district].append(v)
             
             self.stats['total'] = len(self.villages)
             self.stats['with_coords'] = stats['with_coords']
@@ -448,10 +595,7 @@ kml_processor = KMLProcessor()
 # ========== КЛАСС ДЛЯ РАБОТЫ С ДАННЫМИ СНИМКОВ ==========
 
 class PhotosDatabase:
-    """
-    База данных аэрофотоснимков
-    Хранит связи между деревнями и снимками, описания, файлы
-    """
+    """База данных аэрофотоснимков"""
     
     def __init__(self, data_dir: str = "data"):
         self.data_dir = data_dir
@@ -618,10 +762,7 @@ db = PhotosDatabase()
 # ========== ФУНКЦИИ ДЛЯ РАБОТЫ С TXT ==========
 
 def generate_txt_from_data(data: List[Dict], filename: str) -> str:
-    """
-    Генерирует TXT файл с данными о населенных пунктах
-    Разделитель - пробел между колонками
-    """
+    """Генерирует TXT файл с данными о населенных пунктах"""
     cleaned = []
     for v in data:
         cleaned.append({
@@ -651,12 +792,16 @@ class SearchStates(StatesGroup):
     waiting_for_kml = State()
     waiting_for_csv_upload = State()
     waiting_for_district_select = State()
+    waiting_for_add_village_name = State()
+    waiting_for_add_village_type = State()
+    waiting_for_add_village_coords = State()
+    waiting_for_add_village_district = State()
 
 
-# ========== КЛАВИАТУРЫ С УЛУЧШЕННЫМ ДИЗАЙНОМ ==========
+# ========== КЛАВИАТУРЫ ==========
 
 def get_main_keyboard() -> ReplyKeyboardMarkup:
-    """Главное меню с эмодзи и улучшенным дизайном"""
+    """Главное меню"""
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="🔍 ПОИСК"), KeyboardButton(text="📋 СПИСОК ДЕРЕВЕНЬ")],
@@ -669,10 +814,13 @@ def get_main_keyboard() -> ReplyKeyboardMarkup:
 
 
 def get_settings_keyboard() -> InlineKeyboardMarkup:
-    """Меню настроек с эмодзи"""
+    """Меню настроек"""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📥 Загрузить каталог (CSV)", callback_data="update_villages")],
+        [InlineKeyboardButton(text="📥 Добавить НП вручную", callback_data="add_village_manual")],
+        [InlineKeyboardButton(text="📤 Добавить НП из CSV", callback_data="add_villages_csv")],
         [InlineKeyboardButton(text="🌐 Загрузить из интернета", callback_data="download_from_web_start")],
+        [InlineKeyboardButton(text="🗑️ Удалить район", callback_data="delete_district_start")],
+        [InlineKeyboardButton(text="🗑️ Очистить весь каталог", callback_data="clear_all_catalog")],
         [InlineKeyboardButton(text="📊 Статистика каталога", callback_data="village_stats")],
         [InlineKeyboardButton(text="📤 Скачать каталог (TXT)", callback_data="download_villages_txt")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main")]
@@ -680,31 +828,24 @@ def get_settings_keyboard() -> InlineKeyboardMarkup:
 
 
 def get_district_keyboard() -> InlineKeyboardMarkup:
-    """
-    Выпадающее меню для выбора района
-    Первые 5 районов видны сразу, остальные в выпадающем списке
-    """
+    """Клавиатура выбора района"""
     keyboard = []
-    
-    # Первые 5 районов показываем сразу
     for district in AVAILABLE_DISTRICTS[:5]:
         keyboard.append([InlineKeyboardButton(text=f"📍 {district} район", callback_data=f"select_district_{district}")])
     
-    # Остальные районы группируем в выпадающий список
     remaining_districts = AVAILABLE_DISTRICTS[5:]
     if remaining_districts:
-        # Создаем кнопку "Ещё районы" с выпадающим списком
         district_buttons = []
         for district in remaining_districts:
             district_buttons.append([InlineKeyboardButton(text=f"📍 {district} район", callback_data=f"select_district_{district}")])
         keyboard.append([InlineKeyboardButton(text="📋 Ещё районы ▼", callback_data="show_more_districts")])
     
-    keyboard.append([InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main")])
+    keyboard.append([InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_settings")])
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
 def get_more_districts_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура со всеми районами (для выпадающего списка)"""
+    """Клавиатура со всеми районами"""
     keyboard = []
     for district in AVAILABLE_DISTRICTS[5:]:
         keyboard.append([InlineKeyboardButton(text=f"📍 {district} район", callback_data=f"select_district_{district}")])
@@ -712,10 +853,45 @@ def get_more_districts_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
+def get_delete_district_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура выбора района для удаления"""
+    districts = village_db.get_districts()
+    if not districts:
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📭 Нет районов для удаления", callback_data="no_op")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_settings")]
+        ])
+    
+    keyboard = []
+    for district in districts:
+        count = len(village_db.get_villages_by_district(district))
+        keyboard.append([InlineKeyboardButton(text=f"🗑️ {district} район ({count} НП)", callback_data=f"delete_district_confirm_{district}")])
+    keyboard.append([InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_settings")])
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def get_confirm_delete_district_keyboard(district: str) -> InlineKeyboardMarkup:
+    """Клавиатура подтверждения удаления района"""
+    count = len(village_db.get_villages_by_district(district))
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"✅ Да, удалить {district} район ({count} НП)", callback_data=f"confirm_delete_district_{district}")],
+        [InlineKeyboardButton(text="❌ Нет, отмена", callback_data="delete_district_start")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_settings")]
+    ])
+
+
+def get_confirm_clear_all_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура подтверждения очистки всего каталога"""
+    total = village_db.stats['total']
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"⚠️ ДА, УДАЛИТЬ ВСЕ {total} ЗАПИСЕЙ", callback_data="confirm_clear_all")],
+        [InlineKeyboardButton(text="❌ Нет, отмена", callback_data="back_to_settings")]
+    ])
+
+
 def get_merge_keyboard(district: str) -> InlineKeyboardMarkup:
     """Клавиатура для выбора действия с загруженными данными"""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔄 Заменить каталог", callback_data=f"merge_replace_{district}")],
         [InlineKeyboardButton(text="➕ Дополнить каталог", callback_data=f"merge_append_{district}")],
         [InlineKeyboardButton(text="📥 Скачать результат (TXT)", callback_data=f"merge_download_{district}")],
         [InlineKeyboardButton(text="❌ Отмена", callback_data="back_to_main")]
@@ -730,7 +906,7 @@ def back_keyboard() -> InlineKeyboardMarkup:
 
 
 def photos_keyboard(photos: List[str]) -> InlineKeyboardMarkup:
-    """Клавиатура со списком снимков (по 3 в ряд)"""
+    """Клавиатура со списком снимков"""
     keyboard = []
     row = []
     for p in photos:
@@ -783,7 +959,7 @@ async def menu_villages(message: types.Message):
     """Вывод списка всех деревень"""
     villages = db.get_all_villages_list()
     if not villages:
-        await message.answer("📭 Список деревень пуст. Загрузите каталог через ⚙️ НАСТРОЙКИ")
+        await message.answer("📭 Список деревень пуст. Добавьте населенные пункты через ⚙️ НАСТРОЙКИ")
         return
     
     chunks = [villages[i:i+25] for i in range(0, len(villages), 25)]
@@ -817,8 +993,9 @@ async def menu_instruction(message: types.Message):
         "• Бот найдет населенные пункты в каждом кадре\n"
         "• Результат покажет статистику по кадрам\n\n"
         "⚙️ <b>НАСТРОЙКИ</b>\n"
-        "• Загрузка каталога населенных пунктов (CSV)\n"
+        "• Добавление НП вручную или из CSV\n"
         "• Автоматическая загрузка из интернета (dic.academic.ru + Wikipedia)\n"
+        "• Удаление районов или очистка всего каталога\n"
         "• Просмотр статистики каталога\n"
         "• Экспорт каталога в TXT\n\n"
         "🛩️ <b>ПРИЯТНОГО ИСПОЛЬЗОВАНИЯ!</b>"
@@ -869,7 +1046,7 @@ async def menu_process_kml(message: types.Message, state: FSMContext):
 
 @dp.message(F.text == "⚙️ НАСТРОЙКИ")
 async def menu_settings(message: types.Message):
-    """Меню настроек с отображением статистики"""
+    """Меню настроек"""
     stats = village_db.get_stats()
     text = (
         f"⚙️ <b>Настройки базы населенных пунктов</b>\n\n"
@@ -883,10 +1060,442 @@ async def menu_settings(message: types.Message):
     if stats['source_file']:
         text += f"• Источник: {stats['source_file']}\n"
     
+    districts = village_db.get_districts()
+    if districts:
+        text += f"\n📍 <b>Районы в каталоге:</b>\n"
+        for d in districts:
+            count = len(village_db.get_villages_by_district(d))
+            text += f"• {d} район: {count} НП\n"
+    
     await message.answer(text, parse_mode="HTML", reply_markup=get_settings_keyboard())
 
 
-# ========== ОБРАБОТЧИКИ CALLBACK ==========
+# ========== ОБРАБОТЧИКИ ДОБАВЛЕНИЯ НП ==========
+
+@dp.callback_query(lambda c: c.data == "add_village_manual")
+async def add_village_manual_start(callback: CallbackQuery, state: FSMContext):
+    """Начало добавления НП вручную"""
+    await safe_edit_text(
+        callback.message,
+        "📝 <b>Добавление населенного пункта вручную</b>\n\n"
+        "Введите название населенного пункта:\n\n"
+        "📌 <i>Примеры: Горбово, Полунино, Дураково</i>",
+        parse_mode="HTML"
+    )
+    await state.set_state(SearchStates.waiting_for_add_village_name)
+    await safe_answer_callback(callback)
+
+
+@dp.message(SearchStates.waiting_for_add_village_name)
+async def add_village_name(message: types.Message, state: FSMContext):
+    """Получение названия НП"""
+    name = message.text.strip()
+    if len(name) < 2 or len(name) > 50:
+        await message.answer("❌ Название должно быть от 2 до 50 символов. Попробуйте снова:")
+        return
+    
+    await state.update_data(village_name=name)
+    await message.answer(
+        f"📝 <b>Название: {name}</b>\n\n"
+        f"Введите тип населенного пункта:\n\n"
+        f"📌 <i>Варианты: деревня, село, посёлок, хутор, станция, урочище</i>\n"
+        f"<i>Если оставить пустым, будет установлено 'деревня'</i>",
+        parse_mode="HTML"
+    )
+    await state.set_state(SearchStates.waiting_for_add_village_type)
+
+
+@dp.message(SearchStates.waiting_for_add_village_type)
+async def add_village_type(message: types.Message, state: FSMContext):
+    """Получение типа НП"""
+    type_text = message.text.strip() if message.text else "деревня"
+    if not type_text:
+        type_text = "деревня"
+    
+    valid_types = ['деревня', 'село', 'посёлок', 'хутор', 'станция', 'урочище']
+    if type_text not in valid_types:
+        await message.answer(f"❌ Неверный тип. Доступные: {', '.join(valid_types)}\nПопробуйте снова:")
+        return
+    
+    await state.update_data(village_type=type_text)
+    await message.answer(
+        f"📝 <b>Тип: {type_text}</b>\n\n"
+        f"Введите координаты (широта и долгота) через пробел:\n\n"
+        f"📌 <i>Пример: 56.2345 34.1234</i>\n"
+        f"<i>Если координаты неизвестны, оставьте пустым</i>",
+        parse_mode="HTML"
+    )
+    await state.set_state(SearchStates.waiting_for_add_village_coords)
+
+
+@dp.message(SearchStates.waiting_for_add_village_coords)
+async def add_village_coords(message: types.Message, state: FSMContext):
+    """Получение координат НП"""
+    coords_text = message.text.strip()
+    lat, lon = "", ""
+    
+    if coords_text:
+        parts = coords_text.split()
+        if len(parts) >= 2:
+            try:
+                lat = str(float(parts[0]))
+                lon = str(float(parts[1]))
+                if not (-90 <= float(lat) <= 90 and -180 <= float(lon) <= 180):
+                    await message.answer("❌ Координаты вне допустимого диапазона. Попробуйте снова:")
+                    return
+            except ValueError:
+                await message.answer("❌ Неверный формат координат. Введите два числа через пробел:\nПример: 56.2345 34.1234")
+                return
+    
+    await state.update_data(village_lat=lat, village_lon=lon)
+    await message.answer(
+        f"📝 <b>Координаты: {lat if lat else 'не указаны'}, {lon if lon else ''}</b>\n\n"
+        f"Введите район (для Ржевского района введите 'Ржевский'):\n\n"
+        f"📌 <i>Доступные районы: {', '.join(AVAILABLE_DISTRICTS[:5])} и другие</i>",
+        parse_mode="HTML"
+    )
+    await state.set_state(SearchStates.waiting_for_add_village_district)
+
+
+@dp.message(SearchStates.waiting_for_add_village_district)
+async def add_village_district(message: types.Message, state: FSMContext):
+    """Получение района и добавление НП"""
+    district = message.text.strip()
+    
+    # Проверяем, что район существует в списке
+    district_normalized = district.replace(" район", "").strip()
+    if district_normalized not in AVAILABLE_DISTRICTS:
+        await message.answer(
+            f"❌ Район '{district}' не найден в списке.\n\n"
+            f"Доступные районы: {', '.join(AVAILABLE_DISTRICTS[:10])}...\n"
+            f"Введите полное название района (например: Ржевский):"
+        )
+        return
+    
+    data = await state.get_data()
+    
+    village = {
+        "name": data['village_name'],
+        "type": data['village_type'],
+        "lat": data['village_lat'],
+        "lon": data['village_lon'],
+        "district": district_normalized
+    }
+    
+    success, msg = village_db.add_village(village)
+    
+    if success:
+        await message.answer(
+            f"✅ {msg}\n\n"
+            f"📊 <b>Данные добавленного НП:</b>\n"
+            f"• Название: {village['name']}\n"
+            f"• Тип: {village['type']}\n"
+            f"• Координаты: {village['lat'] if village['lat'] else 'не указаны'} {village['lon'] if village['lon'] else ''}\n"
+            f"• Район: {village['district']}\n\n"
+            f"Теперь этот НП доступен для поиска снимков!",
+            parse_mode="HTML",
+            reply_markup=back_keyboard()
+        )
+    else:
+        await message.answer(f"❌ {msg}", reply_markup=back_keyboard())
+    
+    await state.clear()
+
+
+# ========== ОБРАБОТЧИКИ ДОБАВЛЕНИЯ ИЗ CSV ==========
+
+@dp.callback_query(lambda c: c.data == "add_villages_csv")
+async def add_villages_csv_start(callback: CallbackQuery, state: FSMContext):
+    """Начало добавления НП из CSV"""
+    await safe_edit_text(
+        callback.message,
+        "📤 <b>Добавление населенных пунктов из CSV</b>\n\n"
+        "Отправьте CSV файл со структурой:\n"
+        "<code>name,type,lat,lon,district</code>\n\n"
+        "📌 <b>Пример строки:</b>\n"
+        "<code>Горбово,деревня,56.2345,34.1234,Ржевский</code>\n\n"
+        "⚠️ <b>Важно:</b>\n"
+        "• Если НП уже существует в каталоге, он будет пропущен\n"
+        "• Поля lat, lon могут быть пустыми\n"
+        "• Добавятся только новые НП",
+        parse_mode="HTML"
+    )
+    await state.set_state(SearchStates.waiting_for_csv_upload)
+    await safe_answer_callback(callback)
+
+
+# ========== ОБРАБОТЧИКИ УДАЛЕНИЯ ==========
+
+@dp.callback_query(lambda c: c.data == "delete_district_start")
+async def delete_district_start(callback: CallbackQuery):
+    """Начало удаления района"""
+    districts = village_db.get_districts()
+    if not districts:
+        await safe_edit_text(
+            callback.message,
+            "📭 В каталоге нет районов для удаления.",
+            reply_markup=back_keyboard()
+        )
+        await safe_answer_callback(callback)
+        return
+    
+    await safe_edit_text(
+        callback.message,
+        "🗑️ <b>Удаление района</b>\n\n"
+        "Выберите район для удаления:",
+        parse_mode="HTML",
+        reply_markup=get_delete_district_keyboard()
+    )
+    await safe_answer_callback(callback)
+
+
+@dp.callback_query(lambda c: c.data.startswith("delete_district_confirm_"))
+async def delete_district_confirm(callback: CallbackQuery):
+    """Подтверждение удаления района"""
+    district = callback.data.replace("delete_district_confirm_", "")
+    await safe_edit_text(
+        callback.message,
+        f"🗑️ <b>Удаление района {district}</b>\n\n"
+        f"⚠️ <b>ВНИМАНИЕ!</b> Это действие удалит все населенные пункты района {district} из каталога.\n\n"
+        f"Вы уверены?",
+        parse_mode="HTML",
+        reply_markup=get_confirm_delete_district_keyboard(district)
+    )
+    await safe_answer_callback(callback)
+
+
+@dp.callback_query(lambda c: c.data.startswith("confirm_delete_district_"))
+async def delete_district_execute(callback: CallbackQuery):
+    """Выполнение удаления района"""
+    district = callback.data.replace("confirm_delete_district_", "")
+    removed, with_coords = village_db.remove_district(district)
+    
+    await safe_edit_text(
+        callback.message,
+        f"✅ <b>Район {district} удален!</b>\n\n"
+        f"📊 <b>Результат:</b>\n"
+        f"• Удалено записей: {removed}\n"
+        f"• Из них с координатами: {with_coords}\n\n"
+        f"Текущее состояние каталога:\n"
+        f"• Всего записей: {village_db.stats['total']}\n"
+        f"• С координатами: {village_db.stats['with_coords']}",
+        parse_mode="HTML",
+        reply_markup=back_keyboard()
+    )
+    await safe_answer_callback(callback)
+
+
+@dp.callback_query(lambda c: c.data == "clear_all_catalog")
+async def clear_all_catalog_confirm(callback: CallbackQuery):
+    """Подтверждение очистки всего каталога"""
+    total = village_db.stats['total']
+    if total == 0:
+        await safe_edit_text(
+            callback.message,
+            "📭 Каталог уже пуст.",
+            reply_markup=back_keyboard()
+        )
+        await safe_answer_callback(callback)
+        return
+    
+    await safe_edit_text(
+        callback.message,
+        f"⚠️ <b>ОЧИСТКА ВСЕГО КАТАЛОГА</b>\n\n"
+        f"В каталоге находится {total} населенных пунктов.\n\n"
+        f"<b>Это действие НЕОБРАТИМО!</b>\n\n"
+        f"Вы уверены, что хотите удалить все данные?",
+        parse_mode="HTML",
+        reply_markup=get_confirm_clear_all_keyboard()
+    )
+    await safe_answer_callback(callback)
+
+
+@dp.callback_query(lambda c: c.data == "confirm_clear_all")
+async def clear_all_catalog_execute(callback: CallbackQuery):
+    """Выполнение очистки всего каталога"""
+    removed = village_db.clear_all()
+    
+    await safe_edit_text(
+        callback.message,
+        f"✅ <b>Каталог полностью очищен!</b>\n\n"
+        f"📊 <b>Результат:</b>\n"
+        f"• Удалено записей: {removed}\n\n"
+        f"Теперь каталог пуст. Вы можете добавить новые НП через настройки.",
+        parse_mode="HTML",
+        reply_markup=back_keyboard()
+    )
+    await safe_answer_callback(callback)
+
+
+# ========== ОБРАБОТЧИКИ ЗАГРУЗКИ ИЗ ИНТЕРНЕТА ==========
+
+@dp.callback_query(lambda c: c.data == "download_from_web_start")
+async def download_from_web_start(callback: CallbackQuery, state: FSMContext):
+    """Начало загрузки из интернета - выбор района"""
+    await safe_edit_text(
+        callback.message,
+        "🌐 <b>Загрузка данных из интернета</b>\n\n"
+        "Бот выполнит поиск на dic.academic.ru и Wikipedia.\n"
+        "Это может занять 10-15 минут.\n\n"
+        "<b>Выберите район:</b>",
+        parse_mode="HTML",
+        reply_markup=get_district_keyboard()
+    )
+    await state.set_state(SearchStates.waiting_for_district_select)
+    await safe_answer_callback(callback)
+
+
+@dp.callback_query(lambda c: c.data.startswith("select_district_"))
+async def process_district_select(callback: CallbackQuery, state: FSMContext):
+    """Обработка выбора района и запуск загрузки"""
+    district = callback.data.replace("select_district_", "")
+    
+    await safe_edit_text(
+        callback.message,
+        f"⏳ <b>Загрузка данных для {district} района...</b>\n\n"
+        f"🔍 Выполняется поиск на dic.academic.ru и Wikipedia.\n"
+        f"⏱️ Это может занять 10-15 минут.\n"
+        f"<i>Пожалуйста, подождите...</i>",
+        parse_mode="HTML"
+    )
+    await safe_answer_callback(callback, f"⏳ Начинаю загрузку для {district} района...")
+    
+    try:
+        api_manager = APISourceManager()
+        villages = await asyncio.wait_for(
+            api_manager.fetch_district_data(district),
+            timeout=1500.0
+        )
+        await api_manager.close_session()
+        
+        if not villages:
+            await safe_edit_text(
+                callback.message,
+                f"❌ <b>Не удалось загрузить данные для {district} района</b>\n\n"
+                f"Возможные причины:\n"
+                f"• Нет данных в источниках\n"
+                f"• Проблемы с подключением\n"
+                f"• Превышено время ожидания\n\n"
+                f"Попробуйте другой район или добавьте CSV вручную.",
+                parse_mode="HTML",
+                reply_markup=back_keyboard()
+            )
+            await safe_answer_callback(callback)
+            return
+        
+        timestamp = time.strftime('%Y%m%d_%H%M%S')
+        temp_dir = "data/temp"
+        os.makedirs(temp_dir, exist_ok=True)
+        temp_csv = os.path.join(temp_dir, f"{district}_{timestamp}.csv")
+        
+        with open(temp_csv, 'w', encoding='utf-8', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=['name', 'type', 'lat', 'lon', 'district'])
+            writer.writeheader()
+            writer.writerows(villages)
+        
+        txt_path = generate_txt_from_data(villages, f"населенные_пункты_{district}_{timestamp}.txt")
+        await state.update_data(temp_csv=temp_csv, temp_txt=txt_path, villages=villages)
+        
+        with_coords = sum(1 for v in villages if v.get('lat') and v.get('lon'))
+        
+        await safe_edit_text(
+            callback.message,
+            f"✅ <b>Данные для {district} района загружены!</b>\n\n"
+            f"📊 <b>Статистика:</b>\n"
+            f"• Всего населенных пунктов: {len(villages)}\n"
+            f"• С координатами: {with_coords}\n"
+            f"• Без координат: {len(villages) - with_coords}\n\n"
+            f"<b>Что сделать с этими данными?</b>",
+            parse_mode="HTML",
+            reply_markup=get_merge_keyboard(district)
+        )
+        
+    except asyncio.TimeoutError:
+        await safe_edit_text(
+            callback.message,
+            "❌ <b>Превышено время ожидания</b>\n\n"
+            "Загрузка данных заняла слишком много времени.\n"
+            "Попробуйте позже или выберите другой район.",
+            parse_mode="HTML",
+            reply_markup=back_keyboard()
+        )
+    except Exception as e:
+        logger.error(f"Ошибка: {e}")
+        await safe_edit_text(
+            callback.message,
+            f"❌ <b>Ошибка при загрузке данных</b>\n\n"
+            f"{str(e)}",
+            parse_mode="HTML",
+            reply_markup=back_keyboard()
+        )
+    finally:
+        if 'api_manager' in locals():
+            await api_manager.close_session()
+
+
+@dp.callback_query(lambda c: c.data.startswith("merge_"))
+async def process_merge(callback: CallbackQuery, state: FSMContext):
+    """Обработка действий с загруженными данными"""
+    action, district = callback.data.replace("merge_", "").split("_", 1)
+    data = await state.get_data()
+    temp_csv = data.get('temp_csv')
+    villages = data.get('villages', [])
+    
+    if not temp_csv or not os.path.exists(temp_csv):
+        await safe_edit_text(
+            callback.message,
+            "❌ Временный файл не найден. Попробуйте загрузить данные заново.",
+            reply_markup=back_keyboard()
+        )
+        await safe_answer_callback(callback)
+        return
+    
+    if action == "download":
+        txt_path = data.get('temp_txt')
+        if txt_path and os.path.exists(txt_path):
+            await callback.message.answer_document(
+                FSInputFile(txt_path, filename=os.path.basename(txt_path)),
+                caption=f"📁 Данные для {district} района"
+            )
+        await safe_answer_callback(callback)
+        return
+    
+    elif action == "append":
+        try:
+            # Добавляем НП с проверкой на дубликаты
+            stats = village_db.add_villages_batch(villages)
+            
+            os.unlink(temp_csv)
+            if data.get('temp_txt'):
+                os.unlink(data['temp_txt'])
+            
+            await state.clear()
+            
+            await safe_edit_text(
+                callback.message,
+                f"✅ <b>Каталог дополнен данными {district} района!</b>\n\n"
+                f"📊 <b>Результат:</b>\n"
+                f"• Добавлено новых записей: {stats['added']}\n"
+                f"• Пропущено дубликатов: {stats['duplicates']}\n"
+                f"• Ошибок: {stats['errors']}\n\n"
+                f"📊 <b>Текущее состояние каталога:</b>\n"
+                f"• Всего записей: {village_db.stats['total']}\n"
+                f"• С координатами: {village_db.stats['with_coords']}",
+                parse_mode="HTML",
+                reply_markup=back_keyboard()
+            )
+        except Exception as e:
+            logger.error(f"Ошибка: {e}")
+            await safe_edit_text(
+                callback.message,
+                f"❌ Ошибка при дополнении каталога:\n{str(e)}",
+                reply_markup=back_keyboard()
+            )
+    
+    await safe_answer_callback(callback)
+
+
+# ========== ОСТАЛЬНЫЕ ОБРАБОТЧИКИ ==========
 
 @dp.callback_query(lambda c: c.data == "locus_instruction")
 async def locus_instruction(callback: CallbackQuery):
@@ -958,7 +1567,7 @@ async def show_more_districts(callback: CallbackQuery):
 
 @dp.callback_query(lambda c: c.data == "back_to_districts")
 async def back_to_districts(callback: CallbackQuery):
-    """Возврат к выбору района (первые 5)"""
+    """Возврат к выбору района"""
     await safe_edit_text(
         callback.message,
         "🌐 <b>Выберите район для загрузки</b>\n\n"
@@ -966,309 +1575,6 @@ async def back_to_districts(callback: CallbackQuery):
         parse_mode="HTML",
         reply_markup=get_district_keyboard()
     )
-    await safe_answer_callback(callback)
-
-
-@dp.callback_query(lambda c: c.data == "village_stats")
-async def show_stats(callback: CallbackQuery):
-    """Показывает статистику каталога с примерами"""
-    stats = village_db.get_stats()
-    text = (
-        f"📊 <b>Статистика каталога населенных пунктов</b>\n\n"
-        f"• Всего записей: {stats['total']}\n"
-        f"• С координатами: {stats['with_coords']}\n"
-        f"• Без координат: {stats['total'] - stats['with_coords']}\n"
-    )
-    if stats['last_update']:
-        text += f"• Обновлено: {stats['last_update']}\n"
-    if stats['source_file']:
-        text += f"• Источник: {stats['source_file']}\n\n"
-    
-    if village_db.villages:
-        text += f"📝 <b>Примеры записей:</b>\n"
-        for v in village_db.villages[:10]:
-            coords = f"({v['lat']}, {v['lon']})" if v['lat'] and v['lon'] else "(без координат)"
-            text += f"• {v['name']} ({v['type']}) {coords}\n"
-    
-    await safe_edit_text(
-        callback.message,
-        text,
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_settings")],
-            [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
-        ])
-    )
-    await safe_answer_callback(callback)
-
-
-@dp.callback_query(lambda c: c.data == "update_villages")
-async def update_villages_start(callback: CallbackQuery, state: FSMContext):
-    """Начало загрузки каталога из CSV"""
-    await safe_edit_text(
-        callback.message,
-        "📤 <b>Загрузка каталога населенных пунктов</b>\n\n"
-        "⚠️ <b>ВНИМАНИЕ:</b> Это действие ЗАМЕНИТ текущую базу данных!\n\n"
-        "Отправьте CSV файл со структурой:\n"
-        "<code>name,type,lat,lon,district</code>\n\n"
-        "📌 <b>Пример строки:</b>\n"
-        "<code>Горбово,деревня,56.2345,34.1234,Ржевский</code>\n\n"
-        "Поля lat, lon могут быть пустыми.",
-        parse_mode="HTML"
-    )
-    await state.set_state(SearchStates.waiting_for_csv_upload)
-    await safe_answer_callback(callback)
-
-
-@dp.callback_query(lambda c: c.data == "download_villages_txt")
-async def download_villages_txt(callback: CallbackQuery):
-    """Экспорт каталога в TXT"""
-    if not os.path.exists(village_db.csv_path) or village_db.stats['total'] == 0:
-        await callback.message.answer("❌ Каталог пуст. Сначала загрузите данные через интернет или CSV.")
-        await safe_answer_callback(callback)
-        return
-    
-    try:
-        with open(village_db.csv_path, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            data = list(reader)
-        
-        filename = f"населенные_пункты_{time.strftime('%Y%m%d')}.txt"
-        filepath = generate_txt_from_data(data, filename)
-        
-        await callback.message.answer_document(
-            FSInputFile(filepath, filename=filename),
-            caption=f"📁 <b>Каталог населенных пунктов</b>\nВсего: {village_db.stats['total']} записей\nС координатами: {village_db.stats['with_coords']}",
-            parse_mode="HTML"
-        )
-        os.unlink(filepath)
-    except Exception as e:
-        logger.error(f"Ошибка: {e}")
-        await callback.message.answer("❌ Ошибка при создании файла.")
-    
-    await safe_answer_callback(callback)
-
-
-@dp.callback_query(lambda c: c.data == "download_from_web_start")
-async def download_from_web_start(callback: CallbackQuery, state: FSMContext):
-    """Начало загрузки из интернета - выбор района"""
-    await safe_edit_text(
-        callback.message,
-        "🌐 <b>Загрузка данных из интернета</b>\n\n"
-        "Бот выполнит поиск на dic.academic.ru и Wikipedia.\n"
-        "Это может занять 10-15 минут.\n\n"
-        "<b>Выберите район:</b>",
-        parse_mode="HTML",
-        reply_markup=get_district_keyboard()
-    )
-    await state.set_state(SearchStates.waiting_for_district_select)
-    await safe_answer_callback(callback)
-
-
-@dp.callback_query(lambda c: c.data.startswith("select_district_"))
-async def process_district_select(callback: CallbackQuery, state: FSMContext):
-    """Обработка выбора района и запуск загрузки"""
-    district = callback.data.replace("select_district_", "")
-    
-    await safe_edit_text(
-        callback.message,
-        f"⏳ <b>Загрузка данных для {district} района...</b>\n\n"
-        f"🔍 Выполняется поиск на dic.academic.ru и Wikipedia.\n"
-        f"⏱️ Это может занять 10-15 минут.\n"
-        f"<i>Пожалуйста, подождите...</i>",
-        parse_mode="HTML"
-    )
-    await safe_answer_callback(callback, f"⏳ Начинаю загрузку для {district} района...")
-    
-    try:
-        api_manager = APISourceManager()
-        villages = await asyncio.wait_for(
-            api_manager.fetch_district_data(district),
-            timeout=1500.0
-        )
-        await api_manager.close_session()
-        
-        if not villages:
-            await safe_edit_text(
-                callback.message,
-                f"❌ <b>Не удалось загрузить данные для {district} района</b>\n\n"
-                f"Возможные причины:\n"
-                f"• Нет данных в источниках\n"
-                f"• Проблемы с подключением\n"
-                f"• Превышено время ожидания\n\n"
-                f"Попробуйте другой район или загрузите CSV вручную.",
-                parse_mode="HTML",
-                reply_markup=back_keyboard()
-            )
-            await safe_answer_callback(callback)
-            return
-        
-        timestamp = time.strftime('%Y%m%d_%H%M%S')
-        temp_dir = "data/temp"
-        os.makedirs(temp_dir, exist_ok=True)
-        temp_csv = os.path.join(temp_dir, f"{district}_{timestamp}.csv")
-        
-        with open(temp_csv, 'w', encoding='utf-8', newline='') as f:
-            writer = csv.DictWriter(f, fieldnames=['name', 'type', 'lat', 'lon', 'district'])
-            writer.writeheader()
-            writer.writerows(villages)
-        
-        txt_path = generate_txt_from_data(villages, f"населенные_пункты_{district}_{timestamp}.txt")
-        await state.update_data(temp_csv=temp_csv, temp_txt=txt_path, villages=villages)
-        
-        with_coords = sum(1 for v in villages if v.get('lat'))
-        
-        await safe_edit_text(
-            callback.message,
-            f"✅ <b>Данные для {district} района загружены!</b>\n\n"
-            f"📊 <b>Статистика:</b>\n"
-            f"• Всего населенных пунктов: {len(villages)}\n"
-            f"• С координатами: {with_coords}\n"
-            f"• Без координат: {len(villages) - with_coords}\n\n"
-            f"<b>Что сделать с этими данными?</b>",
-            parse_mode="HTML",
-            reply_markup=get_merge_keyboard(district)
-        )
-        
-    except asyncio.TimeoutError:
-        await safe_edit_text(
-            callback.message,
-            "❌ <b>Превышено время ожидания</b>\n\n"
-            "Загрузка данных заняла слишком много времени.\n"
-            "Попробуйте позже или выберите другой район.",
-            parse_mode="HTML",
-            reply_markup=back_keyboard()
-        )
-    except Exception as e:
-        logger.error(f"Ошибка: {e}")
-        await safe_edit_text(
-            callback.message,
-            f"❌ <b>Ошибка при загрузке данных</b>\n\n"
-            f"{str(e)}",
-            parse_mode="HTML",
-            reply_markup=back_keyboard()
-        )
-    finally:
-        if 'api_manager' in locals():
-            await api_manager.close_session()
-
-
-@dp.callback_query(lambda c: c.data.startswith("merge_"))
-async def process_merge(callback: CallbackQuery, state: FSMContext):
-    """Обработка действий с загруженными данными (замена/дополнение/скачивание)"""
-    action, district = callback.data.replace("merge_", "").split("_", 1)
-    data = await state.get_data()
-    temp_csv = data.get('temp_csv')
-    villages = data.get('villages', [])
-    
-    if not temp_csv or not os.path.exists(temp_csv):
-        await safe_edit_text(
-            callback.message,
-            "❌ Временный файл не найден. Попробуйте загрузить данные заново.",
-            reply_markup=back_keyboard()
-        )
-        await safe_answer_callback(callback)
-        return
-    
-    if action == "download":
-        txt_path = data.get('temp_txt')
-        if txt_path and os.path.exists(txt_path):
-            await callback.message.answer_document(
-                FSInputFile(txt_path, filename=os.path.basename(txt_path)),
-                caption=f"📁 Данные для {district} района"
-            )
-        await safe_answer_callback(callback)
-        return
-    
-    elif action == "replace":
-        try:
-            with open(temp_csv, 'r', encoding='utf-8') as f:
-                csv_content = f.read()
-            
-            stats = village_db.replace_with_catalog(csv_content, f"internet_{district}_catalog.csv")
-            
-            os.unlink(temp_csv)
-            if data.get('temp_txt'):
-                os.unlink(data['temp_txt'])
-            
-            await state.clear()
-            
-            await safe_edit_text(
-                callback.message,
-                f"✅ <b>Каталог заменен данными {district} района!</b>\n\n"
-                f"📊 <b>Результат:</b>\n"
-                f"• Загружено записей: {stats['loaded']}\n"
-                f"• С координатами: {stats['with_coords']}\n"
-                f"• Ошибок: {stats['errors']}",
-                parse_mode="HTML",
-                reply_markup=back_keyboard()
-            )
-        except Exception as e:
-            logger.error(f"Ошибка: {e}")
-            await safe_edit_text(
-                callback.message,
-                f"❌ Ошибка при замене каталога:\n{str(e)}",
-                reply_markup=back_keyboard()
-            )
-    
-    elif action == "append":
-        try:
-            existing_names = {v['name'] for v in village_db.villages}
-            added = 0
-            updated = 0
-            
-            for new_v in villages:
-                name = new_v['name']
-                if name not in existing_names:
-                    village_db.villages.append(new_v)
-                    added += 1
-                    existing_names.add(name)
-                else:
-                    for i, existing in enumerate(village_db.villages):
-                        if existing['name'] == name:
-                            if (not existing.get('lat') and new_v.get('lat')):
-                                village_db.villages[i] = new_v
-                                updated += 1
-                            break
-            
-            village_db._save()
-            village_db.villages_by_name.clear()
-            for v in village_db.villages:
-                name_lower = v['name'].lower()
-                if name_lower not in village_db.villages_by_name:
-                    village_db.villages_by_name[name_lower] = []
-                village_db.villages_by_name[name_lower].append(v)
-            
-            with_coords = sum(1 for v in village_db.villages if v.get('lat') and v['lat'].strip())
-            village_db.stats['with_coords'] = with_coords
-            village_db.stats['total'] = len(village_db.villages)
-            village_db.stats['last_update'] = time.strftime('%Y-%m-%d %H:%M:%S')
-            village_db.stats['source_file'] = f"appended_{district}_catalog.csv"
-            
-            os.unlink(temp_csv)
-            if data.get('temp_txt'):
-                os.unlink(data['temp_txt'])
-            
-            await state.clear()
-            
-            await safe_edit_text(
-                callback.message,
-                f"✅ <b>Каталог дополнен данными {district} района!</b>\n\n"
-                f"📊 <b>Результат:</b>\n"
-                f"• Добавлено новых записей: {added}\n"
-                f"• Обновлено записей: {updated}\n"
-                f"• Всего записей: {village_db.stats['total']}\n"
-                f"• С координатами: {village_db.stats['with_coords']}",
-                parse_mode="HTML",
-                reply_markup=back_keyboard()
-            )
-        except Exception as e:
-            logger.error(f"Ошибка: {e}")
-            await safe_edit_text(
-                callback.message,
-                f"❌ Ошибка при дополнении каталога:\n{str(e)}",
-                reply_markup=back_keyboard()
-            )
-    
     await safe_answer_callback(callback)
 
 
@@ -1285,12 +1591,90 @@ async def back_to_settings(callback: CallbackQuery):
     if stats['last_update']:
         text += f"• Обновлено: {stats['last_update']}\n"
     
+    districts = village_db.get_districts()
+    if districts:
+        text += f"\n📍 <b>Районы в каталоге:</b>\n"
+        for d in districts:
+            count = len(village_db.get_villages_by_district(d))
+            text += f"• {d} район: {count} НП\n"
+    
     await safe_edit_text(
         callback.message,
         text,
         parse_mode="HTML",
         reply_markup=get_settings_keyboard()
     )
+    await safe_answer_callback(callback)
+
+
+@dp.callback_query(lambda c: c.data == "village_stats")
+async def show_stats(callback: CallbackQuery):
+    """Показывает статистику каталога"""
+    stats = village_db.get_stats()
+    text = (
+        f"📊 <b>Статистика каталога населенных пунктов</b>\n\n"
+        f"• Всего записей: {stats['total']}\n"
+        f"• С координатами: {stats['with_coords']}\n"
+        f"• Без координат: {stats['total'] - stats['with_coords']}\n"
+    )
+    if stats['last_update']:
+        text += f"• Обновлено: {stats['last_update']}\n"
+    if stats['source_file']:
+        text += f"• Источник: {stats['source_file']}\n\n"
+    
+    districts = village_db.get_districts()
+    if districts:
+        text += f"📍 <b>Районы в каталоге:</b>\n"
+        for d in districts:
+            count = len(village_db.get_villages_by_district(d))
+            with_coords = sum(1 for v in village_db.get_villages_by_district(d) if v.get('lat') and v.get('lon') and v['lat'].strip() and v['lon'].strip())
+            text += f"• {d} район: {count} НП (из них с координатами: {with_coords})\n"
+    
+    if village_db.villages:
+        text += f"\n📝 <b>Примеры записей (первые 10):</b>\n"
+        for v in village_db.villages[:10]:
+            coords = f"({v['lat']}, {v['lon']})" if v['lat'] and v['lon'] else "(без координат)"
+            text += f"• {v['name']} ({v['type']}) - {v['district']} район {coords}\n"
+    
+    await safe_edit_text(
+        callback.message,
+        text,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_settings")],
+            [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
+        ])
+    )
+    await safe_answer_callback(callback)
+
+
+@dp.callback_query(lambda c: c.data == "download_villages_txt")
+async def download_villages_txt(callback: CallbackQuery):
+    """Экспорт каталога в TXT"""
+    if not village_db.villages:
+        await callback.message.answer("❌ Каталог пуст. Сначала добавьте данные.")
+        await safe_answer_callback(callback)
+        return
+    
+    try:
+        filename = f"населенные_пункты_{time.strftime('%Y%m%d_%H%M%S')}.txt"
+        filepath = generate_txt_from_data(village_db.villages, filename)
+        
+        await callback.message.answer_document(
+            FSInputFile(filepath, filename=filename),
+            caption=f"📁 <b>Каталог населенных пунктов</b>\nВсего: {village_db.stats['total']} записей\nС координатами: {village_db.stats['with_coords']}",
+            parse_mode="HTML"
+        )
+        os.unlink(filepath)
+    except Exception as e:
+        logger.error(f"Ошибка: {e}")
+        await callback.message.answer("❌ Ошибка при создании файла.")
+    
+    await safe_answer_callback(callback)
+
+
+@dp.callback_query(lambda c: c.data == "no_op")
+async def no_op(callback: CallbackQuery):
+    """Пустой обработчик для кнопки без действия"""
     await safe_answer_callback(callback)
 
 
@@ -1447,13 +1831,13 @@ async def process_kml_invalid(message: types.Message, state: FSMContext):
 
 @dp.message(SearchStates.waiting_for_csv_upload, F.document)
 async def process_csv_upload(message: types.Message, state: FSMContext):
-    """Обработка загруженного CSV каталога"""
+    """Обработка загруженного CSV для добавления НП"""
     if not message.document.file_name.endswith('.csv'):
         await message.answer("❌ Отправьте CSV файл (с расширением .csv)")
         await state.clear()
         return
     
-    await message.answer("⏳ Загрузка и обработка каталога...")
+    await message.answer("⏳ Загрузка и обработка файла...")
     
     try:
         file_info = await bot.get_file(message.document.file_id)
@@ -1462,25 +1846,28 @@ async def process_csv_upload(message: types.Message, state: FSMContext):
             tmp_path = tmp.name
         
         with open(tmp_path, 'r', encoding='utf-8') as f:
-            csv_content = f.read()
+            reader = csv.DictReader(f)
+            villages = list(reader)
         os.unlink(tmp_path)
         
-        stats = village_db.replace_with_catalog(csv_content, message.document.file_name)
+        stats = village_db.add_villages_batch(villages)
         
         await message.answer(
-            f"✅ <b>Каталог загружен!</b>\n\n"
+            f"✅ <b>Обработка CSV завершена!</b>\n\n"
             f"📊 <b>Результат:</b>\n"
-            f"• Загружено записей: {stats['loaded']}\n"
-            f"• С координатами: {stats['with_coords']}\n"
+            f"• Добавлено новых записей: {stats['added']}\n"
+            f"• Пропущено дубликатов: {stats['duplicates']}\n"
             f"• Ошибок: {stats['errors']}\n\n"
-            f"<i>Теперь можно искать снимки по названиям деревень</i>",
+            f"📊 <b>Текущее состояние каталога:</b>\n"
+            f"• Всего записей: {village_db.stats['total']}\n"
+            f"• С координатами: {village_db.stats['with_coords']}",
             parse_mode="HTML",
             reply_markup=back_keyboard()
         )
         
     except Exception as e:
         logger.error(f"Ошибка: {e}")
-        await message.answer(f"❌ Ошибка при загрузке каталога:\n{str(e)}")
+        await message.answer(f"❌ Ошибка при загрузке CSV:\n{str(e)}")
     
     await state.clear()
 
@@ -1508,7 +1895,7 @@ async def show_villages(callback: CallbackQuery):
     
     villages = db.get_all_villages_list()
     if not villages:
-        await callback.message.answer("📭 Список деревень пуст. Загрузите каталог через ⚙️ НАСТРОЙКИ")
+        await callback.message.answer("📭 Список деревень пуст. Добавьте населенные пункты через ⚙️ НАСТРОЙКИ")
         await safe_answer_callback(callback)
         return
     
