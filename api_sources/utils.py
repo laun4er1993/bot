@@ -13,7 +13,7 @@ from .config import (
 )
 
 
-def is_valid_name(name: str) -> bool:
+def is_valid_name(name: str, district: str = "") -> bool:
     """Проверяет, является ли текст валидным названием населенного пункта"""
     if not name or len(name) < MIN_NAME_LENGTH or len(name) > MAX_NAME_LENGTH:
         return False
@@ -32,7 +32,7 @@ def is_valid_name(name: str) -> bool:
     return True
 
 
-def is_valid_settlement_name(name: str) -> bool:
+def is_valid_settlement_name(name: str, district: str = "") -> bool:
     """Проверяет, является ли текст валидным названием сельского поселения"""
     if not name or len(name) < 3 or len(name) > 50:
         return False
