@@ -100,7 +100,7 @@ class APISourceManager:
         self.coords_stats = {
             'from_former': 0,
             'from_links': 0,
-            'from_wikipedia': 0,
+            'from_district_page': 0,
             'total_without': 0,
             'found': 0,
             'remaining': 0
@@ -161,7 +161,7 @@ class APISourceManager:
         self.coords_stats = {
             'from_former': 0,
             'from_links': 0,
-            'from_wikipedia': 0,
+            'from_district_page': 0,
             'total_without': 0,
             'found': 0,
             'remaining': 0
@@ -349,10 +349,7 @@ class APISourceManager:
     async def _get_wikipedia_coordinates(self, wiki_url: str, village_name: str, district: str) -> Optional[Dict]:
         return await self.wikipedia_parser.get_wikipedia_coordinates(wiki_url, village_name, district)
     
-    async def _fetch_wikipedia_coordinates_batch(self, villages: List[Dict], district: str, district_bounds: Dict[str, float]) -> Dict[str, Dict]:
-        return await self.wikipedia_parser.fetch_wikipedia_coordinates_batch(villages, district, district_bounds)
-    
-    # ========== ПОИСК НА СТРАНИЦЕ РАЙОНА (ШАГ 3) ==========
+    # ========== ПОИСК НА СТРАНИЦЕ РАЙОНА (ШАГ 3) - ОСНОВНОЙ МЕТОД ДЛЯ КООРДИНАТ ==========
     
     async def _fetch_villages_from_district_page(self, district: str, existing_villages: Dict[str, Dict]) -> Dict[str, Dict]:
         return await self.district_parser.fetch_villages_from_district_page(district, existing_villages)
@@ -642,58 +639,47 @@ class APISourceManager:
                                 break
                 logger.info(f"  ✅ Найдено координат на dic.academic.ru по ссылкам из СП: {dic_found}")
             
-            # ========== 2. ЗАТЕМ ИЩЕМ НА WIKIPEDIA ДЛЯ ОСТАВШИХСЯ ==========
+            # ========== 2. ПРОПУСКАЕМ ПОИСК НА WIKIPEDIA ДЛЯ ВСЕХ НП БЕЗ КООРДИНАТ ==========
+            # Вместо этого сразу переходим к ШАГУ 3 - поиску на странице района
+            
             villages_without_coords = [v for v in all_villages if not v.get('has_coords')]
             if villages_without_coords:
                 logger.info(f"  📊 Осталось без координат после dic.academic.ru: {len(villages_without_coords)}")
-                logger.info(f"  🌐 Поиск координат на Wikipedia...")
+                logger.info(f"  🌐 ПРОПУСКАЕМ массовый поиск на Wikipedia, переходим к ШАГУ 3 (поиск на странице района)...")
                 
-                wiki_coords = await self._fetch_wikipedia_coordinates_batch(villages_without_coords, district, district_bounds)
-                logger.info(f"  ✅ Найдено координат на Wikipedia: {len(wiki_coords)}")
+                # ========== 3. ШАГ 3: ПОИСК НА СТРАНИЦЕ РАЙОНА (ДЛЯ ВСЕХ НП БЕЗ КООРДИНАТ) ==========
+                current_villages_dict = {v['name']: v for v in all_villages}
                 
-                for name, data in wiki_coords.items():
-                    for v in all_villages:
-                        if v['name'] == name and not v.get('has_coords'):
-                            v['lat'] = data['lat']
-                            v['lon'] = data['lon']
-                            v['has_coords'] = True
-                            self.coords_stats['from_wikipedia'] += 1
-                            logger.info(f"      ✅ Найдены координаты на Wikipedia: {name} ({v['lat']}, {v['lon']})")
-                            break
-            
-            # ========== 3. ШАГ 3: ПОИСК НА СТРАНИЦЕ РАЙОНА ==========
-            current_villages_dict = {v['name']: v for v in all_villages}
-            
-            district_page_coords = await self._fetch_villages_from_district_page(district, current_villages_dict)
-            
-            if district_page_coords:
-                logger.info(f"  🌐 Найдено {len(district_page_coords)} координат со страницы района")
+                district_page_coords = await self._fetch_villages_from_district_page(district, current_villages_dict)
                 
-                for name, data in district_page_coords.items():
-                    found_in_existing = False
-                    for v in all_villages:
-                        if v['name'] == name and not v.get('has_coords'):
-                            v['lat'] = data['lat']
-                            v['lon'] = data['lon']
-                            v['has_coords'] = True
-                            self.coords_stats['from_wikipedia'] += 1
-                            logger.info(f"      ✅ Обновлены координаты для {name} со страницы района: ({v['lat']}, {v['lon']})")
-                            found_in_existing = True
-                            break
+                if district_page_coords:
+                    logger.info(f"  🌐 Найдено {len(district_page_coords)} координат со страницы района")
                     
-                    if not found_in_existing:
-                        if self._is_valid_name(name, district):
-                            all_villages.append({
-                                "name": name,
-                                "type": data.get('type', 'деревня'),
-                                "lat": data['lat'],
-                                "lon": data['lon'],
-                                "district": district,
-                                "has_coords": True
-                            })
-                            self.coords_stats['from_wikipedia'] += 1
-                            self.collection_stats['from_district_page'] += 1
-                            logger.info(f"  ➕ Добавлен новый НП со страницы района: {name} ({data['lat']}, {data['lon']})")
+                    for name, data in district_page_coords.items():
+                        found_in_existing = False
+                        for v in all_villages:
+                            if v['name'] == name and not v.get('has_coords'):
+                                v['lat'] = data['lat']
+                                v['lon'] = data['lon']
+                                v['has_coords'] = True
+                                self.coords_stats['from_district_page'] += 1
+                                logger.info(f"      ✅ Обновлены координаты для {name} со страницы района: ({v['lat']}, {v['lon']})")
+                                found_in_existing = True
+                                break
+                        
+                        if not found_in_existing:
+                            if self._is_valid_name(name, district):
+                                all_villages.append({
+                                    "name": name,
+                                    "type": data.get('type', 'деревня'),
+                                    "lat": data['lat'],
+                                    "lon": data['lon'],
+                                    "district": district,
+                                    "has_coords": True
+                                })
+                                self.coords_stats['from_district_page'] += 1
+                                self.collection_stats['from_district_page'] += 1
+                                logger.info(f"  ➕ Добавлен новый НП со страницы района: {name} ({data['lat']}, {data['lon']})")
             
             # ========== 4. ФИНАЛЬНАЯ СТАТИСТИКА ==========
             final_with_coords = sum(1 for v in all_villages if v.get('has_coords'))
@@ -703,8 +689,8 @@ class APISourceManager:
             logger.info(f"      • Было без координат: {total_without}")
             logger.info(f"      • Из бывших НП (dic.academic.ru): {self.coords_stats['from_former']}")
             logger.info(f"      • По ссылкам из СП (dic.academic.ru): {self.coords_stats['from_links']}")
-            logger.info(f"      • Из Wikipedia: {self.coords_stats['from_wikipedia']}")
-            logger.info(f"      • Всего найдено: {self.coords_stats['from_former'] + self.coords_stats['from_links'] + self.coords_stats['from_wikipedia']}")
+            logger.info(f"      • Со страницы района (Wikipedia): {self.coords_stats['from_district_page']}")
+            logger.info(f"      • Всего найдено: {self.coords_stats['from_former'] + self.coords_stats['from_links'] + self.coords_stats['from_district_page']}")
             logger.info(f"      • Осталось без координат: {len(remaining)}")
             
             if remaining:
