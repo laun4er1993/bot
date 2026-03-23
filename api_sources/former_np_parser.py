@@ -8,7 +8,7 @@ from typing import List, Dict, Optional, Tuple, Any
 from bs4 import BeautifulSoup
 
 from .config import DIC_ACADEMIC_ARTICLE_URL, MIN_NAME_LENGTH
-from .utils import is_valid_name, expand_type, find_column_index
+from .utils import is_valid_name, expand_type, find_column_index, validate_coordinates
 from .coordinates import parse_dic_coordinates
 
 logger = logging.getLogger(__name__)
@@ -285,7 +285,7 @@ class FormerNPParser:
                                 row_text = ' '.join([c.get_text() for c in cells])
                                 lat, lon = parse_dic_coordinates(row_text, None)
                         
-                        if lat and lon and self.manager._check_coordinate_in_district(lat, lon, self.manager._get_district_bounds(district)):
+                        if lat and lon and validate_coordinates(lat, lon):
                             lat_rounded = round(lat, 5)
                             lon_rounded = round(lon, 5)
                             logger.info(f"          ✅ {name}: координаты {lat_rounded}, {lon_rounded}")
