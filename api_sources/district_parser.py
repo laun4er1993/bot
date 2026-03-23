@@ -15,7 +15,7 @@ from .config import (
     SETTLEMENTS_SECTION_KEYWORDS, TYPE_INDICATORS,
     MIN_NAME_LENGTH, MAX_NAME_LENGTH, DISTRICT_WIKI_NAMES
 )
-from .utils import is_valid_name, expand_type
+from .utils import is_valid_name, expand_type, validate_coordinates
 from .coordinates import parse_dic_coordinates, parse_wikipedia_coordinates
 
 logger = logging.getLogger(__name__)
@@ -330,7 +330,7 @@ class DistrictPageParser:
                                 lat, lon = coords
                                 lat_f = float(lat)
                                 lon_f = float(lon)
-                                if self.manager._check_coordinate_in_district(lat_f, lon_f, self.manager._get_district_bounds(district)):
+                                if validate_coordinates(lat_f, lon_f):
                                     logger.info(f"      ✅ Найдены координаты для {name} по ссылке: {lat}, {lon}")
                                     return name, {
                                         'name': name,
@@ -355,7 +355,7 @@ class DistrictPageParser:
                             lat, lon = coords
                             lat_f = float(lat)
                             lon_f = float(lon)
-                            if self.manager._check_coordinate_in_district(lat_f, lon_f, self.manager._get_district_bounds(district)):
+                            if validate_coordinates(lat_f, lon_f):
                                 logger.info(f"      ✅ Найдены координаты для {name} по прямому URL: {lat}, {lon}")
                                 return name, {
                                     'name': name,
