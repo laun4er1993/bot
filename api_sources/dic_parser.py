@@ -21,6 +21,7 @@ from .utils import (
     is_valid_name, is_valid_settlement_name, expand_type,
     find_column_index, clean_village_name, validate_coordinates
 )
+from .coordinates import parse_dic_coordinates
 
 logger = logging.getLogger(__name__)
 
@@ -1026,7 +1027,7 @@ class DicParser:
                     try:
                         lat_candidate = float(match.group(1))
                         lon_candidate = float(match.group(2))
-                        if self.manager._check_coordinate_in_district(lat_candidate, lon_candidate, self.manager._get_district_bounds(district)):
+                        if validate_coordinates(lat_candidate, lon_candidate):
                             lat = lat_candidate
                             lon = lon_candidate
                             source = "десятичные в тексте"
@@ -1052,7 +1053,7 @@ class DicParser:
                             logger.debug(f"        ❌ Ошибка парсинга geo-dms: {e}")
             
             if lat and lon:
-                if not self.manager._check_coordinate_in_district(lat, lon, self.manager._get_district_bounds(district)):
+                if not validate_coordinates(lat, lon):
                     logger.debug(f"        ❌ Координаты вне Тверской области: {lat}, {lon}")
                     return None
                 logger.info(f"        ✅ ИТОГО: координаты для {name}: {lat:.5f}, {lon:.5f} (из {source})")
