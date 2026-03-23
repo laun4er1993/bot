@@ -755,6 +755,7 @@ class APISourceManager:
         
         soup = BeautifulSoup(district_html, 'html.parser')
         
+        # Ищем в разделе "См. также" или в тексте страницы
         see_also = soup.find('div', class_='rellink boilerplate seealso')
         if see_also:
             for link in see_also.find_all('a', href=re.compile(r'/dic\.nsf/ruwiki/\d+')):
@@ -767,16 +768,33 @@ class APISourceManager:
                         self.former_np_pages_cache[cache_key] = article_id
                         return article_id
         
+        # Также ищем в тексте ссылку на список бывших НП
+        for link in soup.find_all('a', href=re.compile(r'/dic\.nsf/ruwiki/\d+')):
+            link_text = link.get_text().lower()
+            parent_text = link.find_parent().get_text().lower() if link.find_parent() else ""
+            full_text = link_text + " " + parent_text
+            
+            if 'список бывших населённых пунктов' in full_text and self._check_district_in_text(full_text, district):
+                match = re.search(r'/dic\.nsf/ruwiki/(\d+)', link.get('href', ''))
+                if match:
+                    article_id = match.group(1)
+                    logger.info(f"      Найдена общая страница бывших НП для района {district} (ID: {article_id})")
+                    self.former_np_pages_cache[cache_key] = article_id
+                    return article_id
+        
+        # Если не нашли в "См. также", ищем по запросу
         queries = [
             f"Список бывших населённых пунктов на территории {district} района Тверской области",
             f"Список бывших населенных пунктов {district} района",
-            f"Бывшие населенные пункты {district} района"
+            f"Бывшие населенные пункты {district} района",
+            f"Список бывших населённых пунктов {district} муниципального округа",
+            f"Список бывших населенных пунктов {district} муниципального округа"
         ]
         
         for query in queries:
             results = await self._search_with_pagination(query, max_pages=10)
             
-            for result in results[:10]:
+            for result in results[:15]:
                 title_lower = result['title'].lower()
                 if ('список бывших' in title_lower or 'бывшие населенные' in title_lower) and self._check_district_in_text(title_lower, district):
                     page_url = DIC_ACADEMIC_ARTICLE_URL.format(result['id'])
@@ -802,6 +820,7 @@ class APISourceManager:
         district_lower = district.lower()
         settlement_lower = settlement.lower()
         
+        # Расширенные запросы для поиска страницы бывших НП конкретного СП
         queries = [
             f"Список бывших населённых пунктов на территории сельского поселения {settlement} {district} район",
             f"Список бывших населенных пунктов на территории сельского поселения {settlement} {district} район",
@@ -846,10 +865,16 @@ class APISourceManager:
                 logger.info(f"          ❌ Нет слова 'бывших' в заголовке")
                 continue
             
+            # Проверяем наличие названия СП в заголовке (не обязательно, но желательно)
             if (settlement_lower not in title_lower and 
                 settlement_normalized not in title_normalized):
-                logger.info(f"          ❌ Нет названия СП '{settlement}' в заголовке")
-                continue
+                # Если нет названия СП, но это может быть общий список района - пропускаем для конкретного СП
+                if 'района' not in title_lower and 'округа' not in title_lower:
+                    logger.info(f"          ❌ Нет названия СП '{settlement}' в заголовке")
+                    continue
+                else:
+                    logger.info(f"          ⚠️ Найден общий список района, а не конкретного СП")
+                    # Не возвращаем, продолжаем поиск
             
             logger.info(f"          ✅ Прошел проверки, загружаем страницу...")
             
@@ -2105,7 +2130,6 @@ class APISourceManager:
                                 if 'район' in title.lower() or 'округ' in title.lower():
                                     continue
                                 
-                                # Проверяем, что название похоже на искомое
                                 if name.lower() not in title.lower() and title.lower() not in name.lower():
                                     if len(name) > 5 and name.lower() not in title.lower():
                                         continue
@@ -2157,13 +2181,12 @@ class APISourceManager:
         logger.info(f"  📊 ИТОГО по Wikipedia: обработано {processed}, найдено {found_count}")
         return found
     
-    # ========== ПОИСК НА СТРАНИЦЕ РАЙОНА (ШАГ 3) - УНИВЕРСАЛЬНЫЙ ==========
+    # ========== ПОИСК НА СТРАНИЦЕ РАЙОНА (ШАГ 3) ==========
     
     async def _fetch_villages_from_district_page(self, district: str, existing_villages: Dict[str, Dict]) -> Dict[str, Dict]:
         """
         Находит страницу района на Wikipedia, извлекает все населенные пункты,
         сравнивает с существующим списком и возвращает новые НП с координатами
-        Универсальная версия для любого района
         """
         logger.info(f"  🔍 ШАГ 3: Поиск населенных пунктов на странице района {district}...")
         
@@ -2188,7 +2211,6 @@ class APISourceManager:
                     title = soup.find('h1')
                     if title:
                         title_text = title.get_text().lower()
-                        # Проверяем, что это страница района/округа, а не города
                         if ('район' in title_text or 'округ' in title_text) and 'город' not in title_text:
                             district_page_url = direct_url
                             logger.info(f"    🌐 Найдена страница района/округа: {direct_url}")
@@ -2199,7 +2221,6 @@ class APISourceManager:
         if not district_page_url:
             logger.info(f"    🔎 Пробуем поиск через API Wikipedia")
             try:
-                # Пробуем разные запросы для поиска страницы района
                 search_queries = [
                     f"{district} район",
                     f"{district} муниципальный округ",
@@ -2207,7 +2228,7 @@ class APISourceManager:
                     f"{district} муниципальный округ Тверской области"
                 ]
                 
-                for sq in search_queries[:2]:  # Ограничиваем количество запросов
+                for sq in search_queries[:2]:
                     search_url = f"{WIKIPEDIA_SEARCH_URL}?action=query&list=search&srsearch={quote_plus(sq)}&format=json&utf8=1"
                     search_html = await self._fetch_page(search_url)
                     if search_html:
@@ -2245,7 +2266,7 @@ class APISourceManager:
         
         soup = BeautifulSoup(html, 'html.parser')
         
-        # Ищем раздел "Населённые пункты" или "Населенные пункты"
+        # Ищем раздел "Населённые пункты"
         settlements_section = None
         section_keywords = ['населённые пункты', 'населенные пункты', 'список населенных пунктов', 'список населённых пунктов']
         
@@ -2376,7 +2397,6 @@ class APISourceManager:
                     if name in district_villages:
                         continue
                     
-                    # Проверяем, что это не ссылка на район
                     if 'район' in name.lower() or 'округ' in name.lower():
                         continue
                     
@@ -2604,6 +2624,10 @@ class APISourceManager:
                 # Страница с бывшими НП (для конкретного СП)
                 former_np_id = await self._find_former_np_page(settlement, district)
                 
+                # Также ищем общий список бывших НП района (если есть)
+                district_former_id = await self._find_district_former_np_page(district, district_html)
+                
+                # Проверяем, что страница не была обработана как общий список района
                 if former_np_id and former_np_id not in self.processed_former_np_ids:
                     self.processed_former_np_ids.add(former_np_id)
                     logger.info(f"    ✅ Найдена страница бывших НП для СП {settlement} (ID: {former_np_id})")
@@ -2637,6 +2661,36 @@ class APISourceManager:
                         logger.info(f"    ⚠️ Страница бывших НП для СП {settlement} уже обработана (ID: {former_np_id}), пропускаем")
                     else:
                         logger.info(f"    ⚠️ Страница бывших НП для СП {settlement} не найдена")
+                
+                # Если есть общий список бывших НП района и он не обработан
+                if district_former_id and district_former_id not in self.processed_former_np_ids:
+                    self.processed_former_np_ids.add(district_former_id)
+                    logger.info(f"    📌 Обрабатываем общий список бывших НП района (ID: {district_former_id})")
+                    district_former_data = await self._parse_former_np_page(district_former_id, district, "всего района")
+                    
+                    district_new = 0
+                    district_with_coords = 0
+                    
+                    for village in district_former_data:
+                        key = f"{village['name']}_{village['district']}"
+                        
+                        if village.get('has_coords'):
+                            district_with_coords += 1
+                            logger.info(f"      📍 Бывший НП района с координатами: {village['name']} ({village['lat']}, {village['lon']})")
+                        
+                        if key not in seen_villages:
+                            seen_villages[key] = village
+                            self.collection_stats['from_former'] += 1
+                            district_new += 1
+                        else:
+                            existing = seen_villages[key]
+                            if not existing.get('has_coords') and village.get('has_coords'):
+                                seen_villages[key] = village
+                                district_new += 1
+                                logger.info(f"      🔄 Обновлены координаты для {village['name']} из общего списка бывших НП района")
+                    
+                    if district_new > 0:
+                        logger.info(f"    ✅ Из общего списка бывших НП района добавлено {district_new} записей (из них с координатами: {district_with_coords})")
                 
                 # Основная страница СП
                 main_page_id = await self._find_settlement_main_page(settlement, district)
