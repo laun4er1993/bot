@@ -16,7 +16,7 @@ from .config import (
     MIN_NAME_LENGTH, MAX_NAME_LENGTH, SERVICE_VILLAGE_WORDS,
     KNOWN_PERSONALITIES, DISTRICT_WIKI_NAMES
 )
-from .utils import is_valid_name, expand_type, find_column_index
+from .utils import is_valid_name, expand_type, find_column_index, validate_coordinates
 from .coordinates import parse_dic_coordinates, parse_wikipedia_coordinates
 
 logger = logging.getLogger(__name__)
@@ -294,7 +294,7 @@ class WikipediaParser:
             
             if coords:
                 lat, lon = coords
-                if self.manager._check_coordinate_in_district(float(lat), float(lon), self.manager._get_district_bounds(district)):
+                if validate_coordinates(float(lat), float(lon)):
                     logger.info(f"      ✅ Wikipedia: найдены координаты для {village_name}: {lat}, {lon}")
                     return {
                         "name": village_name,
@@ -359,7 +359,7 @@ class WikipediaParser:
                                     lat, lon = coords
                                     lat_f = float(lat)
                                     lon_f = float(lon)
-                                    if self.manager._check_coordinate_in_district(lat_f, lon_f, district_bounds):
+                                    if validate_coordinates(lat_f, lon_f):
                                         found_count += 1
                                         found_villages.add(name)
                                         logger.info(f"      ✅ Wikipedia: найдены координаты для {name}: {lat}, {lon}")
@@ -405,7 +405,7 @@ class WikipediaParser:
                                             lat, lon = coords
                                             lat_f = float(lat)
                                             lon_f = float(lon)
-                                            if self.manager._check_coordinate_in_district(lat_f, lon_f, district_bounds):
+                                            if validate_coordinates(lat_f, lon_f):
                                                 found_count += 1
                                                 found_villages.add(name)
                                                 logger.info(f"      ✅ Wikipedia: найдены координаты для {name} через поиск: {lat}, {lon} (страница: {title})")
