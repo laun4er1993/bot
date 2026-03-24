@@ -14,7 +14,7 @@ from keyboards.inline import (
     get_confirm_clear_all_keyboard, get_merge_keyboard, back_keyboard,
     loading_in_progress_keyboard, stats_back_keyboard
 )
-from utils.helpers import safe_edit_text, safe_answer_callback, safe_delete_message
+from utils.helpers import safe_edit_text, safe_answer_callback
 from config import logger, TEMP_DIR
 from api_sources import APISourceManager, AVAILABLE_DISTRICTS
 
