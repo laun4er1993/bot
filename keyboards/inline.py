@@ -4,8 +4,20 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from api_sources import AVAILABLE_DISTRICTS
 
 
+def get_settings_main_keyboard() -> InlineKeyboardMarkup:
+    """Главное меню настроек"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 ОБРАБОТАТЬ KML", callback_data="process_kml_menu")],
+        [InlineKeyboardButton(text="📥 ЗАГРУЗКА НП", callback_data="np_settings_menu")],
+        [InlineKeyboardButton(text="📁 НАСТРОЙКА КАТАЛОГА", callback_data="catalog_settings_menu")],
+        [InlineKeyboardButton(text="🔧 ПРОВЕРКА РАБОТОСПОСОБНОСТИ", callback_data="check_bot_status")],
+        [InlineKeyboardButton(text="🔛 ВКЛЮЧИТЬ БОТА", callback_data="enable_bot")],
+        [InlineKeyboardButton(text="🏠 ГЛАВНОЕ МЕНЮ", callback_data="back_to_main")]
+    ])
+
+
 def get_np_settings_keyboard() -> InlineKeyboardMarkup:
-    """Меню настроек населенных пунктов (ЗАГРУЗКА НП)"""
+    """Меню настроек населенных пунктов"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📝 Добавить НП вручную", callback_data="add_village_manual")],
         [InlineKeyboardButton(text="📤 Загрузить каталог НП (TXT)", callback_data="load_catalog_txt")],
@@ -14,7 +26,7 @@ def get_np_settings_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🗑️ Очистить весь каталог НП", callback_data="clear_all_catalog")],
         [InlineKeyboardButton(text="📊 Статистика каталога НП", callback_data="village_stats")],
         [InlineKeyboardButton(text="📤 Скачать каталог НП (TXT)", callback_data="download_villages_txt")],
-        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_main")]
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_settings_main")]
     ])
 
 
@@ -27,27 +39,8 @@ def get_catalog_settings_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🔄 Сравнить с KML", callback_data="compare_afs_with_kml")],
         [InlineKeyboardButton(text="🗑️ Очистить каталог АФС", callback_data="clear_afs_catalog")],
         [InlineKeyboardButton(text="📤 Загрузить общий каталог АФС", callback_data="load_common_afs_catalog")],
-        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_main")]
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_settings_main")]
     ])
-
-
-def get_afs_settings_keyboard(has_catalog: bool = False) -> InlineKeyboardMarkup:
-    """Клавиатура настроек каталога АФС (вспомогательная)"""
-    keyboard = []
-    
-    if has_catalog:
-        keyboard.append([InlineKeyboardButton(text="📊 Статистика АФС", callback_data="afs_stats")])
-        keyboard.append([InlineKeyboardButton(text="📋 Показать каталог", callback_data="show_afs_catalog")])
-        keyboard.append([InlineKeyboardButton(text="📥 Скачать каталог (TXT)", callback_data="download_afs_catalog")])
-        keyboard.append([InlineKeyboardButton(text="🔄 Сравнить с KML", callback_data="compare_afs_with_kml")])
-        keyboard.append([InlineKeyboardButton(text="🗑️ Очистить каталог", callback_data="clear_afs_catalog")])
-    else:
-        keyboard.append([InlineKeyboardButton(text="📭 Каталог пуст", callback_data="no_op")])
-    
-    keyboard.append([InlineKeyboardButton(text="📤 Загрузить общий каталог", callback_data="load_common_afs_catalog")])
-    keyboard.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_main")])
-    
-    return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
 def get_kml_result_keyboard() -> InlineKeyboardMarkup:
@@ -57,8 +50,8 @@ def get_kml_result_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="➕ Дополнить каталог АФС", callback_data="append_afs_catalog")],
         [InlineKeyboardButton(text="🔄 Заменить каталог АФС", callback_data="replace_afs_catalog")],
         [InlineKeyboardButton(text="📋 Показать каталог АФС", callback_data="show_afs_catalog")],
-        [InlineKeyboardButton(text="⚙️ Настройки АФС", callback_data="catalog_settings")],
-        [InlineKeyboardButton(text="🔄 Обработать другой KML", callback_data="process_kml_again")],
+        [InlineKeyboardButton(text="⚙️ Настройки АФС", callback_data="catalog_settings_menu")],
+        [InlineKeyboardButton(text="🔄 Обработать другой KML", callback_data="process_kml_menu")],
         [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_main")]
     ])
 
@@ -67,7 +60,6 @@ def get_afs_catalog_keyboard(has_catalog: bool = False, page: int = 1, total_pag
     """Клавиатура для просмотра каталога АФС"""
     keyboard = []
     
-    # Навигация по страницам
     if total_pages > 1:
         nav_buttons = []
         if page > 1:
@@ -78,7 +70,7 @@ def get_afs_catalog_keyboard(has_catalog: bool = False, page: int = 1, total_pag
             keyboard.append(nav_buttons)
     
     if has_catalog:
-        keyboard.append([InlineKeyboardButton(text="⚙️ Настройки АФС", callback_data="catalog_settings")])
+        keyboard.append([InlineKeyboardButton(text="⚙️ Настройки АФС", callback_data="catalog_settings_menu")])
     
     keyboard.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_main")])
     
@@ -91,7 +83,7 @@ def get_afs_compare_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="➕ Добавить новые", callback_data="afs_add_new")],
         [InlineKeyboardButton(text="🔄 Обновить описания", callback_data="afs_update_descriptions")],
         [InlineKeyboardButton(text="📥 Скачать результат", callback_data="afs_download_merged")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="catalog_settings")]
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="catalog_settings_menu")]
     ])
 
 
@@ -100,7 +92,7 @@ def get_afs_catalog_load_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="➕ Дополнить существующий", callback_data="afs_merge_common")],
         [InlineKeyboardButton(text="🔄 Заменить существующий", callback_data="afs_replace_common")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="catalog_settings")]
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="catalog_settings_menu")]
     ])
 
 
@@ -114,7 +106,7 @@ def get_district_keyboard() -> InlineKeyboardMarkup:
     if remaining_districts:
         keyboard.append([InlineKeyboardButton(text="📋 Ещё районы", callback_data="show_more_districts")])
     
-    keyboard.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_main")])
+    keyboard.append([InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_settings_main")])
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
@@ -132,13 +124,13 @@ def get_delete_district_keyboard(districts) -> InlineKeyboardMarkup:
     if not districts:
         return InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📭 Нет районов для удаления", callback_data="no_op")],
-            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_main")]
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_settings_main")]
         ])
     
     keyboard = []
     for district in districts:
         keyboard.append([InlineKeyboardButton(text=f"🗑️ {district} район", callback_data=f"delete_district_confirm_{district}")])
-    keyboard.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_main")])
+    keyboard.append([InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_settings_main")])
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
@@ -147,7 +139,7 @@ def get_confirm_delete_district_keyboard(district: str, count: int) -> InlineKey
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"✅ Да, удалить {district} район ({count} НП)", callback_data=f"confirm_delete_district_{district}")],
         [InlineKeyboardButton(text="❌ Нет, отмена", callback_data="delete_district_start")],
-        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_main")]
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_settings_main")]
     ])
 
 
@@ -155,8 +147,8 @@ def get_confirm_clear_all_keyboard(total: int) -> InlineKeyboardMarkup:
     """Клавиатура подтверждения очистки всего каталога НП"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"⚠️ ДА, УДАЛИТЬ ВСЕ {total} ЗАПИСЕЙ", callback_data="confirm_clear_all")],
-        [InlineKeyboardButton(text="❌ Нет, отмена", callback_data="np_settings")],
-        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_main")]
+        [InlineKeyboardButton(text="❌ Нет, отмена", callback_data="np_settings_menu")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_settings_main")]
     ])
 
 
@@ -257,14 +249,14 @@ def photo_details_keyboard() -> InlineKeyboardMarkup:
 def process_kml_again_keyboard() -> InlineKeyboardMarkup:
     """Клавиатура для повторной обработки KML"""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔄 Обработать другой KML", callback_data="process_kml_again")]
+        [InlineKeyboardButton(text="🔄 Обработать другой KML", callback_data="process_kml_menu")]
     ])
 
 
 def stats_back_keyboard() -> InlineKeyboardMarkup:
     """Клавиатура возврата из статистики НП"""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="np_settings")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="np_settings_menu")],
         [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_main")]
     ])
 
@@ -273,4 +265,12 @@ def loading_in_progress_keyboard() -> InlineKeyboardMarkup:
     """Клавиатура для отмены загрузки"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⏹️ Остановить загрузку", callback_data="cancel_download")]
+    ])
+
+
+def get_status_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура для статуса бота"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 Обновить статус", callback_data="check_bot_status")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_settings_main")]
     ])
