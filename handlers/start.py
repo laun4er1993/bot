@@ -26,6 +26,10 @@ def register_start_handlers(dp):
         )
         await message.answer(welcome_text, parse_mode="HTML", reply_markup=get_main_keyboard())
     
+    @dp.message(F.text == "/start")
+    async def cmd_start_button(message: types.Message):
+        await cmd_start(message)
+    
     @dp.message(F.text == "📖 ИНСТРУКЦИЯ")
     async def menu_instruction(message: types.Message):
         instruction_text = (
@@ -43,7 +47,7 @@ def register_start_handlers(dp):
             "• Загрузите KML файл с каталогом снимков\n"
             "• Бот найдет населенные пункты в каждом кадре\n"
             "• Создаст подробный TXT отчет со статистикой\n"
-            "• В отчете будут описания снимков и список НП по каждому кадру\n\n"
+            "• В отчете будут полные описания снимков и список НП по каждому кадру\n\n"
             "⚙️ <b>НАСТРОЙКИ</b>\n"
             "• Добавление НП вручную\n"
             "• Загрузка каталога из TXT файла\n"
@@ -73,3 +77,6 @@ def register_start_handlers(dp):
             "Выберите действие:",
             reply_markup=locus_menu_keyboard()
         )
+    
+    # Экспортируем cmd_start для использования в других модулях
+    return cmd_start
