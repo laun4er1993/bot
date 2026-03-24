@@ -38,7 +38,7 @@ class AFSCatalog:
                     if len(parts) >= 2:
                         self.catalog.append({
                             'frame': parts[0],
-                            'description': parts[1] if len(parts) > 1 else ''
+                            'description': parts[1] if len(parts) > 1 and parts[1] != 'None' else ''
                         })
             
             logger.info(f"✅ Загружено {len(self.catalog)} снимков в каталог АФС")
@@ -55,12 +55,18 @@ class AFSCatalog:
     
     def _save(self):
         """Сохраняет каталог в файл"""
-        with open(AFS_CATALOG_FILE, 'w', encoding='utf-8') as f:
-            f.write("Номер_снимка|Описание\n")
-            for item in self.catalog:
-                # Экранируем символ | в описании
-                description = item['description'].replace('|', '\\|')
-                f.write(f"{item['frame']}|{description}\n")
+        try:
+            with open(AFS_CATALOG_FILE, 'w', encoding='utf-8') as f:
+                f.write("Номер_снимка|Описание\n")
+                for item in self.catalog:
+                    description = item.get('description', '')
+                    if description is None:
+                        description = ''
+                    description = str(description).replace('|', '\\|').replace('\n', ' ')
+                    f.write(f"{item['frame']}|{description}\n")
+            logger.debug(f"✅ Каталог АФС сохранен, записей: {len(self.catalog)}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка сохранения каталога АФС: {e}")
     
     def create_from_kml_results(self, results: List[Dict]) -> Dict:
         """Создает каталог АФС из результатов обработки KML"""
@@ -69,8 +75,13 @@ class AFSCatalog:
         existing_frames = {item['frame'] for item in self.catalog}
         
         for result in results:
-            frame = result['photo_num']
+            frame = result.get('photo_num', '')
             description = result.get('description', '')
+            if description is None:
+                description = ''
+            
+            if not frame:
+                continue
             
             if frame in existing_frames:
                 stats['duplicates'] += 1
@@ -95,11 +106,16 @@ class AFSCatalog:
         existing = {item['frame']: item for item in self.catalog}
         
         for result in results:
-            frame = result['photo_num']
+            frame = result.get('photo_num', '')
             description = result.get('description', '')
+            if description is None:
+                description = ''
+            
+            if not frame:
+                continue
             
             if frame in existing:
-                if existing[frame]['description'] != description and description:
+                if existing[frame].get('description', '') != description and description:
                     existing[frame]['description'] = description
                     stats['updated'] += 1
                 else:
@@ -122,10 +138,16 @@ class AFSCatalog:
         self.catalog = []
         
         for result in results:
-            self.catalog.append({
-                'frame': result['photo_num'],
-                'description': result.get('description', '')
-            })
+            frame = result.get('photo_num', '')
+            description = result.get('description', '')
+            if description is None:
+                description = ''
+            
+            if frame:
+                self.catalog.append({
+                    'frame': frame,
+                    'description': description
+                })
         
         stats = {
             'added': len(self.catalog),
@@ -144,14 +166,16 @@ class AFSCatalog:
         existing = {item['frame']: item for item in self.catalog}
         
         for item in new_catalog:
-            frame = item.get('frame')
+            frame = item.get('frame', '')
             description = item.get('description', '')
+            if description is None:
+                description = ''
             
             if not frame:
                 continue
             
             if frame in existing:
-                if existing[frame]['description'] != description and description:
+                if existing[frame].get('description', '') != description and description:
                     existing[frame]['description'] = description
                     stats['updated'] += 1
                 else:
@@ -188,12 +212,15 @@ class AFSCatalog:
                 diff['missing'].append(frame)
         
         for frame in current:
-            if frame in other and current[frame]['description'] != other[frame]['description']:
-                diff['different'].append({
-                    'frame': frame,
-                    'current': current[frame]['description'][:100],
-                    'other': other[frame]['description'][:100]
-                })
+            if frame in other:
+                current_desc = current[frame].get('description', '') or ''
+                other_desc = other[frame].get('description', '') or ''
+                if current_desc != other_desc:
+                    diff['different'].append({
+                        'frame': frame,
+                        'current': current_desc[:100],
+                        'other': other_desc[:100]
+                    })
         
         return diff
     
@@ -217,9 +244,9 @@ class AFSCatalog:
         
         for i, item in enumerate(items, start + 1):
             text += f"{i}. {item['frame']}"
-            if with_descriptions and item['description']:
-                desc_preview = item['description'][:100].replace('\n', ' ')
-                if len(item['description']) > 100:
+            if with_descriptions and item.get('description'):
+                desc_preview = str(item['description'])[:100].replace('\n', ' ')
+                if len(str(item['description'])) > 100:
                     desc_preview += "..."
                 text += f"\n   📝 {desc_preview}"
             text += "\n"
@@ -236,24 +263,28 @@ class AFSCatalog:
         os.makedirs(EXPORT_DIR, exist_ok=True)
         file_path = os.path.join(EXPORT_DIR, filename)
         
-        with open(file_path, 'w', encoding='utf-8') as f:
-            f.write("=" * 80 + "\n")
-            f.write("КАТАЛОГ АЭРОФОТОСНИМКОВ (АФС)\n")
-            f.write("=" * 80 + "\n")
-            f.write(f"Дата создания: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write(f"Всего снимков: {len(self.catalog)}\n")
-            f.write("=" * 80 + "\n\n")
-            
-            for i, item in enumerate(self.catalog, 1):
-                f.write(f"{i}. {item['frame']}\n")
-                if item['description']:
-                    f.write(f"\n   Описание:\n")
-                    f.write(f"   {'-' * 76}\n")
-                    desc_lines = item['description'].split('\n')
-                    for line in desc_lines:
-                        f.write(f"   {line}\n")
-                    f.write(f"   {'-' * 76}\n")
-                f.write("\n")
+        try:
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write("=" * 80 + "\n")
+                f.write("КАТАЛОГ АЭРОФОТОСНИМКОВ (АФС)\n")
+                f.write("=" * 80 + "\n")
+                f.write(f"Дата создания: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"Всего снимков: {len(self.catalog)}\n")
+                f.write("=" * 80 + "\n\n")
+                
+                for i, item in enumerate(self.catalog, 1):
+                    f.write(f"{i}. {item['frame']}\n")
+                    if item.get('description'):
+                        f.write(f"\n   Описание:\n")
+                        f.write(f"   {'-' * 76}\n")
+                        desc_lines = str(item['description']).split('\n')
+                        for line in desc_lines:
+                            f.write(f"   {line}\n")
+                        f.write(f"   {'-' * 76}\n")
+                    f.write("\n")
+        except Exception as e:
+            logger.error(f"Ошибка экспорта каталога: {e}")
+            return None
         
         return file_path
     
@@ -271,7 +302,7 @@ class AFSCatalog:
     def get_statistics(self) -> Dict:
         """Возвращает статистику каталога"""
         total = len(self.catalog)
-        with_description = sum(1 for item in self.catalog if item['description'])
+        with_description = sum(1 for item in self.catalog if item.get('description'))
         
         return {
             'total': total,
