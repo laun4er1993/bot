@@ -7,3 +7,4 @@ class SearchStates(StatesGroup):
     waiting_for_txt_upload = State()
     waiting_for_district_select = State()
     waiting_for_add_village = State()
+    downloading_in_progress = State()  # состояние для отслеживания загрузки
