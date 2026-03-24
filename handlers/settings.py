@@ -9,28 +9,70 @@ from aiogram.types import FSInputFile
 
 from states.states import SearchStates
 from keyboards.inline import (
-    get_np_settings_keyboard, get_district_keyboard, get_more_districts_keyboard,
-    get_delete_district_keyboard, get_confirm_delete_district_keyboard,
-    get_confirm_clear_all_keyboard, get_merge_keyboard, back_keyboard,
-    loading_in_progress_keyboard, stats_back_keyboard
+    get_settings_main_keyboard, get_np_settings_keyboard, get_catalog_settings_keyboard,
+    get_district_keyboard, get_more_districts_keyboard, get_delete_district_keyboard,
+    get_confirm_delete_district_keyboard, get_confirm_clear_all_keyboard,
+    get_merge_keyboard, back_keyboard, loading_in_progress_keyboard,
+    stats_back_keyboard, get_status_keyboard
 )
 from utils.helpers import safe_edit_text, safe_answer_callback
 from config import logger, TEMP_DIR
 from api_sources import APISourceManager, AVAILABLE_DISTRICTS
+from services.afs_catalog import AFSCatalog
 
-# Флаг для отслеживания активной загрузки
+# Глобальные переменные
 active_download = False
 active_download_user_id = None
+bot_enabled = True
+afs_catalog = AFSCatalog()
 
 
 def register_settings_handlers(dp, village_db):
-    global active_download, active_download_user_id
+    global active_download, active_download_user_id, bot_enabled
     
-    @dp.message(F.text == "⚙️ ЗАГРУЗКА НП")
-    async def menu_np_settings(message: types.Message):
+    @dp.message(F.text == "⚙️ НАСТРОЙКА")
+    async def menu_settings_main(message: types.Message):
+        await message.answer(
+            "⚙️ <b>Центр управления ботом</b>\n\n"
+            "Выберите действие:",
+            parse_mode="HTML",
+            reply_markup=get_settings_main_keyboard()
+        )
+    
+    @dp.callback_query(lambda c: c.data == "back_to_settings_main")
+    async def back_to_settings_main(callback: types.CallbackQuery):
+        await safe_edit_text(
+            callback.message,
+            "⚙️ <b>Центр управления ботом</b>\n\n"
+            "Выберите действие:",
+            parse_mode="HTML",
+            reply_markup=get_settings_main_keyboard()
+        )
+        await safe_answer_callback(callback)
+    
+    @dp.callback_query(lambda c: c.data == "process_kml_menu")
+    async def process_kml_menu(callback: types.CallbackQuery, state: FSMContext):
+        """Меню обработки KML"""
+        await safe_edit_text(
+            callback.message,
+            "🔄 <b>Обработка KML файлов</b>\n\n"
+            "Загрузите KML файл с каталогом снимков.\n"
+            "После загрузки я:\n"
+            "• Найду населенные пункты в каждом кадре\n"
+            "• Добавлю полные описания снимков из базы данных\n"
+            "• Создам подробный TXT отчет со статистикой\n\n"
+            "📌 <i>Файл должен содержать Placemark с названиями Frame-XXX</i>",
+            parse_mode="HTML"
+        )
+        await state.set_state(SearchStates.waiting_for_kml)
+        await safe_answer_callback(callback)
+    
+    @dp.callback_query(lambda c: c.data == "np_settings_menu")
+    async def np_settings_menu(callback: types.CallbackQuery):
+        """Меню настроек населенных пунктов"""
         stats = village_db.get_stats()
         text = (
-            f"⚙️ <b>Управление каталогом населенных пунктов</b>\n\n"
+            f"📥 <b>Управление каталогом населенных пунктов</b>\n\n"
             f"📊 <b>Статистика каталога:</b>\n"
             f"• Всего записей: {stats['total']}\n"
             f"• С координатами: {stats['with_coords']}\n"
@@ -38,8 +80,6 @@ def register_settings_handlers(dp, village_db):
         )
         if stats['last_update']:
             text += f"• Обновлено: {stats['last_update']}\n"
-        if stats['source_file']:
-            text += f"• Источник: {stats['source_file']}\n"
         
         districts = village_db.get_districts()
         if districts:
@@ -48,7 +88,93 @@ def register_settings_handlers(dp, village_db):
                 count = len(village_db.get_villages_by_district(d))
                 text += f"• {d} район: {count} НП\n"
         
-        await message.answer(text, parse_mode="HTML", reply_markup=get_np_settings_keyboard())
+        await safe_edit_text(
+            callback.message,
+            text,
+            parse_mode="HTML",
+            reply_markup=get_np_settings_keyboard()
+        )
+        await safe_answer_callback(callback)
+    
+    @dp.callback_query(lambda c: c.data == "catalog_settings_menu")
+    async def catalog_settings_menu(callback: types.CallbackQuery):
+        """Меню настроек каталога АФС"""
+        stats = afs_catalog.get_statistics()
+        text = (
+            f"📁 <b>Управление каталогом АФС</b>\n\n"
+            f"📊 <b>Статистика каталога:</b>\n"
+            f"• Всего снимков: {stats['total']}\n"
+            f"• С описаниями: {stats['with_description']}\n"
+            f"• Без описаний: {stats['without_description']}\n"
+        )
+        
+        await safe_edit_text(
+            callback.message,
+            text,
+            parse_mode="HTML",
+            reply_markup=get_catalog_settings_keyboard()
+        )
+        await safe_answer_callback(callback)
+    
+    @dp.callback_query(lambda c: c.data == "check_bot_status")
+    async def check_bot_status(callback: types.CallbackQuery):
+        """Проверка работоспособности бота"""
+        # Проверка населенных пунктов
+        np_stats = village_db.get_stats()
+        np_status = "✅" if np_stats['total'] > 0 else "❌"
+        np_text = f"{np_status} Населенные пункты: {np_stats['total']} записей"
+        
+        # Проверка АФС
+        afs_stats = afs_catalog.get_statistics()
+        afs_status = "✅" if afs_stats['total'] > 0 else "❌"
+        afs_text = f"{afs_status} Каталог АФС: {afs_stats['total']} снимков"
+        
+        # Проверка состояния бота
+        bot_status = "✅ Включен" if bot_enabled else "❌ Выключен"
+        
+        # Проверка наличия файлов
+        files_status = []
+        data_dir = "data"
+        if os.path.exists(data_dir):
+            files = os.listdir(data_dir)
+            files_status.append(f"📁 data/ — {len(files)} файлов")
+        
+        text = (
+            f"🔧 <b>ПРОВЕРКА РАБОТОСПОСОБНОСТИ БОТА</b>\n\n"
+            f"📊 <b>Статус данных:</b>\n"
+            f"{np_text}\n"
+            f"{afs_text}\n\n"
+            f"🤖 <b>Статус бота:</b>\n"
+            f"{bot_status}\n\n"
+            f"📂 <b>Файловая система:</b>\n"
+            + "\n".join(files_status) + "\n\n"
+            f"🔄 Для обновления статуса нажмите кнопку ниже."
+        )
+        
+        await safe_edit_text(
+            callback.message,
+            text,
+            parse_mode="HTML",
+            reply_markup=get_status_keyboard()
+        )
+        await safe_answer_callback(callback)
+    
+    @dp.callback_query(lambda c: c.data == "enable_bot")
+    async def enable_bot(callback: types.CallbackQuery):
+        """Включение/выключение бота"""
+        global bot_enabled
+        bot_enabled = not bot_enabled
+        
+        status_text = "ВКЛЮЧЕН" if bot_enabled else "ВЫКЛЮЧЕН"
+        await safe_edit_text(
+            callback.message,
+            f"🤖 <b>Статус бота изменен</b>\n\n"
+            f"Бот теперь {status_text}.\n\n"
+            f"{'✅ Все функции доступны.' if bot_enabled else '⚠️ Бот не будет отвечать на запросы.'}",
+            parse_mode="HTML",
+            reply_markup=get_settings_main_keyboard()
+        )
+        await safe_answer_callback(callback)
     
     @dp.callback_query(lambda c: c.data == "add_village_manual")
     async def add_village_manual_start(callback: types.CallbackQuery, state: FSMContext):
@@ -615,7 +741,7 @@ def register_settings_handlers(dp, village_db):
     async def back_to_np_settings(callback: types.CallbackQuery):
         stats = village_db.get_stats()
         text = (
-            f"⚙️ <b>Управление каталогом населенных пунктов</b>\n\n"
+            f"📥 <b>Управление каталогом населенных пунктов</b>\n\n"
             f"📊 <b>Статистика каталога:</b>\n"
             f"• Всего записей: {stats['total']}\n"
             f"• С координатами: {stats['with_coords']}\n"
@@ -623,8 +749,6 @@ def register_settings_handlers(dp, village_db):
         )
         if stats['last_update']:
             text += f"• Обновлено: {stats['last_update']}\n"
-        if stats['source_file']:
-            text += f"• Источник: {stats['source_file']}\n"
         
         districts = village_db.get_districts()
         if districts:
