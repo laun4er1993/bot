@@ -12,7 +12,7 @@ from keyboards.inline import (
     locus_instruction_keyboard, locus_download_keyboard,
     back_to_locus_keyboard, back_keyboard, photos_keyboard,
     photo_details_keyboard, get_catalog_settings_keyboard,
-    get_afs_catalog_keyboard, get_afs_settings_keyboard, get_settings_main_keyboard
+    get_afs_catalog_keyboard
 )
 from utils.helpers import safe_edit_text, safe_answer_callback, safe_delete_message
 from config import logger
