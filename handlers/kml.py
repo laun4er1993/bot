@@ -370,7 +370,7 @@ def register_kml_handlers(dp, kml_processor, village_db):
         try:
             filepath = afs_catalog.export_to_txt()
             
-            if os.path.exists(filepath):
+            if filepath and os.path.exists(filepath):
                 with open(filepath, 'rb') as f:
                     await callback.message.answer_document(
                         BufferedInputFile(f.read(), filename=os.path.basename(filepath)),
@@ -382,7 +382,7 @@ def register_kml_handlers(dp, kml_processor, village_db):
                 await callback.message.answer("❌ Ошибка при создании файла.")
         except Exception as e:
             logger.error(f"Ошибка: {e}")
-            await callback.message.answer("❌ Ошибка при создании файла.")
+            await callback.message.answer(f"❌ Ошибка при создании файла: {e}")
         
         await callback.answer()
     
@@ -416,8 +416,8 @@ def register_kml_handlers(dp, kml_processor, village_db):
         kml_catalog = []
         for result in last_kml_results['results']:
             kml_catalog.append({
-                'frame': result['photo_num'],
-                'description': result.get('description', '')
+                'frame': result.get('photo_num', ''),
+                'description': result.get('description', '') or ''
             })
         
         # Сравниваем
@@ -522,7 +522,7 @@ def register_kml_handlers(dp, kml_processor, village_db):
         try:
             filepath = afs_catalog.export_to_txt(f"afs_merged_{time.strftime('%Y%m%d_%H%M%S')}.txt")
             
-            if os.path.exists(filepath):
+            if filepath and os.path.exists(filepath):
                 with open(filepath, 'rb') as f:
                     await callback.message.answer_document(
                         BufferedInputFile(f.read(), filename=os.path.basename(filepath)),
@@ -534,7 +534,7 @@ def register_kml_handlers(dp, kml_processor, village_db):
                 await callback.message.answer("❌ Ошибка при создании файла.")
         except Exception as e:
             logger.error(f"Ошибка: {e}")
-            await callback.message.answer("❌ Ошибка при создании файла.")
+            await callback.message.answer(f"❌ Ошибка при создании файла: {e}")
         
         await callback.answer()
     
@@ -652,6 +652,8 @@ def register_kml_handlers(dp, kml_processor, village_db):
                     parts = line.split('|', 1)
                     frame = parts[0].strip()
                     description = parts[1].strip() if len(parts) > 1 else ''
+                    if description == 'None':
+                        description = ''
                     new_catalog.append({'frame': frame, 'description': description})
             
             if not new_catalog:
