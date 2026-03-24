@@ -20,6 +20,8 @@ MAX_RETRIES = 7
 MIN_REQUEST_INTERVAL = 3.0
 MAX_CONCURRENT_DIC = 2
 KML_MARGIN_M = 100.0
+KML_USE_INTERSECTS = True  # Использовать intersects вместо contains
+KML_CACHE_POLYGONS = True  # Кэшировать полигоны
 
 # Настройки логирования
 logging.basicConfig(
