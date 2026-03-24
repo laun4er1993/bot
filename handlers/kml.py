@@ -1,14 +1,16 @@
 # handlers/kml.py
 import os
+import time
 import tempfile
 from aiogram import types, F
 from aiogram.fsm.context import FSMContext
-from aiogram.types import FSInputFile
+from aiogram.types import FSInputFile, BufferedInputFile
 
 from states.states import SearchStates
 from keyboards.inline import (
     process_kml_again_keyboard, back_keyboard, get_kml_result_keyboard,
-    get_afs_catalog_keyboard, get_afs_compare_keyboard, get_afs_catalog_load_keyboard
+    get_afs_catalog_keyboard, get_afs_compare_keyboard, get_afs_catalog_load_keyboard,
+    get_afs_settings_keyboard
 )
 from utils.helpers import safe_delete_message, safe_edit_text, safe_answer_callback
 from config import logger, KML_MARGIN_M, KML_USE_INTERSECTS
@@ -82,6 +84,7 @@ def register_kml_handlers(dp, kml_processor, village_db):
                 # Сохраняем результаты для дальнейшего использования
                 last_kml_results = data
                 
+                # Создаем отчет
                 report_path = kml_processor.generate_report(data, original_filename)
                 
                 result_text = (
@@ -96,9 +99,17 @@ def register_kml_handlers(dp, kml_processor, village_db):
                 if stats['frames_with_np'] > 0:
                     result_text += f"• Среднее НП на кадр: {stats['avg_np_per_frame']}\n\n"
                     
-                    if data['top_frames']:
-                        result_text += f"🏆 <b>Топ-3 снимка по количеству НП:</b>\n"
-                        for frame in data['top_frames'][:3]:
+                    # Убираем дубликаты в топе (по frame)
+                    seen_frames = set()
+                    unique_top_frames = []
+                    for frame in data['top_frames'][:4]:  # Берем 4 для топа
+                        if frame['frame'] not in seen_frames:
+                            seen_frames.add(frame['frame'])
+                            unique_top_frames.append(frame)
+                    
+                    if unique_top_frames:
+                        result_text += f"🏆 <b>Топ-{len(unique_top_frames)} снимков по количеству НП:</b>\n"
+                        for frame in unique_top_frames:
                             result_text += f"• {frame['frame']}: {frame['count']} НП\n"
                         result_text += "\n"
                     
@@ -114,13 +125,21 @@ def register_kml_handlers(dp, kml_processor, village_db):
                 
                 await message.answer(result_text, parse_mode="HTML")
                 
-                await message.answer_document(
-                    FSInputFile(report_path, filename=os.path.basename(report_path)),
-                    caption="📄 <b>Детальный отчет по обработке KML</b>\n\nФайл содержит:\n• Общую статистику\n• Полные описания снимков\n• Список НП по каждому снимку\n• Статистику по районам\n• Параметры обработки",
-                    parse_mode="HTML"
-                )
-                
-                os.unlink(report_path)
+                # Отправляем отчет
+                try:
+                    if os.path.exists(report_path):
+                        with open(report_path, 'rb') as f:
+                            await message.answer_document(
+                                BufferedInputFile(f.read(), filename=os.path.basename(report_path)),
+                                caption="📄 <b>Детальный отчет по обработке KML</b>\n\nФайл содержит:\n• Общую статистику\n• Полные описания снимков\n• Список НП по каждому снимку\n• Статистику по районам\n• Параметры обработки",
+                                parse_mode="HTML"
+                            )
+                        os.unlink(report_path)
+                    else:
+                        await message.answer("❌ Не удалось создать отчет.")
+                except Exception as e:
+                    logger.error(f"Ошибка отправки отчета: {e}")
+                    await message.answer("❌ Не удалось отправить отчет.")
                 
                 # Показываем кнопки для работы с каталогом АФС
                 await message.answer(
@@ -172,7 +191,7 @@ def register_kml_handlers(dp, kml_processor, village_db):
             f"• Всего снимков в каталоге: {stats['total']}\n\n"
             f"Теперь вы можете просмотреть или скачать каталог.",
             parse_mode="HTML",
-            reply_markup=get_afs_catalog_keyboard(has_catalog=not afs_catalog.is_empty())
+            reply_markup=get_afs_settings_keyboard(has_catalog=not afs_catalog.is_empty())
         )
         await callback.answer()
     
@@ -203,7 +222,7 @@ def register_kml_handlers(dp, kml_processor, village_db):
             f"• Всего снимков в каталоге: {stats['total']}\n\n"
             f"Теперь вы можете просмотреть или скачать каталог.",
             parse_mode="HTML",
-            reply_markup=get_afs_catalog_keyboard(has_catalog=not afs_catalog.is_empty())
+            reply_markup=get_afs_settings_keyboard(has_catalog=not afs_catalog.is_empty())
         )
         await callback.answer()
     
@@ -233,7 +252,7 @@ def register_kml_handlers(dp, kml_processor, village_db):
             f"• Всего снимков в каталоге: {stats['total']}\n\n"
             f"Теперь вы можете просмотреть или скачать каталог.",
             parse_mode="HTML",
-            reply_markup=get_afs_catalog_keyboard(has_catalog=not afs_catalog.is_empty())
+            reply_markup=get_afs_settings_keyboard(has_catalog=not afs_catalog.is_empty())
         )
         await callback.answer()
     
@@ -296,6 +315,27 @@ def register_kml_handlers(dp, kml_processor, village_db):
         )
         await callback.answer()
     
+    @dp.callback_query(lambda c: c.data == "afs_settings")
+    async def afs_settings_handler(callback: types.CallbackQuery):
+        """Меню настроек каталога АФС"""
+        stats = afs_catalog.get_statistics()
+        
+        text = (
+            f"⚙️ <b>Настройки каталога АФС</b>\n\n"
+            f"📊 <b>Статистика каталога:</b>\n"
+            f"• Всего снимков: {stats['total']}\n"
+            f"• С описаниями: {stats['with_description']}\n"
+            f"• Без описаний: {stats['without_description']}\n"
+        )
+        
+        await safe_edit_text(
+            callback.message,
+            text,
+            parse_mode="HTML",
+            reply_markup=get_afs_settings_keyboard(has_catalog=not afs_catalog.is_empty())
+        )
+        await callback.answer()
+    
     @dp.callback_query(lambda c: c.data == "afs_stats")
     async def afs_stats_handler(callback: types.CallbackQuery):
         stats = afs_catalog.get_statistics()
@@ -316,7 +356,7 @@ def register_kml_handlers(dp, kml_processor, village_db):
             callback.message,
             text,
             parse_mode="HTML",
-            reply_markup=get_afs_catalog_keyboard(has_catalog=True)
+            reply_markup=get_afs_settings_keyboard(has_catalog=True)
         )
         await callback.answer()
     
@@ -330,12 +370,16 @@ def register_kml_handlers(dp, kml_processor, village_db):
         try:
             filepath = afs_catalog.export_to_txt()
             
-            await callback.message.answer_document(
-                FSInputFile(filepath, filename=os.path.basename(filepath)),
-                caption=f"📁 <b>Каталог АФС</b>\nВсего: {len(afs_catalog.catalog)} снимков",
-                parse_mode="HTML"
-            )
-            os.unlink(filepath)
+            if os.path.exists(filepath):
+                with open(filepath, 'rb') as f:
+                    await callback.message.answer_document(
+                        BufferedInputFile(f.read(), filename=os.path.basename(filepath)),
+                        caption=f"📁 <b>Каталог АФС</b>\nВсего: {len(afs_catalog.catalog)} снимков",
+                        parse_mode="HTML"
+                    )
+                os.unlink(filepath)
+            else:
+                await callback.message.answer("❌ Ошибка при создании файла.")
         except Exception as e:
             logger.error(f"Ошибка: {e}")
             await callback.message.answer("❌ Ошибка при создании файла.")
@@ -351,7 +395,7 @@ def register_kml_handlers(dp, kml_processor, village_db):
             f"🗑️ <b>Каталог АФС очищен!</b>\n\n"
             f"Удалено снимков: {removed}",
             parse_mode="HTML",
-            reply_markup=get_afs_catalog_keyboard(has_catalog=False)
+            reply_markup=get_afs_settings_keyboard(has_catalog=False)
         )
         await callback.answer()
     
@@ -437,7 +481,7 @@ def register_kml_handlers(dp, kml_processor, village_db):
             f"• Добавлено: {len(new_items)}\n"
             f"• Всего снимков в каталоге: {stats['total']}",
             parse_mode="HTML",
-            reply_markup=get_afs_catalog_keyboard(has_catalog=True)
+            reply_markup=get_afs_settings_keyboard(has_catalog=True)
         )
         await callback.answer()
     
@@ -464,7 +508,7 @@ def register_kml_handlers(dp, kml_processor, village_db):
             f"• Добавлено новых: {stats['added']}\n"
             f"• Всего снимков в каталоге: {stats['total']}",
             parse_mode="HTML",
-            reply_markup=get_afs_catalog_keyboard(has_catalog=True)
+            reply_markup=get_afs_settings_keyboard(has_catalog=True)
         )
         await callback.answer()
     
@@ -478,12 +522,16 @@ def register_kml_handlers(dp, kml_processor, village_db):
         try:
             filepath = afs_catalog.export_to_txt(f"afs_merged_{time.strftime('%Y%m%d_%H%M%S')}.txt")
             
-            await callback.message.answer_document(
-                FSInputFile(filepath, filename=os.path.basename(filepath)),
-                caption=f"📁 <b>Объединенный каталог АФС</b>\nВсего: {len(afs_catalog.catalog)} снимков",
-                parse_mode="HTML"
-            )
-            os.unlink(filepath)
+            if os.path.exists(filepath):
+                with open(filepath, 'rb') as f:
+                    await callback.message.answer_document(
+                        BufferedInputFile(f.read(), filename=os.path.basename(filepath)),
+                        caption=f"📁 <b>Объединенный каталог АФС</b>\nВсего: {len(afs_catalog.catalog)} снимков",
+                        parse_mode="HTML"
+                    )
+                os.unlink(filepath)
+            else:
+                await callback.message.answer("❌ Ошибка при создании файла.")
         except Exception as e:
             logger.error(f"Ошибка: {e}")
             await callback.message.answer("❌ Ошибка при создании файла.")
@@ -518,7 +566,7 @@ def register_kml_handlers(dp, kml_processor, village_db):
             "Отправьте TXT файл:",
             parse_mode="HTML"
         )
-        await state.set_state(SearchStates.waiting_for_txt_upload)
+        await state.set_state(SearchStates.waiting_for_afs_upload)
         await callback.answer()
     
     @dp.callback_query(lambda c: c.data == "afs_replace_common")
@@ -533,7 +581,7 @@ def register_kml_handlers(dp, kml_processor, village_db):
             "Отправьте TXT файл:",
             parse_mode="HTML"
         )
-        await state.set_state(SearchStates.waiting_for_txt_upload)
+        await state.set_state(SearchStates.waiting_for_afs_upload)
         await callback.answer()
     
     @dp.callback_query(lambda c: c.data == "process_kml_again")
@@ -570,3 +618,85 @@ def register_kml_handlers(dp, kml_processor, village_db):
         )
         await state.set_state(SearchStates.waiting_for_kml)
         await callback.answer()
+    
+    # Обработчик загрузки TXT для каталога АФС
+    @dp.message(SearchStates.waiting_for_afs_upload, F.document)
+    async def process_afs_txt_upload(message: types.Message, state: FSMContext):
+        if not message.document.file_name.endswith('.txt'):
+            await message.answer("❌ Отправьте TXT файл (с расширением .txt)")
+            await state.clear()
+            return
+        
+        await message.answer("⏳ Загрузка и обработка файла...")
+        
+        try:
+            file_info = await message.bot.get_file(message.document.file_id)
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.txt') as tmp:
+                await message.bot.download_file(file_info.file_path, tmp)
+                tmp_path = tmp.name
+            
+            with open(tmp_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            os.unlink(tmp_path)
+            
+            # Парсим файл
+            lines = content.strip().split('\n')
+            new_catalog = []
+            
+            for line in lines:
+                line = line.strip()
+                if not line or line.startswith('=') or line.startswith('Номер'):
+                    continue
+                
+                if '|' in line:
+                    parts = line.split('|', 1)
+                    frame = parts[0].strip()
+                    description = parts[1].strip() if len(parts) > 1 else ''
+                    new_catalog.append({'frame': frame, 'description': description})
+            
+            if not new_catalog:
+                await message.answer("❌ В файле не найдено корректных записей")
+                await state.clear()
+                return
+            
+            data = await state.get_data()
+            action = data.get('afs_action', 'merge')
+            
+            if action == 'merge':
+                stats = afs_catalog.merge_with_catalog(new_catalog)
+                await message.answer(
+                    f"✅ <b>Каталог АФС дополнен!</b>\n\n"
+                    f"📊 <b>Результат:</b>\n"
+                    f"• Добавлено новых: {stats['added']}\n"
+                    f"• Обновлено описаний: {stats['updated']}\n"
+                    f"• Пропущено дубликатов: {stats['duplicates']}\n"
+                    f"• Всего снимков в каталоге: {stats['total']}",
+                    parse_mode="HTML",
+                    reply_markup=get_afs_settings_keyboard(has_catalog=True)
+                )
+            else:
+                # Заменяем каталог
+                old_count = len(afs_catalog.catalog)
+                afs_catalog.catalog = new_catalog
+                afs_catalog._save()
+                
+                await message.answer(
+                    f"✅ <b>Каталог АФС заменен!</b>\n\n"
+                    f"📊 <b>Результат:</b>\n"
+                    f"• Удалено старых: {old_count}\n"
+                    f"• Добавлено новых: {len(new_catalog)}\n"
+                    f"• Всего снимков в каталоге: {len(new_catalog)}",
+                    parse_mode="HTML",
+                    reply_markup=get_afs_settings_keyboard(has_catalog=True)
+                )
+            
+        except Exception as e:
+            logger.error(f"Ошибка: {e}")
+            await message.answer(f"❌ Ошибка при загрузке файла:\n{str(e)}")
+        
+        await state.clear()
+    
+    @dp.message(SearchStates.waiting_for_afs_upload)
+    async def process_afs_txt_invalid(message: types.Message, state: FSMContext):
+        await message.answer("❌ Отправьте TXT файл (с расширением .txt)")
+        await state.clear()
