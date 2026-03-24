@@ -15,6 +15,7 @@ from keyboards.inline import (
 )
 from utils.helpers import safe_edit_text, safe_answer_callback, safe_delete_message
 from config import logger, TEMP_DIR
+from api_sources import AVAILABLE_DISTRICTS
 
 
 def register_callbacks(dp, village_db, db):
@@ -165,7 +166,7 @@ def register_callbacks(dp, village_db, db):
             f"⚠️ <b>ОЧИСТКА ВСЕГО КАТАЛОГА</b>\n\n"
             f"В каталоге находится {total} населенных пунктов.\n\n"
             f"<b>Это действие НЕОБРАТИМО!</b>\n\n"
-            f"Вы уверены, что хотите удалить все данные?",
+            f"Вы уверены?",
             parse_mode="HTML",
             reply_markup=get_confirm_clear_all_keyboard(total)
         )
@@ -300,10 +301,63 @@ def register_callbacks(dp, village_db, db):
     
     @dp.callback_query(lambda c: c.data == "back_to_main")
     async def back_to_main(callback: types.CallbackQuery, state: FSMContext):
-        from handlers.start import cmd_start
+        from handlers.start import register_start_handlers
+        
         await state.clear()
         await safe_delete_message(callback.message)
-        await cmd_start(callback.message)
+        
+        # Создаем временный message для вызова cmd_start
+        class TempMessage:
+            def __init__(self, original_message):
+                self.chat = original_message.chat
+                self.from_user = original_message.from_user
+                self.answer = original_message.answer
+        
+        temp_msg = TempMessage(callback.message)
+        
+        # Получаем функцию cmd_start через регистратор
+        # Просто вызываем команду start через новый обработчик
+        from handlers.start import register_start_handlers
+        
+        # Создаем новое сообщение с командой /start
+        class MockMessage:
+            def __init__(self, chat, from_user):
+                self.chat = chat
+                self.from_user = from_user
+                self.text = "/start"
+            
+            async def answer(self, *args, **kwargs):
+                await callback.message.answer(*args, **kwargs)
+        
+        mock_msg = MockMessage(callback.message.chat, callback.from_user)
+        
+        # Вызываем обработчик команды start
+        from handlers.start import register_start_handlers
+        # Получаем функцию cmd_start через глобальную переменную
+        # Временно сохраняем cmd_start в глобальной переменной
+        if not hasattr(register_start_handlers, 'cmd_start'):
+            # Создаем простую функцию для отправки главного меню
+            async def show_main_menu(message):
+                welcome_text = (
+                    f"✈️ <b>Добро пожаловать, {message.from_user.full_name}!</b>\n\n"
+                    f"<b>🛩️ Бот для поиска аэрофотоснимков</b>\n\n"
+                    f"📌 <b>Основные возможности:</b>\n"
+                    f"• 🔍 <b>ПОИСК</b> — найдите снимки по названию деревни\n"
+                    f"• 📋 <b>СПИСОК ДЕРЕВЕНЬ</b> — все доступные населенные пункты\n"
+                    f"• 📖 <b>ИНСТРУКЦИЯ</b> — подробная помощь по боту\n"
+                    f"• 🗺️ <b>КАРТА РЖЕВ</b> — скачать карту для Locus Maps\n"
+                    f"• 🗺️ <b>LOCUS MAPS</b> — инструкция и скачивание приложения\n"
+                    f"• 🔄 <b>ОБРАБОТАТЬ KML</b> — загрузить каталог снимков, найти НП и создать отчет\n"
+                    f"• ⚙️ <b>НАСТРОЙКИ</b> — управление каталогом населенных пунктов\n\n"
+                    f"👇 <b>Выберите действие:</b>"
+                )
+                from keyboards.main import get_main_keyboard
+                await message.answer(welcome_text, parse_mode="HTML", reply_markup=get_main_keyboard())
+            
+            await show_main_menu(mock_msg)
+        else:
+            await register_start_handlers.cmd_start(mock_msg)
+        
         await safe_answer_callback(callback)
     
     @dp.callback_query(lambda c: c.data.startswith("photo_"))
@@ -369,7 +423,7 @@ def register_callbacks(dp, village_db, db):
         await callback.message.answer(
             "📤 <b>Загрузите KML файл</b>\n\n"
             "Отправьте мне KML файл с каталогом снимков.\n"
-            "После загрузки я найду населенные пункты в каждом кадре и создам подробный отчет.",
+            "После загрузки я найду населенные пункты в каждом кадре и создам подробный отчет с полными описаниями.",
             parse_mode="HTML"
         )
         await state.set_state(SearchStates.waiting_for_kml)
