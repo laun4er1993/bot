@@ -4,7 +4,7 @@ import time
 import tempfile
 from aiogram import types, F
 from aiogram.fsm.context import FSMContext
-from aiogram.types import FSInputFile, BufferedInputFile
+from aiogram.types import BufferedInputFile
 
 from states.states import SearchStates
 from keyboards.inline import (
