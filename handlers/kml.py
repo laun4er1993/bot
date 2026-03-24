@@ -1,6 +1,5 @@
 # handlers/kml.py
 import os
-import time
 import tempfile
 from aiogram import types, F
 from aiogram.fsm.context import FSMContext
@@ -9,21 +8,25 @@ from aiogram.types import FSInputFile
 from states.states import SearchStates
 from keyboards.inline import process_kml_again_keyboard, back_keyboard
 from utils.helpers import safe_delete_message
-from config import logger
+from config import logger, KML_MARGIN_M, KML_USE_INTERSECTS
 
 
 def register_kml_handlers(dp, kml_processor):
     
     @dp.message(F.text == "🔄 ОБРАБОТАТЬ KML")
     async def menu_process_kml(message: types.Message, state: FSMContext):
+        method_text = "пересечение (точки на границе)" if KML_USE_INTERSECTS else "строгое вхождение"
         await message.answer(
-            "📤 <b>Загрузите KML файл</b>\n\n"
-            "Отправьте мне KML файл с каталогом снимков.\n"
-            "После загрузки я:\n"
-            "• Найду населенные пункты в каждом кадре\n"
-            "• Добавлю описания снимков из базы данных\n"
-            "• Создам подробный TXT отчет со статистикой\n\n"
-            "📌 <i>Файл должен содержать Placemark с названиями Frame-XXX</i>",
+            f"📤 <b>Загрузите KML файл</b>\n\n"
+            f"Отправьте мне KML файл с каталогом снимков.\n"
+            f"После загрузки я:\n"
+            f"• Найду населенные пункты в каждом кадре\n"
+            f"• Добавлю полные описания снимков из базы данных\n"
+            f"• Создам подробный TXT отчет со статистикой\n\n"
+            f"📌 <b>Параметры обработки:</b>\n"
+            f"• Буфер: {KML_MARGIN_M} м\n"
+            f"• Метод проверки: {method_text}\n\n"
+            f"<i>Файл должен содержать Placemark с названиями Frame-XXX</i>",
             parse_mode="HTML"
         )
         await state.set_state(SearchStates.waiting_for_kml)
@@ -68,6 +71,9 @@ def register_kml_handlers(dp, kml_processor):
                         result_text += f"🏆 <b>Топ-3 снимка по количеству НП:</b>\n"
                         for frame in data['top_frames'][:3]:
                             result_text += f"• {frame['frame']}: {frame['count']} НП\n"
+                            if frame.get('description'):
+                                desc_preview = frame['description'][:100] if frame['description'] else ""
+                                result_text += f"  <i>{desc_preview}...</i>\n"
                         result_text += "\n"
                     
                     if data['district_stats']:
@@ -77,11 +83,14 @@ def register_kml_handlers(dp, kml_processor):
                             percent = (district['count'] / total * 100) if total > 0 else 0
                             result_text += f"• {district['district']} район: {district['count']} НП ({percent:.1f}%)\n"
                 
+                if stats.get('errors', 0) > 0:
+                    result_text += f"\n⚠️ <b>Ошибок при обработке:</b> {stats['errors']}\n"
+                
                 await message.answer(result_text, parse_mode="HTML")
                 
                 await message.answer_document(
                     FSInputFile(report_path, filename=os.path.basename(report_path)),
-                    caption="📄 <b>Детальный отчет по обработке KML</b>\n\nФайл содержит:\n• Общую статистику\n• Список НП по каждому снимку\n• Описания снимков\n• Статистику по районам",
+                    caption="📄 <b>Детальный отчет по обработке KML</b>\n\nФайл содержит:\n• Общую статистику\n• Полные описания снимков\n• Список НП по каждому снимку\n• Статистику по районам\n• Параметры обработки",
                     parse_mode="HTML"
                 )
                 
