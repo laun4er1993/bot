@@ -8,24 +8,26 @@ from aiogram.types import FSInputFile
 from states.states import SearchStates
 from keyboards.inline import (
     process_kml_again_keyboard, back_keyboard, get_kml_result_keyboard,
-    get_afs_catalog_keyboard
+    get_afs_catalog_keyboard, get_afs_compare_keyboard, get_afs_catalog_load_keyboard
 )
-from utils.helpers import safe_delete_message
+from utils.helpers import safe_delete_message, safe_edit_text, safe_answer_callback
 from config import logger, KML_MARGIN_M, KML_USE_INTERSECTS
 from services.afs_catalog import AFSCatalog
 
-# Глобальная переменная для хранения последних результатов KML
+# Глобальная переменная для хранения последних результатов KML и данных для сравнения
 last_kml_results = None
+last_kml_compare_data = None
 afs_catalog = AFSCatalog()
+current_afs_page = 1
 
 
-def register_kml_handlers(dp, kml_processor):
-    global last_kml_results
+def register_kml_handlers(dp, kml_processor, village_db):
+    global last_kml_results, last_kml_compare_data, current_afs_page
     
     @dp.message(F.text == "🔄 ОБРАБОТАТЬ KML")
     async def menu_process_kml(message: types.Message, state: FSMContext):
         # Проверяем, есть ли населенные пункты в каталоге
-        if not message.bot_data.get('village_db') or not message.bot_data['village_db'].villages:
+        if not village_db.villages:
             await message.answer(
                 "❌ <b>Невозможно обработать KML файл</b>\n\n"
                 "Каталог населенных пунктов пуст.\n\n"
@@ -174,21 +176,148 @@ def register_kml_handlers(dp, kml_processor):
         )
         await callback.answer()
     
+    @dp.callback_query(lambda c: c.data == "append_afs_catalog")
+    async def append_afs_catalog_handler(callback: types.CallbackQuery):
+        global last_kml_results
+        
+        if not last_kml_results or not last_kml_results.get('results'):
+            await callback.message.answer(
+                "❌ Нет данных для дополнения каталога АФС.\n"
+                "Сначала обработайте KML файл.",
+                reply_markup=back_keyboard()
+            )
+            await callback.answer()
+            return
+        
+        results = last_kml_results['results']
+        
+        # Дополняем каталог
+        stats = afs_catalog.add_from_kml_results(results)
+        
+        await callback.message.answer(
+            f"✅ <b>Каталог АФС дополнен!</b>\n\n"
+            f"📊 <b>Статистика:</b>\n"
+            f"• Добавлено новых снимков: {stats['added']}\n"
+            f"• Обновлено описаний: {stats['updated']}\n"
+            f"• Пропущено дубликатов: {stats['duplicates']}\n"
+            f"• Всего снимков в каталоге: {stats['total']}\n\n"
+            f"Теперь вы можете просмотреть или скачать каталог.",
+            parse_mode="HTML",
+            reply_markup=get_afs_catalog_keyboard(has_catalog=not afs_catalog.is_empty())
+        )
+        await callback.answer()
+    
+    @dp.callback_query(lambda c: c.data == "replace_afs_catalog")
+    async def replace_afs_catalog_handler(callback: types.CallbackQuery):
+        global last_kml_results
+        
+        if not last_kml_results or not last_kml_results.get('results'):
+            await callback.message.answer(
+                "❌ Нет данных для замены каталога АФС.\n"
+                "Сначала обработайте KML файл.",
+                reply_markup=back_keyboard()
+            )
+            await callback.answer()
+            return
+        
+        results = last_kml_results['results']
+        
+        # Заменяем каталог
+        stats = afs_catalog.replace_with_kml_results(results)
+        
+        await callback.message.answer(
+            f"✅ <b>Каталог АФС заменен!</b>\n\n"
+            f"📊 <b>Статистика:</b>\n"
+            f"• Добавлено снимков: {stats['added']}\n"
+            f"• Удалено старых: {stats['removed']}\n"
+            f"• Всего снимков в каталоге: {stats['total']}\n\n"
+            f"Теперь вы можете просмотреть или скачать каталог.",
+            parse_mode="HTML",
+            reply_markup=get_afs_catalog_keyboard(has_catalog=not afs_catalog.is_empty())
+        )
+        await callback.answer()
+    
+    @dp.callback_query(lambda c: c.data.startswith("afs_page_"))
+    async def afs_page_handler(callback: types.CallbackQuery):
+        global current_afs_page
+        
+        page = int(callback.data.replace("afs_page_", ""))
+        current_afs_page = page
+        
+        text, total_pages, current = afs_catalog.get_catalog_text(
+            with_descriptions=False,
+            page=page,
+            per_page=50
+        )
+        
+        await safe_edit_text(
+            callback.message,
+            text,
+            parse_mode="HTML",
+            reply_markup=get_afs_catalog_keyboard(
+                has_catalog=not afs_catalog.is_empty(),
+                page=current,
+                total_pages=total_pages
+            )
+        )
+        await callback.answer()
+    
     @dp.callback_query(lambda c: c.data == "show_afs_catalog")
     async def show_afs_catalog_handler(callback: types.CallbackQuery):
-        catalog_text = afs_catalog.get_catalog_text(with_descriptions=False)
+        global current_afs_page
         
-        if len(catalog_text) > 4000:
-            # Если текст слишком длинный, отправляем частями
-            chunks = [catalog_text[i:i+4000] for i in range(0, len(catalog_text), 4000)]
-            for i, chunk in enumerate(chunks):
-                if i == 0:
-                    await callback.message.answer(chunk, parse_mode="HTML")
-                else:
-                    await callback.message.answer(chunk, parse_mode="HTML")
-        else:
-            await callback.message.answer(catalog_text, parse_mode="HTML")
+        if afs_catalog.is_empty():
+            await callback.message.answer(
+                "📭 Каталог АФС пуст.\n\n"
+                "Чтобы создать каталог:\n"
+                "1. Обработайте KML файл\n"
+                "2. Нажмите 'Создать каталог АФС'",
+                reply_markup=back_keyboard()
+            )
+            await callback.answer()
+            return
         
+        current_afs_page = 1
+        text, total_pages, current = afs_catalog.get_catalog_text(
+            with_descriptions=False,
+            page=1,
+            per_page=50
+        )
+        
+        await safe_edit_text(
+            callback.message,
+            text,
+            parse_mode="HTML",
+            reply_markup=get_afs_catalog_keyboard(
+                has_catalog=True,
+                page=current,
+                total_pages=total_pages
+            )
+        )
+        await callback.answer()
+    
+    @dp.callback_query(lambda c: c.data == "afs_stats")
+    async def afs_stats_handler(callback: types.CallbackQuery):
+        stats = afs_catalog.get_statistics()
+        
+        text = (
+            f"📊 <b>Статистика каталога АФС</b>\n\n"
+            f"• Всего снимков: {stats['total']}\n"
+            f"• С описаниями: {stats['with_description']}\n"
+            f"• Без описаний: {stats['without_description']}\n\n"
+        )
+        
+        if not afs_catalog.is_empty():
+            text += f"📌 <b>Последние 5 снимков:</b>\n"
+            for item in afs_catalog.catalog[-5:]:
+                text += f"• {item['frame']}\n"
+        
+        await safe_edit_text(
+            callback.message,
+            text,
+            parse_mode="HTML",
+            reply_markup=get_afs_catalog_keyboard(has_catalog=True)
+        )
         await callback.answer()
     
     @dp.callback_query(lambda c: c.data == "download_afs_catalog")
@@ -217,7 +346,8 @@ def register_kml_handlers(dp, kml_processor):
     async def clear_afs_catalog_handler(callback: types.CallbackQuery):
         removed = afs_catalog.clear()
         
-        await callback.message.answer(
+        await safe_edit_text(
+            callback.message,
             f"🗑️ <b>Каталог АФС очищен!</b>\n\n"
             f"Удалено снимков: {removed}",
             parse_mode="HTML",
@@ -225,12 +355,193 @@ def register_kml_handlers(dp, kml_processor):
         )
         await callback.answer()
     
+    @dp.callback_query(lambda c: c.data == "compare_afs_with_kml")
+    async def compare_afs_with_kml_handler(callback: types.CallbackQuery):
+        global last_kml_results, last_kml_compare_data
+        
+        if not last_kml_results or not last_kml_results.get('results'):
+            await callback.message.answer(
+                "❌ Нет данных для сравнения.\n"
+                "Сначала обработайте KML файл.",
+                reply_markup=back_keyboard()
+            )
+            await callback.answer()
+            return
+        
+        # Создаем временный каталог из KML результатов
+        kml_catalog = []
+        for result in last_kml_results['results']:
+            kml_catalog.append({
+                'frame': result['photo_num'],
+                'description': result.get('description', '')
+            })
+        
+        # Сравниваем
+        diff = afs_catalog.compare_with_catalog(kml_catalog)
+        last_kml_compare_data = kml_catalog
+        
+        text = (
+            f"🔄 <b>Сравнение каталогов</b>\n\n"
+            f"📊 <b>Результат сравнения:</b>\n"
+            f"• Новые снимки в KML: {len(diff['new'])}\n"
+            f"• Отсутствуют в KML: {len(diff['missing'])}\n"
+            f"• Различаются описания: {len(diff['different'])}\n\n"
+        )
+        
+        if diff['new']:
+            text += f"🆕 <b>Новые снимки в KML (можно добавить):</b>\n"
+            for frame in diff['new'][:10]:
+                text += f"• {frame}\n"
+            if len(diff['new']) > 10:
+                text += f"... и ещё {len(diff['new']) - 10}\n"
+            text += "\n"
+        
+        if diff['different']:
+            text += f"📝 <b>Снимки с разными описаниями:</b>\n"
+            for item in diff['different'][:5]:
+                text += f"• {item['frame']}\n"
+            if len(diff['different']) > 5:
+                text += f"... и ещё {len(diff['different']) - 5}\n"
+            text += "\n"
+        
+        await safe_edit_text(
+            callback.message,
+            text,
+            parse_mode="HTML",
+            reply_markup=get_afs_compare_keyboard()
+        )
+        await callback.answer()
+    
+    @dp.callback_query(lambda c: c.data == "afs_add_new")
+    async def afs_add_new_handler(callback: types.CallbackQuery):
+        global last_kml_compare_data
+        
+        if not last_kml_compare_data:
+            await callback.message.answer(
+                "❌ Нет данных для добавления.",
+                reply_markup=back_keyboard()
+            )
+            await callback.answer()
+            return
+        
+        # Добавляем только новые снимки
+        diff = afs_catalog.compare_with_catalog(last_kml_compare_data)
+        new_items = [item for item in last_kml_compare_data if item['frame'] in diff['new']]
+        
+        stats = afs_catalog.merge_with_catalog(new_items)
+        
+        await safe_edit_text(
+            callback.message,
+            f"✅ <b>Новые снимки добавлены!</b>\n\n"
+            f"📊 <b>Результат:</b>\n"
+            f"• Добавлено: {len(new_items)}\n"
+            f"• Всего снимков в каталоге: {stats['total']}",
+            parse_mode="HTML",
+            reply_markup=get_afs_catalog_keyboard(has_catalog=True)
+        )
+        await callback.answer()
+    
+    @dp.callback_query(lambda c: c.data == "afs_update_descriptions")
+    async def afs_update_descriptions_handler(callback: types.CallbackQuery):
+        global last_kml_compare_data
+        
+        if not last_kml_compare_data:
+            await callback.message.answer(
+                "❌ Нет данных для обновления.",
+                reply_markup=back_keyboard()
+            )
+            await callback.answer()
+            return
+        
+        # Обновляем описания
+        stats = afs_catalog.merge_with_catalog(last_kml_compare_data)
+        
+        await safe_edit_text(
+            callback.message,
+            f"✅ <b>Описания обновлены!</b>\n\n"
+            f"📊 <b>Результат:</b>\n"
+            f"• Обновлено описаний: {stats['updated']}\n"
+            f"• Добавлено новых: {stats['added']}\n"
+            f"• Всего снимков в каталоге: {stats['total']}",
+            parse_mode="HTML",
+            reply_markup=get_afs_catalog_keyboard(has_catalog=True)
+        )
+        await callback.answer()
+    
+    @dp.callback_query(lambda c: c.data == "afs_download_merged")
+    async def afs_download_merged_handler(callback: types.CallbackQuery):
+        if afs_catalog.is_empty():
+            await callback.message.answer("❌ Каталог АФС пуст.")
+            await callback.answer()
+            return
+        
+        try:
+            filepath = afs_catalog.export_to_txt(f"afs_merged_{time.strftime('%Y%m%d_%H%M%S')}.txt")
+            
+            await callback.message.answer_document(
+                FSInputFile(filepath, filename=os.path.basename(filepath)),
+                caption=f"📁 <b>Объединенный каталог АФС</b>\nВсего: {len(afs_catalog.catalog)} снимков",
+                parse_mode="HTML"
+            )
+            os.unlink(filepath)
+        except Exception as e:
+            logger.error(f"Ошибка: {e}")
+            await callback.message.answer("❌ Ошибка при создании файла.")
+        
+        await callback.answer()
+    
+    @dp.callback_query(lambda c: c.data == "load_common_afs_catalog")
+    async def load_common_afs_catalog_handler(callback: types.CallbackQuery):
+        await safe_edit_text(
+            callback.message,
+            "📤 <b>Загрузка общего каталога АФС</b>\n\n"
+            "Отправьте TXT файл с каталогом АФС.\n\n"
+            "📌 <b>Формат файла:</b>\n"
+            "Каждая строка должна содержать номер снимка и описание через символ |\n\n"
+            "<code>N56E34-266-016|Описание снимка...</code>\n"
+            "<code>N56E34-266-022|Другое описание...</code>\n\n"
+            "Выберите действие:",
+            parse_mode="HTML",
+            reply_markup=get_afs_catalog_load_keyboard()
+        )
+        await callback.answer()
+    
+    @dp.callback_query(lambda c: c.data == "afs_merge_common")
+    async def afs_merge_common_handler(callback: types.CallbackQuery, state: FSMContext):
+        await state.update_data(afs_action="merge")
+        await safe_edit_text(
+            callback.message,
+            "📤 <b>Дополнение каталога АФС</b>\n\n"
+            "Отправьте TXT файл с каталогом АФС в формате:\n"
+            "<code>номер_снимка|описание</code>\n\n"
+            "Файл будет добавлен к существующему каталогу.\n\n"
+            "Отправьте TXT файл:",
+            parse_mode="HTML"
+        )
+        await state.set_state(SearchStates.waiting_for_txt_upload)
+        await callback.answer()
+    
+    @dp.callback_query(lambda c: c.data == "afs_replace_common")
+    async def afs_replace_common_handler(callback: types.CallbackQuery, state: FSMContext):
+        await state.update_data(afs_action="replace")
+        await safe_edit_text(
+            callback.message,
+            "📤 <b>Замена каталога АФС</b>\n\n"
+            "Отправьте TXT файл с каталогом АФС в формате:\n"
+            "<code>номер_снимка|описание</code>\n\n"
+            "Текущий каталог будет заменен новым.\n\n"
+            "Отправьте TXT файл:",
+            parse_mode="HTML"
+        )
+        await state.set_state(SearchStates.waiting_for_txt_upload)
+        await callback.answer()
+    
     @dp.callback_query(lambda c: c.data == "process_kml_again")
     async def process_kml_again(callback: types.CallbackQuery, state: FSMContext):
         await safe_delete_message(callback.message)
         
         # Проверяем, есть ли населенные пункты в каталоге
-        if not callback.bot_data.get('village_db') or not callback.bot_data['village_db'].villages:
+        if not village_db.villages:
             await callback.message.answer(
                 "❌ <b>Невозможно обработать KML файл</b>\n\n"
                 "Каталог населенных пунктов пуст.\n\n"
