@@ -12,10 +12,11 @@ from keyboards.inline import (
     locus_instruction_keyboard, locus_download_keyboard,
     back_to_locus_keyboard, back_keyboard, photos_keyboard,
     photo_details_keyboard, get_catalog_settings_keyboard,
-    get_afs_catalog_keyboard, get_afs_settings_keyboard
+    get_afs_catalog_keyboard, get_afs_settings_keyboard, get_settings_main_keyboard
 )
 from utils.helpers import safe_edit_text, safe_answer_callback, safe_delete_message
 from config import logger
+from handlers.start import cmd_start
 
 
 def register_callbacks(dp, village_db, db):
@@ -95,7 +96,6 @@ def register_callbacks(dp, village_db, db):
     
     @dp.callback_query(lambda c: c.data == "back_to_main")
     async def back_to_main(callback: types.CallbackQuery, state: FSMContext):
-        from handlers.start import cmd_start
         await state.clear()
         await safe_delete_message(callback.message)
         await cmd_start(callback.message)
@@ -145,7 +145,7 @@ def register_callbacks(dp, village_db, db):
         
         villages = db.get_all_villages_list()
         if not villages:
-            await callback.message.answer("📭 Список деревень пуст. Добавьте населенные пункты через ⚙️ ЗАГРУЗКА НП")
+            await callback.message.answer("📭 Список деревень пуст. Добавьте населенные пункты через ⚙️ НАСТРОЙКА → ЗАГРУЗКА НП")
             await safe_answer_callback(callback)
             return
         
