@@ -22,21 +22,58 @@ def get_kml_result_keyboard() -> InlineKeyboardMarkup:
     """Клавиатура для результатов обработки KML"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📁 Создать каталог АФС", callback_data="create_afs_catalog")],
+        [InlineKeyboardButton(text="➕ Дополнить каталог АФС", callback_data="append_afs_catalog")],
+        [InlineKeyboardButton(text="🔄 Заменить каталог АФС", callback_data="replace_afs_catalog")],
         [InlineKeyboardButton(text="📋 Показать каталог АФС", callback_data="show_afs_catalog")],
         [InlineKeyboardButton(text="🔄 Обработать другой KML", callback_data="process_kml_again")],
         [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_main")]
     ])
 
 
-def get_afs_catalog_keyboard(has_catalog: bool = False) -> InlineKeyboardMarkup:
+def get_afs_catalog_keyboard(has_catalog: bool = False, page: int = 1, total_pages: int = 1) -> InlineKeyboardMarkup:
     """Клавиатура для каталога АФС"""
     keyboard = []
+    
+    # Навигация по страницам
+    if total_pages > 1:
+        nav_buttons = []
+        if page > 1:
+            nav_buttons.append(InlineKeyboardButton(text="◀️ Назад", callback_data=f"afs_page_{page-1}"))
+        if page < total_pages:
+            nav_buttons.append(InlineKeyboardButton(text="Вперед ▶️", callback_data=f"afs_page_{page+1}"))
+        if nav_buttons:
+            keyboard.append(nav_buttons)
+    
     if has_catalog:
-        keyboard.append([InlineKeyboardButton(text="📤 Скачать каталог АФС", callback_data="download_afs_catalog")])
+        keyboard.append([InlineKeyboardButton(text="📊 Статистика АФС", callback_data="afs_stats")])
+        keyboard.append([InlineKeyboardButton(text="📥 Загрузить каталог АФС (TXT)", callback_data="download_afs_catalog")])
+        keyboard.append([InlineKeyboardButton(text="🔄 Сравнить с KML", callback_data="compare_afs_with_kml")])
         keyboard.append([InlineKeyboardButton(text="🗑️ Очистить каталог АФС", callback_data="clear_afs_catalog")])
+    
+    keyboard.append([InlineKeyboardButton(text="📤 Загрузить общий каталог", callback_data="load_common_afs_catalog")])
     keyboard.append([InlineKeyboardButton(text="🔄 Обработать KML", callback_data="process_kml_again")])
     keyboard.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_main")])
+    
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def get_afs_compare_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура для сравнения каталогов АФС"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Добавить новые", callback_data="afs_add_new")],
+        [InlineKeyboardButton(text="🔄 Обновить описания", callback_data="afs_update_descriptions")],
+        [InlineKeyboardButton(text="📥 Скачать результат", callback_data="afs_download_merged")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="show_afs_catalog")]
+    ])
+
+
+def get_afs_catalog_load_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура для загрузки общего каталога"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Дополнить существующий", callback_data="afs_merge_common")],
+        [InlineKeyboardButton(text="🔄 Заменить существующий", callback_data="afs_replace_common")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="show_afs_catalog")]
+    ])
 
 
 def get_district_keyboard() -> InlineKeyboardMarkup:
