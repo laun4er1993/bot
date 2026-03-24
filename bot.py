@@ -39,14 +39,10 @@ async def main():
     photos_db = PhotosDatabase(yd_client, village_db)
     kml_processor = KMLProcessor(village_db, photos_db)
     
-    # Сохраняем village_db в bot_data для доступа из обработчиков
-    dp.bot_data['village_db'] = village_db
-    dp.bot_data['photos_db'] = photos_db
-    
     # Регистрация обработчиков
     register_start_handlers(dp)
     register_search_handlers(dp, photos_db, village_db)
-    register_kml_handlers(dp, kml_processor)
+    register_kml_handlers(dp, kml_processor, village_db)
     register_settings_handlers(dp, village_db)
     register_callbacks(dp, village_db, photos_db)
     
