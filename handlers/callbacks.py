@@ -3,20 +3,21 @@ import os
 import time
 from aiogram import types, F
 from aiogram.fsm.context import FSMContext
-from aiogram.types import BufferedInputFile
+from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, InlineKeyboardButton
 
 from keyboards.inline import (
     get_np_settings_keyboard, get_delete_district_keyboard,
     get_confirm_delete_district_keyboard, get_confirm_clear_all_keyboard,
-    get_district_keyboard, get_more_districts_keyboard,
+    get_district_keyboard,
     locus_instruction_keyboard, locus_download_keyboard,
     back_to_locus_keyboard, back_keyboard, photos_keyboard,
-    photo_details_keyboard, get_catalog_settings_keyboard,
+    get_catalog_settings_keyboard,
     get_afs_catalog_keyboard
 )
 from utils.helpers import safe_edit_text, safe_answer_callback, safe_delete_message
 from config import logger
 from handlers.start import cmd_start
+from states.states import SearchStates
 
 
 def register_callbacks(dp, village_db, db):
@@ -105,13 +106,58 @@ def register_callbacks(dp, village_db, db):
         photo = callback.data.replace("photo_", "")
         details = db.get_photo_details(photo)
         
+        # Получаем список деревень для проверки
+        villages = db.afs_catalog.get_villages_for_frame(photo)
+        
+        # Формируем клавиатуру
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Назад к списку", callback_data="back_to_photos")],
+            [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
+        ])
+        
+        # Если есть больше 5 деревень, добавляем кнопку "Показать все"
+        if len(villages) > 5:
+            keyboard.inline_keyboard.insert(
+                0,
+                [InlineKeyboardButton(text="📋 Показать все НП", callback_data=f"show_all_villages_{photo}")]
+            )
+        
         await safe_edit_text(
             callback.message,
             details or f"📸 <b>Снимок {photo}</b>\n\n❌ Информация отсутствует",
             parse_mode="HTML",
-            reply_markup=photo_details_keyboard()
+            reply_markup=keyboard
         )
         await safe_answer_callback(callback)
+    
+    @dp.callback_query(lambda c: c.data.startswith("show_all_villages_"))
+    async def show_all_villages_handler(callback: types.CallbackQuery):
+        """Показывает все населенные пункты для снимка"""
+        photo_num = callback.data.replace("show_all_villages_", "")
+        villages = db.afs_catalog.get_villages_for_frame(photo_num)
+        
+        if not villages:
+            await callback.answer("Нет данных о населенных пунктах")
+            return
+        
+        # Формируем текст со всеми деревнями
+        text = f"📸 <b>Снимок {photo_num}</b>\n\n"
+        text += f"📍 <b>Все населенные пункты в кадре ({len(villages)}):</b>\n"
+        
+        # Выводим все деревни
+        for i, v in enumerate(villages, 1):
+            text += f"  {i}. {v}\n"
+        
+        # Добавляем кнопку "Назад"
+        await callback.message.answer(
+            text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Назад к снимку", callback_data=f"photo_{photo_num}")],
+                [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
+            ])
+        )
+        await callback.answer()
     
     @dp.callback_query(lambda c: c.data == "back_to_photos")
     async def back_to_photos(callback: types.CallbackQuery):
