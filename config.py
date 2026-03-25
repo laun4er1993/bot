@@ -14,9 +14,9 @@ MULTI_KEYS_FILE = os.path.join(DATA_DIR, "multi_keys.txt")
 DETAILS_FILE = os.path.join(DATA_DIR, "details.txt")
 EXPORT_DIR = os.path.join(DATA_DIR, "export")
 TEMP_DIR = os.path.join(DATA_DIR, "temp")
-AFS_CATALOG_FILE = os.path.join(DATA_DIR, "afs_catalog.txt")  # Каталог АФС
-KML_CATALOG_FILE = os.path.join(DATA_DIR, "kml_catalog.txt")  # Каталог KML
-KML_DIR = os.path.join(DATA_DIR, "kml")  # Папка для сохранения KML файлов
+AFS_CATALOG_FILE = os.path.join(DATA_DIR, "afs_catalog.txt")
+KML_CATALOG_FILE = os.path.join(DATA_DIR, "kml_catalog.txt")
+KML_DIR = os.path.join(DATA_DIR, "kml")
 
 # Параметры
 MAX_RETRIES = 7
