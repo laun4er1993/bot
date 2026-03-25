@@ -3,7 +3,6 @@ import os
 import time
 import tempfile
 import asyncio
-import shutil
 from aiogram import types, F
 from aiogram.fsm.context import FSMContext
 from aiogram.types import FSInputFile, BufferedInputFile
@@ -18,7 +17,7 @@ from keyboards.inline import (
     stats_back_keyboard, get_status_keyboard
 )
 from utils.helpers import safe_edit_text, safe_answer_callback
-from config import logger, TEMP_DIR, DATA_DIR, KML_DIR
+from config import logger, TEMP_DIR, DATA_DIR
 from api_sources import APISourceManager, AVAILABLE_DISTRICTS
 from services.afs_catalog import AFSCatalog
 from services.kml_catalog import KMLCatalog
@@ -53,43 +52,6 @@ def register_settings_handlers(dp, village_db):
             parse_mode="HTML",
             reply_markup=get_settings_main_keyboard()
         )
-        await safe_answer_callback(callback)
-    
-    # ========== ОБРАБОТКА KML ИЗ МЕНЮ НАСТРОЕК ==========
-    
-    @dp.callback_query(lambda c: c.data == "process_kml_menu")
-    async def process_kml_menu_handler(callback: types.CallbackQuery, state: FSMContext):
-        """Обработка KML файла из меню настроек"""
-        if not village_db.villages:
-            await safe_edit_text(
-                callback.message,
-                "❌ <b>Невозможно обработать KML файл</b>\n\n"
-                "Каталог населенных пунктов пуст.\n\n"
-                "Пожалуйста, сначала загрузите населенные пункты:\n"
-                "• через ⚙️ НАСТРОЙКА → ЗАГРУЗКА НП → 📤 Загрузить каталог (TXT)\n"
-                "• или через ⚙️ НАСТРОЙКА → ЗАГРУЗКА НП → 🌐 Загрузить из интернета",
-                parse_mode="HTML",
-                reply_markup=back_keyboard()
-            )
-            await safe_answer_callback(callback)
-            return
-        
-        method_text = "пересечение (точки на границе)" if KML_USE_INTERSECTS else "строгое вхождение"
-        await safe_edit_text(
-            callback.message,
-            f"📤 <b>Загрузите KML файл</b>\n\n"
-            f"Отправьте мне KML файл с каталогом снимков.\n"
-            f"После загрузки я:\n"
-            f"• Найду населенные пункты в каждом кадре\n"
-            f"• Добавлю полные описания снимков из базы данных\n"
-            f"• Создам подробный TXT отчет со статистикой\n\n"
-            f"📌 <b>Параметры обработки:</b>\n"
-            f"• Буфер: {KML_MARGIN_M} м\n"
-            f"• Метод проверки: {method_text}\n\n"
-            f"<i>Файл должен содержать Placemark с названиями Frame-XXX</i>",
-            parse_mode="HTML"
-        )
-        await state.set_state(SearchStates.waiting_for_kml)
         await safe_answer_callback(callback)
     
     # ========== УПРАВЛЕНИЕ KML ==========
