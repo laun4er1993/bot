@@ -106,7 +106,6 @@ class PhotosDatabase:
             logger.info(f"❌ Снимки для деревни '{query}' не найдены")
             return []
         
-        # Группируем результаты
         result = [{
             'id': hash(query),
             'villages': list(set(all_villages_found)),
@@ -272,12 +271,35 @@ class PhotosDatabase:
             except:
                 pass
         
+        # Формат: 56.2345,34.1234 (без пробелов)
+        decimal_no_space_pattern = r'^(\d{1,3}\.\d{4,}),(\d{1,3}\.\d{4,})$'
+        match = re.match(decimal_no_space_pattern, text)
+        if match:
+            try:
+                lat = float(match.group(1))
+                lon = float(match.group(2))
+                if -90 <= lat <= 90 and -180 <= lon <= 180:
+                    return (lat, lon)
+            except:
+                pass
+        
         return None
     
     def _is_frame_number(self, text: str) -> bool:
-        """Проверяет, является ли текст номером снимка (Frame-XXX)"""
-        pattern = r'^[A-Z]?\d+[A-Z]?\d*-\d+-\d+$'
-        return bool(re.match(pattern, text.upper()))
+        """Проверяет, является ли текст номером снимка"""
+        text_upper = text.upper().strip()
+        
+        # Полный формат: N56E34-266-016
+        full_pattern = r'^[A-Z]?\d+[A-Z]?\d*-\d+-\d+$'
+        if re.match(full_pattern, text_upper):
+            return True
+        
+        # Короткий формат: 266-016
+        short_pattern = r'^\d+-\d+$'
+        if re.match(short_pattern, text):
+            return True
+        
+        return False
     
     def set_last_photos(self, user_id: int, photos: List[str]):
         self.user_last_photos[user_id] = photos
