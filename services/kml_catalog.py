@@ -81,6 +81,7 @@ class KMLCatalog:
         
         if frame in existing_frames:
             stats['duplicate'] += 1
+            logger.info(f"  ⚠️ KML файл {frame} уже существует в каталоге")
             return stats
         
         self.catalog.append({
@@ -92,6 +93,7 @@ class KMLCatalog:
         stats['total'] = len(self.catalog)
         self._save()
         
+        logger.info(f"  ✅ Добавлен KML файл: {frame} (описание: {description[:50] if description else 'нет'})")
         return stats
     
     def add_kml_from_file(self, kml_path: str, original_filename: str) -> Dict:
@@ -99,6 +101,8 @@ class KMLCatalog:
         stats = {'added': 0, 'duplicate': 0, 'error': 0, 'frame': '', 'total': 0}
         
         try:
+            logger.info(f"  🔍 Обработка KML файла: {original_filename}")
+            
             # Парсим KML файл для извлечения информации
             with open(kml_path, 'r', encoding='utf-8') as f:
                 soup = BeautifulSoup(f.read(), 'xml')
@@ -106,11 +110,13 @@ class KMLCatalog:
             # Ищем Placemark с именем Frame-XXX
             frame = None
             description = ''
+            placemarks_found = 0
             
             for placemark in soup.find_all('Placemark'):
                 name_elem = placemark.find('name')
                 if name_elem and name_elem.text.startswith('Frame-'):
                     frame = name_elem.text.replace('Frame-', '')
+                    placemarks_found += 1
                     
                     # Ищем описание
                     desc_elem = placemark.find('description')
@@ -118,9 +124,12 @@ class KMLCatalog:
                         description = desc_elem.text.strip()
                     break
             
+            logger.info(f"  📍 Найдено Placemark с Frame-XXX: {placemarks_found}, выбран: {frame}")
+            
             if not frame:
                 stats['error'] = 1
                 stats['error_msg'] = "Не найден Placemark с названием Frame-XXX"
+                logger.error(f"  ❌ Ошибка: {stats['error_msg']}")
                 return stats
             
             # Проверяем на дубликат
@@ -128,6 +137,7 @@ class KMLCatalog:
             if frame in existing_frames:
                 stats['duplicate'] = 1
                 stats['frame'] = frame
+                logger.info(f"  ⚠️ KML файл {frame} уже существует в каталоге, пропущен")
                 return stats
             
             # Сохраняем файл в папку data/kml/
@@ -140,6 +150,7 @@ class KMLCatalog:
             
             # Копируем файл
             shutil.copy2(kml_path, saved_path)
+            logger.info(f"  📁 Файл сохранен: {saved_filename}")
             
             # Добавляем в каталог
             self.catalog.append({
@@ -152,10 +163,52 @@ class KMLCatalog:
             stats['total'] = len(self.catalog)
             self._save()
             
+            logger.info(f"  ✅ Добавлен KML файл: {frame} (описание: {description[:50] if description else 'нет'})")
+            
         except Exception as e:
-            logger.error(f"Ошибка обработки KML файла: {e}")
+            logger.error(f"  ❌ Ошибка обработки KML файла: {e}")
             stats['error'] = 1
             stats['error_msg'] = str(e)
+        
+        return stats
+    
+    def refresh_catalog(self, photos_db) -> Dict:
+        """
+        Обновляет каталог KML - перепроверяет и обновляет ссылки на Яндекс.Диске
+        и описания из photos_db
+        """
+        stats = {'total': 0, 'updated': 0, 'failed': 0, 'details': []}
+        
+        logger.info(f"🔄 ОБНОВЛЕНИЕ КАТАЛОГА KML: {len(self.catalog)} файлов")
+        
+        for i, item in enumerate(self.catalog, 1):
+            frame = item['frame']
+            logger.info(f"  [{i}/{len(self.catalog)}] Обработка: {frame}")
+            
+            # Получаем актуальное описание из photos_db
+            new_description = photos_db.get_photo_details(frame)
+            old_description = item.get('description', '')
+            
+            # Сравниваем и обновляем
+            if new_description and new_description != old_description:
+                item['description'] = new_description
+                stats['updated'] += 1
+                stats['details'].append({
+                    'frame': frame,
+                    'old_desc': old_description[:50] if old_description else 'нет',
+                    'new_desc': new_description[:50] if new_description else 'нет'
+                })
+                logger.info(f"    ✅ Обновлено описание для {frame}")
+            elif new_description:
+                logger.info(f"    ℹ️ Описание для {frame} не изменилось")
+            else:
+                logger.info(f"    ⚠️ Описание для {frame} не найдено в photos_db")
+                stats['failed'] += 1
+        
+        stats['total'] = len(self.catalog)
+        self._save()
+        
+        logger.info(f"✅ Обновление каталога KML завершено: обновлено {stats['updated']}, не найдено {stats['failed']}")
         
         return stats
     
@@ -178,6 +231,7 @@ class KMLCatalog:
             
             if frame in existing_frames:
                 stats['duplicates'] += 1
+                logger.info(f"  ⚠️ KML файл {frame} уже существует, пропущен")
                 continue
             
             self.catalog.append({
@@ -188,6 +242,7 @@ class KMLCatalog:
             stats['added'] += 1
             stats['files'].append({'frame': frame, 'file_name': file_name})
             existing_frames.add(frame)
+            logger.info(f"  ✅ Добавлен KML файл: {frame}")
         
         stats['total'] = len(self.catalog)
         self._save()
@@ -199,6 +254,7 @@ class KMLCatalog:
         removed = len(self.catalog)
         self.catalog = []
         self._save()
+        logger.info(f"🗑️ Каталог KML очищен, удалено {removed} файлов")
         return removed
     
     def get_catalog(self) -> List[Dict]:
