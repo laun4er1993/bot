@@ -15,6 +15,7 @@ class AFSCatalog:
     
     def __init__(self):
         self.catalog: List[Dict] = []
+        self.villages_by_frame: Dict[str, List[str]] = {}  # frame -> список деревень
         self._load()
     
     def _load(self):
@@ -37,12 +38,21 @@ class AFSCatalog:
                     
                     parts = line.split('|')
                     if len(parts) >= 2:
+                        frame = parts[0]
+                        description = parts[1] if len(parts) > 1 and parts[1] != 'None' else ''
+                        villages_str = parts[2] if len(parts) > 2 else ''
+                        
                         self.catalog.append({
-                            'frame': parts[0],
-                            'description': parts[1] if len(parts) > 1 and parts[1] != 'None' else ''
+                            'frame': frame,
+                            'description': description
                         })
+                        
+                        if villages_str:
+                            villages = [v.strip() for v in villages_str.split(',') if v.strip()]
+                            self.villages_by_frame[frame] = villages
             
             logger.info(f"✅ Загружено {len(self.catalog)} снимков в каталог АФС")
+            logger.info(f"✅ Загружено {sum(len(v) for v in self.villages_by_frame.values())} связей деревень со снимками")
         except Exception as e:
             logger.error(f"❌ Ошибка загрузки каталога АФС: {e}")
             self._create_empty()
@@ -51,20 +61,26 @@ class AFSCatalog:
         """Создает пустой каталог"""
         os.makedirs(os.path.dirname(AFS_CATALOG_FILE), exist_ok=True)
         with open(AFS_CATALOG_FILE, 'w', encoding='utf-8') as f:
-            f.write("Номер_снимка|Описание\n")
+            f.write("Номер_снимка|Описание|Деревни\n")
         self.catalog = []
+        self.villages_by_frame = {}
     
     def _save(self):
         """Сохраняет каталог в файл"""
         try:
             with open(AFS_CATALOG_FILE, 'w', encoding='utf-8') as f:
-                f.write("Номер_снимка|Описание\n")
+                f.write("Номер_снимка|Описание|Деревни\n")
                 for item in self.catalog:
+                    frame = item['frame']
                     description = item.get('description', '')
                     if description is None:
                         description = ''
                     description = str(description).replace('|', '\\|').replace('\n', ' ')
-                    f.write(f"{item['frame']}|{description}\n")
+                    
+                    villages = self.villages_by_frame.get(frame, [])
+                    villages_str = ','.join(villages) if villages else ''
+                    
+                    f.write(f"{frame}|{description}|{villages_str}\n")
             logger.debug(f"✅ Каталог АФС сохранен, записей: {len(self.catalog)}")
         except Exception as e:
             logger.error(f"❌ Ошибка сохранения каталога АФС: {e}")
@@ -75,18 +91,22 @@ class AFSCatalog:
         
         existing_frames = {item['frame'] for item in self.catalog}
         
+        # Собираем все снимки из results (с НП)
         all_frames = []
         for result in results:
             all_frames.append({
                 'frame': result.get('photo_num', ''),
                 'description': result.get('description', ''),
+                'villages': result.get('villages', []),
                 'has_np': True
             })
         
+        # Добавляем снимки без НП
         for frame_data in frames_without_np:
             all_frames.append({
                 'frame': frame_data.get('frame', ''),
                 'description': frame_data.get('description', ''),
+                'villages': [],
                 'has_np': False
             })
         
@@ -95,6 +115,7 @@ class AFSCatalog:
         for frame_data in all_frames:
             frame = frame_data['frame']
             description = frame_data['description']
+            villages = frame_data['villages']
             has_np = frame_data['has_np']
             
             if not frame:
@@ -108,13 +129,17 @@ class AFSCatalog:
                 'frame': frame,
                 'description': description
             })
+            if villages:
+                self.villages_by_frame[frame] = villages
             stats['added'] += 1
             existing_frames.add(frame)
             
             if has_np:
                 stats['with_np'] += 1
+                logger.info(f"  ✅ Добавлен снимок с НП: {frame} ({len(villages)} деревень)")
             else:
                 stats['without_np'] += 1
+                logger.info(f"  ✅ Добавлен снимок БЕЗ НП: {frame}")
         
         stats['total'] = len(self.catalog)
         self._save()
@@ -127,10 +152,44 @@ class AFSCatalog:
         """Возвращает копию каталога"""
         return self.catalog.copy()
     
+    def get_catalog_text(self, with_descriptions: bool = False, page: int = 1, per_page: int = 50) -> Tuple[str, int, int]:
+        """Возвращает текстовое представление каталога с пагинацией"""
+        if not self.catalog:
+            return "📭 Каталог АФС пуст", 0, 1
+        
+        total_pages = (len(self.catalog) + per_page - 1) // per_page
+        page = max(1, min(page, total_pages))
+        
+        start = (page - 1) * per_page
+        end = start + per_page
+        items = self.catalog[start:end]
+        
+        text = f"📁 <b>Каталог АФС</b> (всего: {len(self.catalog)} снимков, страница {page}/{total_pages})\n\n"
+        
+        for i, item in enumerate(items, start + 1):
+            frame = item['frame']
+            villages = self.villages_by_frame.get(frame, [])
+            text += f"{i}. {frame}"
+            if with_descriptions and item.get('description'):
+                desc_preview = str(item['description'])[:100].replace('\n', ' ')
+                if len(str(item['description'])) > 100:
+                    desc_preview += "..."
+                text += f"\n   📝 {desc_preview}"
+            if villages:
+                villages_preview = ', '.join(villages[:5])
+                if len(villages) > 5:
+                    villages_preview += f"... и ещё {len(villages)-5}"
+                text += f"\n   📍 Деревни: {villages_preview}"
+            text += "\n"
+        
+        return text, total_pages, page
+    
     def get_statistics(self) -> Dict:
         """Возвращает расширенную статистику каталога"""
         total = len(self.catalog)
         with_description = sum(1 for item in self.catalog if item.get('description') and item['description'].strip())
+        with_villages = len(self.villages_by_frame)
+        total_village_links = sum(len(v) for v in self.villages_by_frame.values())
         
         recent_items = []
         if self.catalog:
@@ -143,6 +202,9 @@ class AFSCatalog:
             'total': total,
             'with_description': with_description,
             'without_description': total - with_description,
+            'with_villages': with_villages,
+            'without_villages': total - with_villages,
+            'total_village_links': total_village_links,
             'recent_items': recent_items,
             'avg_description_length': round(avg_desc_length, 0)
         }
@@ -154,8 +216,12 @@ class AFSCatalog:
                 return item.get('description', '')
         return None
     
+    def get_villages_for_frame(self, photo_num: str) -> List[str]:
+        """Возвращает список деревень для снимка"""
+        return self.villages_by_frame.get(photo_num, [])
+    
     def search_by_village_name(self, village_name: str) -> List[Dict]:
-        """Поиск снимков по названию деревни в описании"""
+        """Поиск снимков по названию деревни (по связям)"""
         if not village_name or not self.catalog:
             return []
         
@@ -164,34 +230,34 @@ class AFSCatalog:
         
         logger.info(f"🔍 ПОИСК снимков для деревни: {village_name}")
         
-        for item in self.catalog:
-            description = item.get('description', '').lower()
-            frame = item['frame']
-            
-            if village_lower in description:
-                results.append({
-                    'frame': frame,
-                    'description': item.get('description', '')
-                })
-                logger.info(f"  ✅ Найден снимок: {frame} (описание содержит '{village_name}')")
+        for frame, villages in self.villages_by_frame.items():
+            for village in villages:
+                if village_lower in village.lower():
+                    results.append({
+                        'frame': frame,
+                        'description': self.get_photo_details(frame),
+                        'villages': villages
+                    })
+                    logger.info(f"  ✅ Найден снимок: {frame} (содержит деревню {village})")
+                    break
         
         logger.info(f"📊 Найдено {len(results)} снимков для деревни '{village_name}'")
         return results
     
     def search_by_coordinates(self, lat: float, lon: float, tolerance_km: float = 5.0) -> List[Dict]:
-        """Поиск снимков по координатам"""
+        """Поиск снимков по координатам (в описании или по деревням)"""
         if not self.catalog:
             return []
         
         results = []
-        tolerance_deg = tolerance_km / 111.0
         
         logger.info(f"🔍 ПОИСК снимков по координатам: {lat}, {lon} (точность ±{tolerance_km} км)")
         
         for item in self.catalog:
-            description = item.get('description', '')
             frame = item['frame']
+            description = item.get('description', '')
             
+            # Поиск координат в описании
             coords_found = self._extract_coordinates_from_text(description)
             
             for desc_lat, desc_lon in coords_found:
@@ -200,6 +266,7 @@ class AFSCatalog:
                     results.append({
                         'frame': frame,
                         'description': description,
+                        'villages': self.villages_by_frame.get(frame, []),
                         'distance_km': round(distance, 2)
                     })
                     logger.info(f"  ✅ Найден снимок: {frame} (расстояние {distance:.2f} км)")
@@ -223,7 +290,8 @@ class AFSCatalog:
             if frame_lower in frame.lower():
                 results.append({
                     'frame': frame,
-                    'description': item.get('description', '')
+                    'description': item.get('description', ''),
+                    'villages': self.villages_by_frame.get(frame, [])
                 })
                 logger.info(f"  ✅ Найден снимок: {frame}")
         
@@ -266,30 +334,6 @@ class AFSCatalog:
             except:
                 pass
         
-        # Формат: 56°13'41″ N 34°08'10″ E
-        dms_lat_pattern = r'(\d+)°(\d+)′([\d.]+)″\s*([NS])'
-        dms_lon_pattern = r'(\d+)°(\d+)′([\d.]+)″\s*([EW])'
-        
-        lat_match = re.search(dms_lat_pattern, text, re.IGNORECASE)
-        lon_match = re.search(dms_lon_pattern, text, re.IGNORECASE)
-        
-        if lat_match and lon_match:
-            try:
-                lat_deg, lat_min, lat_sec, lat_dir = lat_match.groups()
-                lon_deg, lon_min, lon_sec, lon_dir = lon_match.groups()
-                
-                lat = float(lat_deg) + float(lat_min)/60 + float(lat_sec)/3600
-                lon = float(lon_deg) + float(lon_min)/60 + float(lon_sec)/3600
-                
-                if lat_dir.upper() == 'S':
-                    lat = -lat
-                if lon_dir.upper() == 'W':
-                    lon = -lon
-                
-                coords.append((lat, lon))
-            except:
-                pass
-        
         return coords
     
     def _haversine_distance(self, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -315,6 +359,7 @@ class AFSCatalog:
         """Очищает каталог"""
         removed = len(self.catalog)
         self.catalog = []
+        self.villages_by_frame = {}
         self._save()
         logger.info(f"🗑️ Каталог АФС очищен, удалено {removed} снимков")
         return removed
