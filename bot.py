@@ -36,7 +36,7 @@ async def main():
     # Инициализация сервисов
     yd_client = YandexDiskClient(YANDEX_DISK_TOKEN)
     village_db = VillageDatabase()
-    afs_catalog = AFSCatalog()               # ← единый экземпляр
+    afs_catalog = AFSCatalog()               # единый экземпляр
     kml_catalog = KMLCatalog()
     photos_db = PhotosDatabase(yd_client, village_db, afs_catalog)
     kml_processor = KMLProcessor(village_db, photos_db)
@@ -44,8 +44,8 @@ async def main():
     # Регистрация обработчиков с передачей afs_catalog
     register_start_handlers(dp)
     register_search_handlers(dp, photos_db, village_db)
-    register_kml_handlers(dp, kml_processor, village_db, photos_db, afs_catalog)   # передаём afs_catalog
-    register_settings_handlers(dp, village_db, photos_db, afs_catalog)             # передаём afs_catalog
+    register_kml_handlers(dp, kml_processor, village_db, photos_db, afs_catalog)
+    register_settings_handlers(dp, village_db, photos_db, afs_catalog)
     register_callbacks(dp, village_db, photos_db)
     
     try:
