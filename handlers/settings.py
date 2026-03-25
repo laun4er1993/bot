@@ -55,6 +55,43 @@ def register_settings_handlers(dp, village_db):
         )
         await safe_answer_callback(callback)
     
+    # ========== ОБРАБОТКА KML ИЗ МЕНЮ НАСТРОЕК ==========
+    
+    @dp.callback_query(lambda c: c.data == "process_kml_menu")
+    async def process_kml_menu_handler(callback: types.CallbackQuery, state: FSMContext):
+        """Обработка KML файла из меню настроек"""
+        if not village_db.villages:
+            await safe_edit_text(
+                callback.message,
+                "❌ <b>Невозможно обработать KML файл</b>\n\n"
+                "Каталог населенных пунктов пуст.\n\n"
+                "Пожалуйста, сначала загрузите населенные пункты:\n"
+                "• через ⚙️ НАСТРОЙКА → ЗАГРУЗКА НП → 📤 Загрузить каталог (TXT)\n"
+                "• или через ⚙️ НАСТРОЙКА → ЗАГРУЗКА НП → 🌐 Загрузить из интернета",
+                parse_mode="HTML",
+                reply_markup=back_keyboard()
+            )
+            await safe_answer_callback(callback)
+            return
+        
+        method_text = "пересечение (точки на границе)" if KML_USE_INTERSECTS else "строгое вхождение"
+        await safe_edit_text(
+            callback.message,
+            f"📤 <b>Загрузите KML файл</b>\n\n"
+            f"Отправьте мне KML файл с каталогом снимков.\n"
+            f"После загрузки я:\n"
+            f"• Найду населенные пункты в каждом кадре\n"
+            f"• Добавлю полные описания снимков из базы данных\n"
+            f"• Создам подробный TXT отчет со статистикой\n\n"
+            f"📌 <b>Параметры обработки:</b>\n"
+            f"• Буфер: {KML_MARGIN_M} м\n"
+            f"• Метод проверки: {method_text}\n\n"
+            f"<i>Файл должен содержать Placemark с названиями Frame-XXX</i>",
+            parse_mode="HTML"
+        )
+        await state.set_state(SearchStates.waiting_for_kml)
+        await safe_answer_callback(callback)
+    
     # ========== УПРАВЛЕНИЕ KML ==========
     
     @dp.callback_query(lambda c: c.data == "kml_management_menu")
@@ -172,7 +209,6 @@ def register_settings_handlers(dp, village_db):
                 tmp_path = tmp.name
                 original_filename = message.document.file_name
             
-            # Добавляем KML файл в каталог
             stats = kml_catalog.add_kml_from_file(tmp_path, original_filename)
             
             os.unlink(tmp_path)
