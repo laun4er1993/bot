@@ -1051,13 +1051,14 @@ def register_settings_handlers(dp, village_db, photos_db):
     
     @dp.callback_query(lambda c: c.data == "show_more_districts")
     async def show_more_districts(callback: types.CallbackQuery):
+        # Этот обработчик больше не используется, но оставлен для обратной совместимости
         await safe_edit_text(
             callback.message,
             "🌐 <b>Выберите район для загрузки</b>\n\n"
             f"Всего доступно районов: {len(AVAILABLE_DISTRICTS)}\n"
             f"Выберите из списка ниже:",
             parse_mode="HTML",
-            reply_markup=get_more_districts_keyboard()
+            reply_markup=get_district_keyboard()
         )
         await safe_answer_callback(callback)
     
