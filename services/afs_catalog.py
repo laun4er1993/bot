@@ -74,6 +74,8 @@ class AFSCatalog:
         
         existing_frames = {item['frame'] for item in self.catalog}
         
+        logger.info(f"📁 СОЗДАНИЕ КАТАЛОГА АФС из {len(results)} снимков")
+        
         for result in results:
             frame = result.get('photo_num', '')
             description = result.get('description', '')
@@ -85,6 +87,7 @@ class AFSCatalog:
             
             if frame in existing_frames:
                 stats['duplicates'] += 1
+                logger.info(f"  ⚠️ Снимок {frame} уже существует, пропущен")
                 continue
             
             self.catalog.append({
@@ -93,9 +96,12 @@ class AFSCatalog:
             })
             stats['added'] += 1
             existing_frames.add(frame)
+            logger.info(f"  ✅ Добавлен снимок: {frame} (описание: {description[:50] if description else 'нет'})")
         
         stats['total'] = len(self.catalog)
         self._save()
+        
+        logger.info(f"✅ Создание каталога АФС завершено: добавлено {stats['added']}, пропущено {stats['duplicates']}")
         
         return stats
     
@@ -104,6 +110,8 @@ class AFSCatalog:
         stats = {'added': 0, 'updated': 0, 'duplicates': 0, 'total': 0}
         
         existing = {item['frame']: item for item in self.catalog}
+        
+        logger.info(f"📁 ДОПОЛНЕНИЕ КАТАЛОГА АФС из {len(results)} снимков")
         
         for result in results:
             frame = result.get('photo_num', '')
@@ -118,17 +126,23 @@ class AFSCatalog:
                 if existing[frame].get('description', '') != description and description:
                     existing[frame]['description'] = description
                     stats['updated'] += 1
+                    logger.info(f"  🔄 Обновлено описание для {frame}")
                 else:
                     stats['duplicates'] += 1
+                    logger.info(f"  ⚠️ Снимок {frame} уже существует, пропущен")
             else:
                 self.catalog.append({
                     'frame': frame,
                     'description': description
                 })
                 stats['added'] += 1
+                existing[frame] = self.catalog[-1]
+                logger.info(f"  ✅ Добавлен снимок: {frame} (описание: {description[:50] if description else 'нет'})")
         
         stats['total'] = len(self.catalog)
         self._save()
+        
+        logger.info(f"✅ Дополнение каталога АФС завершено: добавлено {stats['added']}, обновлено {stats['updated']}, пропущено {stats['duplicates']}")
         
         return stats
     
@@ -136,6 +150,8 @@ class AFSCatalog:
         """Заменяет существующий каталог новыми данными"""
         old_count = len(self.catalog)
         self.catalog = []
+        
+        logger.info(f"📁 ЗАМЕНА КАТАЛОГА АФС: {old_count} старых -> {len(results)} новых")
         
         for result in results:
             frame = result.get('photo_num', '')
@@ -148,6 +164,7 @@ class AFSCatalog:
                     'frame': frame,
                     'description': description
                 })
+                logger.info(f"  ✅ Добавлен снимок: {frame}")
         
         stats = {
             'added': len(self.catalog),
@@ -157,6 +174,8 @@ class AFSCatalog:
         
         self._save()
         
+        logger.info(f"✅ Замена каталога АФС завершено: добавлено {stats['added']}, удалено {stats['removed']}")
+        
         return stats
     
     def merge_with_catalog(self, new_catalog: List[Dict]) -> Dict:
@@ -164,6 +183,8 @@ class AFSCatalog:
         stats = {'added': 0, 'updated': 0, 'duplicates': 0, 'total': 0}
         
         existing = {item['frame']: item for item in self.catalog}
+        
+        logger.info(f"📁 СЛИЯНИЕ КАТАЛОГОВ АФС: текущий {len(self.catalog)}, добавляется {len(new_catalog)}")
         
         for item in new_catalog:
             frame = item.get('frame', '')
@@ -178,6 +199,7 @@ class AFSCatalog:
                 if existing[frame].get('description', '') != description and description:
                     existing[frame]['description'] = description
                     stats['updated'] += 1
+                    logger.info(f"  🔄 Обновлено описание для {frame}")
                 else:
                     stats['duplicates'] += 1
             else:
@@ -186,9 +208,13 @@ class AFSCatalog:
                     'description': description
                 })
                 stats['added'] += 1
+                existing[frame] = self.catalog[-1]
+                logger.info(f"  ✅ Добавлен снимок: {frame}")
         
         stats['total'] = len(self.catalog)
         self._save()
+        
+        logger.info(f"✅ Слияние каталогов АФС завершено: добавлено {stats['added']}, обновлено {stats['updated']}")
         
         return stats
     
@@ -221,6 +247,8 @@ class AFSCatalog:
                         'current': current_desc[:100],
                         'other': other_desc[:100]
                     })
+        
+        logger.info(f"📊 Сравнение каталогов: новые {len(diff['new'])}, отсутствуют {len(diff['missing'])}, различаются {len(diff['different'])}")
         
         return diff
     
@@ -293,6 +321,7 @@ class AFSCatalog:
         removed = len(self.catalog)
         self.catalog = []
         self._save()
+        logger.info(f"🗑️ Каталог АФС очищен, удалено {removed} снимков")
         return removed
     
     def is_empty(self) -> bool:
