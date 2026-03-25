@@ -24,15 +24,36 @@ def register_search_handlers(dp, db, village_db):
     
     @dp.message(F.text == "📋 СПИСОК ДЕРЕВЕНЬ")
     async def menu_villages(message: types.Message):
-        villages = db.get_all_villages_list()
+        villages = village_db.villages  # Получаем все населенные пункты из базы
+        
         if not villages:
             await message.answer("📭 Список деревень пуст. Добавьте населенные пункты через ⚙️ НАСТРОЙКА → ЗАГРУЗКА НП")
             return
         
-        chunks = [villages[i:i+25] for i in range(0, len(villages), 25)]
+        # Сортируем по названию
+        villages_sorted = sorted(villages, key=lambda x: x['name'])
+        
+        # Разбиваем на порции по 25 записей
+        chunks = [villages_sorted[i:i+25] for i in range(0, len(villages_sorted), 25)]
+        
         for i, chunk in enumerate(chunks):
-            text = f"📋 <b>Все деревни ({len(villages)} шт.):</b>\n\n" if i == 0 else ""
-            text += "\n".join([f"• {v}" for v in chunk])
+            text = f"📋 <b>Все населенные пункты ({len(villages_sorted)} шт.):</b>\n\n" if i == 0 else ""
+            for v in chunk:
+                name = v['name']
+                village_type = v.get('type', 'деревня')
+                lat = v.get('lat', '')
+                lon = v.get('lon', '')
+                district = v.get('district', '')
+                
+                if lat and lon:
+                    coords = f"📍 {lat}, {lon}"
+                else:
+                    coords = "📍 координаты не указаны"
+                
+                text += f"• <b>{name}</b> ({village_type})\n"
+                text += f"  {coords}\n"
+                text += f"  🏠 Район: {district}\n\n"
+            
             await message.answer(text, parse_mode="HTML")
         
         await message.answer(
