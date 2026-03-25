@@ -26,93 +26,54 @@ class PhotosDatabase:
         self._log_stats()
     
     def _load_photo_files(self):
-        """Загружает информацию о файлах снимков с Яндекс.Диска"""
         if not self.yd_client.check_root_access():
             return
         
         logger.info("🔍 ПОИСК ФАЙЛОВ НА ЯНДЕКС.ДИСКЕ")
-        logger.info("=" * 50)
         
         all_photos = [item['frame'] for item in self.afs_catalog.catalog]
-        logger.info(f"📊 Найдено {len(all_photos)} снимков в каталоге АФС")
-        
         found_count = 0
+        
         for photo in all_photos:
             parts = photo.split('-')
             if len(parts) >= 3:
-                logger.info(f"  🔍 Обработка снимка: {photo}")
                 files = self.yd_client.find_map_files(parts[0], parts[1], parts[2])
                 if files['mbtiles'] or files['kmz']:
                     self.photo_files[photo] = files
                     found_count += 1
-                    logger.info(f"  ✅ Найдены файлы для {photo}")
-                else:
-                    logger.warning(f"  ❌ Файлы не найдены для {photo}")
         
-        logger.info("=" * 50)
-        logger.info(f"✅ ЗАГРУЗКА ЗАВЕРШЕНА: найдено {found_count} снимков с файлами")
+        logger.info(f"✅ Найдено {found_count} снимков с файлами")
     
     def _log_stats(self):
-        logger.info(f"📊 СТАТИСТИКА:")
-        logger.info(f"   • Снимков в каталоге АФС: {len(self.afs_catalog.catalog)}")
-        logger.info(f"   • Снимков с файлами: {len(self.photo_files)}")
+        logger.info(f"📊 Снимков в АФС: {len(self.afs_catalog.catalog)}, с файлами: {len(self.photo_files)}")
     
     def find_files_for_photo(self, photo_num: str) -> Dict[str, List[Dict]]:
         """Поиск файлов для конкретного снимка на Яндекс.Диске"""
-        logger.info(f"🔍 Поиск файлов для снимка {photo_num}")
-        
         parts = photo_num.split('-')
         if len(parts) >= 3:
-            square = parts[0]
-            overlay = parts[1]
-            frame = parts[2]
-            
-            files = self.yd_client.find_map_files(square, overlay, frame)
-            
+            files = self.yd_client.find_map_files(parts[0], parts[1], parts[2])
             if files['mbtiles'] or files['kmz']:
                 self.photo_files[photo_num] = files
-                logger.info(f"  ✅ Найдены файлы для {photo_num}: MBTILES={len(files['mbtiles'])}, KMZ={len(files['kmz'])}")
                 return files
-            else:
-                logger.warning(f"  ❌ Файлы не найдены для {photo_num}")
-                return {'mbtiles': [], 'kmz': []}
-        
         return {'mbtiles': [], 'kmz': []}
     
     def refresh_all_photo_links(self) -> Dict:
-        """
-        Обновляет ссылки для всех снимков в каталоге АФС.
-        Вызывается после сохранения каталога АФС.
-        """
-        logger.info("🔄 МАССОВОЕ ОБНОВЛЕНИЕ ССЫЛОК ДЛЯ ВСЕХ СНИМКОВ")
-        
-        stats = {'total': 0, 'found': 0, 'not_found': 0, 'errors': 0}
+        """Обновляет ссылки для всех снимков в каталоге АФС"""
+        stats = {'total': 0, 'found': 0, 'not_found': 0}
         
         for item in self.afs_catalog.catalog:
             photo_num = item['frame']
             stats['total'] += 1
             
-            logger.info(f"  [{stats['total']}] Проверка снимка: {photo_num}")
+            if photo_num in self.photo_files and (self.photo_files[photo_num].get('mbtiles') or self.photo_files[photo_num].get('kmz')):
+                stats['found'] += 1
+                continue
             
-            # Проверяем, есть ли уже файлы в кэше
-            if photo_num in self.photo_files:
-                existing = self.photo_files[photo_num]
-                if existing.get('mbtiles') or existing.get('kmz'):
-                    logger.info(f"    ✅ Уже есть ссылки в кэше")
-                    stats['found'] += 1
-                    continue
-            
-            # Ищем файлы на Яндекс.Диске
             files = self.find_files_for_photo(photo_num)
-            
             if files.get('mbtiles') or files.get('kmz'):
                 stats['found'] += 1
-                logger.info(f"    ✅ Найдены ссылки: MBTILES={len(files['mbtiles'])}, KMZ={len(files['kmz'])}")
             else:
                 stats['not_found'] += 1
-                logger.warning(f"    ❌ Файлы не найдены")
-        
-        logger.info(f"📊 ИТОГО: обработано {stats['total']}, найдено {stats['found']}, не найдено {stats['not_found']}")
         
         return stats
     
@@ -120,114 +81,73 @@ class PhotosDatabase:
         if not query:
             return []
         
-        query_lower = query.lower().strip()
-        
-        # Поиск по названию деревни
-        villages = self.village_db.search(query_lower)
-        
+        villages = self.village_db.search(query.lower().strip())
         if not villages:
-            logger.info(f"❌ Деревня '{query}' не найдена в каталоге населенных пунктов")
             return []
-        
-        logger.info(f"🔍 ПОИСК СНИМКОВ ДЛЯ ДЕРЕВНИ: {query}")
-        logger.info(f"📍 Найдено в каталоге НП: {len(villages)} записей")
         
         all_photos = []
         seen_frames = set()
-        all_villages_found = []
         
         for village in villages:
-            village_name = village['name']
-            logger.info(f"  🔎 Обработка деревни: {village_name}")
-            
-            results = self.afs_catalog.search_by_village_name(village_name)
-            
+            results = self.afs_catalog.search_by_village_name(village['name'])
             for result in results:
                 if result['frame'] not in seen_frames:
                     all_photos.append(result['frame'])
                     seen_frames.add(result['frame'])
-                    all_villages_found.append(village_name)
-                    logger.info(f"    ✅ Найден снимок: {result['frame']}")
         
         if not all_photos:
-            logger.info(f"❌ Снимки для деревни '{query}' не найдены")
             return []
         
-        result = [{
-            'id': hash(query),
-            'villages': list(set(all_villages_found)),
-            'photos': all_photos
-        }]
+        return [{'id': hash(query), 'villages': [v['name'] for v in villages], 'photos': all_photos}]
+    
+    def _format_file_link(self, file_info: Dict, label: str) -> str:
+        """Форматирует ссылку на файл с датой изменения"""
+        version = f"версия {file_info['version']}" if file_info['version'] > 0 else ""
+        size = f"{file_info['size_mb']} МБ"
+        date = file_info.get('modified', '')
+        date_str = f" [{date}]" if date else ""
         
-        logger.info(f"📊 ИТОГО: найдено {len(all_photos)} снимков для деревни '{query}'")
-        
-        return result
+        return f"<a href='{file_info['download_link']}'>📥 {label} {version} {size}{date_str}</a>"
     
     def get_photo_details(self, photo_num: str) -> Optional[str]:
-        """
-        Возвращает полное описание снимка со ссылками на файлы и списком населенных пунктов.
-        Если файлы не найдены в кэше - выполняет поиск на Яндекс.Диске.
-        """
-        logger.info(f"📸 ЗАПРОШЕН СНИМОК: {photo_num}")
-        
-        # Получаем описание из каталога АФС
+        """Возвращает описание снимка со ссылками и списком НП"""
         details = self.afs_catalog.get_photo_details(photo_num)
         villages = self.afs_catalog.get_villages_for_frame(photo_num)
         
-        # Формируем заголовок с названием снимка
-        result_text = f"📸 <b>Снимок {photo_num}</b>\n\n"
+        # Заголовок
+        result_text = f"📸 <b>{photo_num}</b>\n\n"
         
-        # Добавляем описание (если есть)
+        # Описание
         if details and details != f"📸 Снимок {photo_num}":
             result_text += f"{details}\n\n"
         else:
-            # Если нет полного описания, добавляем базовую информацию
             parts = photo_num.split('-')
             if len(parts) >= 3:
-                result_text += f"📍 Квадрат: {parts[0]}\n"
-                result_text += f"🖼️ Налет: {parts[1]}\n"
-                result_text += f"🎞️ Кадр: {parts[2]}\n\n"
+                result_text += f"📍 Квадрат: {parts[0]}\n🖼️ Налет: {parts[1]}\n🎞️ Кадр: {parts[2]}\n\n"
         
-        # Добавляем список населенных пунктов в кадре
+        # Список НП (в спойлере)
         if villages:
-            result_text += f"📍 <b>Населенные пункты в кадре ({len(villages)}):</b>\n"
-            
-            # Показываем первые 5 деревень
-            for i, v in enumerate(villages[:5], 1):
-                result_text += f"  {i}. {v}\n"
-            
-            # Если деревень больше 5, добавляем кнопку "Показать все"
-            if len(villages) > 5:
-                result_text += f"\n  <i>... и ещё {len(villages) - 5} населенных пунктов</i>"
-                result_text += f"\n  🔽 Нажмите на снимок еще раз для просмотра всех НП"
+            result_text += f"<details>\n<summary>📍 <b>Населенные пункты в кадре ({len(villages)})</b> (▼ нажмите для раскрытия)</summary>\n\n"
+            for i, v in enumerate(villages, 1):
+                result_text += f"{i}. {v}\n"
+            result_text += f"\n</details>\n\n"
         else:
-            result_text += f"📍 <b>Населенные пункты в кадре:</b>\n"
-            result_text += f"  ℹ️ Нет данных о населенных пунктах в этом кадре\n"
+            result_text += f"📍 <b>Населенные пункты:</b> ℹ️ Нет данных\n\n"
         
-        # ПРОВЕРЯЕМ: если файлов нет в кэше, ищем на Яндекс.Диске
+        # Ссылки на файлы
         files = self.photo_files.get(photo_num)
         if not files or (not files.get('mbtiles') and not files.get('kmz')):
-            logger.info(f"  🔍 Файлы не найдены в кэше, выполняем поиск на Яндекс.Диске...")
             files = self.find_files_for_photo(photo_num)
         
         links = []
-        for file_type, label in [('mbtiles', '🗺️ Locus Maps'), ('kmz', '🌍 Google Earth KMZ')]:
+        for file_type, label in [('mbtiles', '🗺️ Locus Maps'), ('kmz', '🌍 Google Earth')]:
             for v in files.get(file_type, []):
-                version = f"версия {v['version']}" if v['version'] > 0 else ""
-                size = f"({v['size_mb']} МБ)"
-                links.append(f"<a href='{v['download_link']}'>📥 Загрузить для {label} {version} {size}</a>")
-                logger.info(f"  🔗 Найдена ссылка для {label}: версия {v['version']}, {v['size_mb']} МБ")
+                links.append(self._format_file_link(v, label))
         
         if links:
-            result_text += "\n\n📥 <b>Скачать файлы:</b>\n" + "\n".join(links)
-            logger.info(f"  ✅ Добавлено {len(links)} ссылок на скачивание")
+            result_text += "📥 <b>Скачать:</b>\n" + "\n".join(links)
         else:
-            result_text += "\n\n❌ <b>Файлы не найдены на Яндекс.Диске</b>"
-            result_text += "\n\n💡 <b>Возможные причины:</b>"
-            result_text += "\n• Снимок еще не загружен на диск"
-            result_text += "\n• Изменилась структура папок"
-            result_text += "\n• Неверный токен доступа"
-            logger.warning(f"  ❌ Файлы для снимка {photo_num} не найдены")
+            result_text += "❌ <b>Файлы не найдены</b>\n\n💡 Возможные причины:\n• Снимок не загружен на диск\n• Изменилась структура папок"
         
         return result_text
     
