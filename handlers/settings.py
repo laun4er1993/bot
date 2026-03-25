@@ -12,6 +12,7 @@ from keyboards.inline import (
     get_settings_main_keyboard, get_np_settings_keyboard, get_catalog_settings_keyboard,
     get_kml_management_keyboard, get_kml_catalog_keyboard,
     get_district_keyboard, get_delete_district_keyboard,
+    get_all_districts_keyboard,
     get_confirm_delete_district_keyboard, get_confirm_clear_all_keyboard,
     get_merge_keyboard, back_keyboard, loading_in_progress_keyboard,
     stats_back_keyboard, get_status_keyboard
