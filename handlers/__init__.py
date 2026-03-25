@@ -1,4 +1,3 @@
-# handlers/__init__.py
 from handlers.start import register_start_handlers
 from handlers.search import register_search_handlers
 from handlers.kml import register_kml_handlers
