@@ -19,12 +19,13 @@ from services.afs_catalog import AFSCatalog
 # Глобальная переменная для хранения последних результатов KML
 last_kml_results = None
 last_kml_compare_data = None
-afs_catalog = AFSCatalog()
 current_afs_page = 1
 
 
 def register_kml_handlers(dp, kml_processor, village_db, photos_db):
     global last_kml_results, last_kml_compare_data, current_afs_page
+    # Используем глобальный afs_catalog из settings или создаем новый
+    from handlers.settings import afs_catalog
     
     @dp.callback_query(lambda c: c.data == "process_kml_menu")
     async def process_kml_menu_handler(callback: types.CallbackQuery, state: FSMContext):
@@ -213,6 +214,20 @@ def register_kml_handlers(dp, kml_processor, village_db, photos_db):
         # Создаем каталог из ВСЕХ результатов (включая снимки без НП)
         stats = afs_catalog.create_from_kml_results(enriched_results, frames_without_np)
         
+        # Сохраняем каталог в файл (это уже делает create_from_kml_results)
+        # Но дополнительно перезагружаем его, чтобы убедиться, что данные сохранились
+        afs_catalog._load()  # Перезагружаем каталог
+        
+        # Выводим статистику для проверки
+        logger.info(f"📊 ПРОВЕРКА ПОСЛЕ СОЗДАНИЯ:")
+        logger.info(f"   Всего снимков в каталоге: {len(afs_catalog.catalog)}")
+        logger.info(f"   Снимков со связями: {len(afs_catalog.villages_by_frame)}")
+        logger.info(f"   Всего связей: {sum(len(v) for v in afs_catalog.villages_by_frame.values())}")
+        
+        # Выводим первые 5 снимков для проверки
+        for i, (frame, villages) in enumerate(list(afs_catalog.villages_by_frame.items())[:5]):
+            logger.info(f"   {i+1}. {frame}: {len(villages)} деревень, первые 3: {villages[:3]}")
+        
         await callback.message.answer(
             f"✅ <b>Каталог АФС создан!</b>\n\n"
             f"📊 <b>Статистика:</b>\n"
@@ -243,7 +258,6 @@ def register_kml_handlers(dp, kml_processor, village_db, photos_db):
         results = last_kml_results['results']
         frames_without_np = last_kml_results['frames_without_np']
         
-        # Обогащаем результаты списками деревень
         enriched_results = []
         for result in results:
             enriched_results.append({
@@ -284,7 +298,6 @@ def register_kml_handlers(dp, kml_processor, village_db, photos_db):
         results = last_kml_results['results']
         frames_without_np = last_kml_results['frames_without_np']
         
-        # Обогащаем результаты списками деревень
         enriched_results = []
         for result in results:
             enriched_results.append({
@@ -452,7 +465,6 @@ def register_kml_handlers(dp, kml_processor, village_db, photos_db):
             await callback.answer()
             return
         
-        # Создаем временный каталог из KML результатов
         kml_catalog = []
         for result in last_kml_results['results']:
             kml_catalog.append({
