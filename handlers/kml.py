@@ -4,7 +4,7 @@ import time
 import tempfile
 from aiogram import types, F
 from aiogram.fsm.context import FSMContext
-from aiogram.types import BufferedInputFile
+from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, InlineKeyboardButton
 
 from states.states import SearchStates
 from keyboards.inline import (
@@ -14,12 +14,10 @@ from keyboards.inline import (
 )
 from utils.helpers import safe_delete_message, safe_edit_text, safe_answer_callback
 from config import logger, KML_MARGIN_M, KML_USE_INTERSECTS
-from services.afs_catalog import AFSCatalog
 
 # Глобальная переменная для хранения последних результатов KML
 last_kml_results = None
 last_kml_compare_data = None
-afs_catalog = AFSCatalog()
 current_afs_page = 1
 
 
@@ -201,7 +199,6 @@ def register_kml_handlers(dp, kml_processor, village_db, photos_db, afs_catalog)
         results = last_kml_results['results']
         frames_without_np = last_kml_results['frames_without_np']
         
-        # Обогащаем результаты списками деревень
         enriched_results = []
         for result in results:
             enriched_results.append({
@@ -213,7 +210,6 @@ def register_kml_handlers(dp, kml_processor, village_db, photos_db, afs_catalog)
             if result.get('villages'):
                 logger.info(f"      Деревни: {', '.join(result['villages'][:10])}")
         
-        # Создаем каталог из ВСЕХ результатов
         stats = afs_catalog.create_from_kml_results(enriched_results, frames_without_np)
         
         # Проверяем, что деревни сохранились
@@ -221,7 +217,6 @@ def register_kml_handlers(dp, kml_processor, village_db, photos_db, afs_catalog)
         logger.info(f"   Всего снимков: {len(afs_catalog.catalog)}")
         logger.info(f"   Снимков со связями: {len(afs_catalog.villages_by_frame)}")
         
-        # Выводим первые 5 снимков со связями для проверки
         for i, (frame, villages) in enumerate(list(afs_catalog.villages_by_frame.items())[:5]):
             logger.info(f"   {i+1}. {frame}: {len(villages)} деревень")
             if villages:
