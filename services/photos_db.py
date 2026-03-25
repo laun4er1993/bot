@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 class PhotosDatabase:
+    """База данных аэрофотоснимков - использует каталог АФС и Яндекс.Диск"""
     
     def __init__(self, yd_client: YandexDiskClient, village_db, afs_catalog):
         self.yd_client = yd_client
@@ -26,6 +27,7 @@ class PhotosDatabase:
         self._log_stats()
     
     def _load_photo_files(self):
+        """Загружает информацию о файлах снимков с Яндекс.Диска"""
         if not self.yd_client.check_root_access():
             return
         
@@ -104,24 +106,46 @@ class PhotosDatabase:
         return result
     
     def get_photo_details(self, photo_num: str) -> Optional[str]:
+        """
+        Возвращает полное описание снимка со ссылками на файлы и списком населенных пунктов.
+        """
         logger.info(f"📸 ЗАПРОШЕН СНИМОК: {photo_num}")
         
+        # Получаем описание из каталога АФС
         details = self.afs_catalog.get_photo_details(photo_num)
         villages = self.afs_catalog.get_villages_for_frame(photo_num)
         
-        if not details:
-            details = f"📸 Снимок {photo_num}"
-            logger.info(f"  ℹ️ Описание не найдено")
+        # Формируем заголовок с названием снимка
+        result_text = f"📸 <b>Снимок {photo_num}</b>\n\n"
+        
+        # Добавляем описание (если есть)
+        if details and details != f"📸 Снимок {photo_num}":
+            result_text += f"{details}\n\n"
         else:
-            logger.info(f"  ✅ Найдено описание")
+            # Если нет полного описания, добавляем базовую информацию
+            parts = photo_num.split('-')
+            if len(parts) >= 3:
+                result_text += f"📍 Квадрат: {parts[0]}\n"
+                result_text += f"🖼️ Налет: {parts[1]}\n"
+                result_text += f"🎞️ Кадр: {parts[2]}\n\n"
         
+        # Добавляем список населенных пунктов в кадре
         if villages:
-            villages_text = f"\n\n📍 <b>Населенные пункты в кадре ({len(villages)}):</b>\n" + "\n".join([f"• {v}" for v in villages[:20]])
-            if len(villages) > 20:
-                villages_text += f"\n... и ещё {len(villages)-20}"
-            details += villages_text
-            logger.info(f"  📍 Добавлено {len(villages)} населенных пунктов")
+            result_text += f"📍 <b>Населенные пункты в кадре ({len(villages)}):</b>\n"
+            
+            # Показываем первые 5 деревень
+            for i, v in enumerate(villages[:5], 1):
+                result_text += f"  {i}. {v}\n"
+            
+            # Если деревень больше 5, добавляем кнопку "Показать все"
+            if len(villages) > 5:
+                result_text += f"\n  <i>... и ещё {len(villages) - 5} населенных пунктов</i>"
+                result_text += f"\n  🔽 Нажмите на снимок еще раз для просмотра всех НП"
+        else:
+            result_text += f"📍 <b>Населенные пункты в кадре:</b>\n"
+            result_text += f"  ℹ️ Нет данных о населенных пунктах в этом кадре\n"
         
+        # Получаем ссылки на файлы с Яндекс.Диска
         files = self.photo_files.get(photo_num, {})
         links = []
         
@@ -130,16 +154,16 @@ class PhotosDatabase:
                 version = f"версия {v['version']}" if v['version'] > 0 else ""
                 size = f"({v['size_mb']} МБ)"
                 links.append(f"<a href='{v['download_link']}'>📥 Загрузить для {label} {version} {size}</a>")
-                logger.info(f"  🔗 Найдена ссылка для {label}")
+                logger.info(f"  🔗 Найдена ссылка для {label}: версия {v['version']}, {v['size_mb']} МБ")
         
         if links:
-            details += "\n\n" + "\n".join(links)
-            logger.info(f"  ✅ Добавлено {len(links)} ссылок")
+            result_text += "\n\n📥 <b>Скачать файлы:</b>\n" + "\n".join(links)
+            logger.info(f"  ✅ Добавлено {len(links)} ссылок на скачивание")
         else:
-            details += "\n\n❌ Файлы не найдены на Яндекс.Диске"
-            logger.warning(f"  ❌ Файлы не найдены")
+            result_text += "\n\n❌ <b>Файлы не найдены на Яндекс.Диске</b>"
+            logger.warning(f"  ❌ Файлы для снимка {photo_num} не найдены")
         
-        return details
+        return result_text
     
     def get_all_villages_list(self) -> List[str]:
         return sorted([v['name'] for v in self.village_db.villages])
