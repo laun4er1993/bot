@@ -26,7 +26,7 @@ def register_search_handlers(dp, db, village_db):
     async def menu_villages(message: types.Message):
         villages = db.get_all_villages_list()
         if not villages:
-            await message.answer("📭 Список деревень пуст. Добавьте населенные пункты через ⚙️ НАСТРОЙКИ")
+            await message.answer("📭 Список деревень пуст. Добавьте населенные пункты через ⚙️ НАСТРОЙКА → ЗАГРУЗКА НП")
             return
         
         chunks = [villages[i:i+25] for i in range(0, len(villages), 25)]
