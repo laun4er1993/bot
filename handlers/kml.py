@@ -13,11 +13,12 @@ from keyboards.inline import (
 )
 from utils.helpers import safe_delete_message, safe_edit_text, safe_answer_callback
 from config import logger, KML_MARGIN_M, KML_USE_INTERSECTS
-from handlers.settings import afs_catalog
+from services.afs_catalog import AFSCatalog
 
 # Глобальная переменная для хранения последних результатов KML
 last_kml_results = None
 last_kml_compare_data = None
+afs_catalog = AFSCatalog()
 current_afs_page = 1
 
 
