@@ -22,7 +22,6 @@ class PhotosDatabase:
         self.user_last_photos: Dict[int, List[str]] = {}
         self.user_last_villages: Dict[int, str] = {}
         self.user_last_query: Dict[int, str] = {}
-        self.user_last_search_type: Dict[int, str] = {}
         
         self._load_photo_files()
         self._log_stats()
@@ -88,6 +87,7 @@ class PhotosDatabase:
         
         all_photos = []
         seen_frames = set()
+        all_villages_found = []
         
         for village in villages:
             village_name = village['name']
@@ -99,15 +99,17 @@ class PhotosDatabase:
                 if result['frame'] not in seen_frames:
                     all_photos.append(result['frame'])
                     seen_frames.add(result['frame'])
-                    logger.info(f"    ✅ Найден снимок: {result['frame']}")
+                    all_villages_found.append(village_name)
+                    logger.info(f"    ✅ Найден снимок: {result['frame']} (деревня: {village_name})")
         
         if not all_photos:
             logger.info(f"❌ Снимки для деревни '{query}' не найдены")
             return []
         
+        # Группируем результаты
         result = [{
             'id': hash(query),
-            'villages': [v['name'] for v in villages],
+            'villages': list(set(all_villages_found)),
             'photos': all_photos
         }]
         
@@ -126,10 +128,13 @@ class PhotosDatabase:
             return []
         
         photos = [r['frame'] for r in results]
+        all_villages = []
+        for r in results:
+            all_villages.extend(r.get('villages', []))
         
         result = [{
             'id': hash(f"{lat}_{lon}"),
-            'villages': [f"Координаты: {lat}, {lon}"],
+            'villages': list(set(all_villages)) if all_villages else [f"Координаты: {lat}, {lon}"],
             'photos': photos,
             'distances': {r['frame']: r['distance_km'] for r in results}
         }]
@@ -149,10 +154,13 @@ class PhotosDatabase:
             return []
         
         photos = [r['frame'] for r in results]
+        all_villages = []
+        for r in results:
+            all_villages.extend(r.get('villages', []))
         
         result = [{
             'id': hash(frame_name),
-            'villages': [f"Снимок: {frame_name}"],
+            'villages': list(set(all_villages)) if all_villages else [f"Снимок: {frame_name}"],
             'photos': photos
         }]
         
@@ -165,12 +173,21 @@ class PhotosDatabase:
         logger.info(f"📸 ЗАПРОШЕН СНИМОК: {photo_num}")
         
         details = self.afs_catalog.get_photo_details(photo_num)
+        villages = self.afs_catalog.get_villages_for_frame(photo_num)
         
         if not details:
             details = f"📸 Снимок {photo_num}"
             logger.info(f"  ℹ️ Описание не найдено, используется стандартное")
         else:
             logger.info(f"  ✅ Найдено описание: {details[:100]}...")
+        
+        # Добавляем информацию о деревнях
+        if villages:
+            villages_text = f"\n\n📍 <b>Населенные пункты в кадре ({len(villages)}):</b>\n" + "\n".join([f"• {v}" for v in villages[:20]])
+            if len(villages) > 20:
+                villages_text += f"\n... и ещё {len(villages)-20}"
+            details += villages_text
+            logger.info(f"  📍 Добавлено {len(villages)} населенных пунктов")
         
         files = self.photo_files.get(photo_num, {})
         links = []
