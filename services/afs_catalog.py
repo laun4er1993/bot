@@ -1,4 +1,3 @@
-# services/afs_catalog.py
 import os
 import time
 import logging
@@ -145,6 +144,223 @@ class AFSCatalog:
         self._save()
         
         logger.info(f"✅ Создание каталога АФС завершено: добавлено {stats['added']}, с НП: {stats['with_np']}, без НП: {stats['without_np']}")
+        
+        return stats
+    
+    def add_from_kml_results(self, results: List[Dict], frames_without_np: List[Dict]) -> Dict:
+        """Дополняет каталог АФС новыми снимками из результатов KML"""
+        stats = {'added': 0, 'updated': 0, 'duplicates': 0, 'with_np': 0, 'without_np': 0, 'total': 0}
+        
+        existing_frames = {item['frame'] for item in self.catalog}
+        
+        all_frames = []
+        for result in results:
+            all_frames.append({
+                'frame': result.get('photo_num', ''),
+                'description': result.get('description', ''),
+                'villages': result.get('villages', []),
+                'has_np': True
+            })
+        
+        for frame_data in frames_without_np:
+            all_frames.append({
+                'frame': frame_data.get('frame', ''),
+                'description': frame_data.get('description', ''),
+                'villages': [],
+                'has_np': False
+            })
+        
+        logger.info(f"📁 ДОПОЛНЕНИЕ КАТАЛОГА АФС из {len(all_frames)} снимков")
+        
+        for frame_data in all_frames:
+            frame = frame_data['frame']
+            description = frame_data['description']
+            villages = frame_data['villages']
+            has_np = frame_data['has_np']
+            
+            if not frame:
+                continue
+            
+            if frame in existing_frames:
+                # Проверяем, нужно ли обновить описание
+                existing_item = next((item for item in self.catalog if item['frame'] == frame), None)
+                if existing_item and existing_item.get('description') != description and description:
+                    existing_item['description'] = description
+                    stats['updated'] += 1
+                    logger.info(f"  📝 Обновлено описание для {frame}")
+                else:
+                    stats['duplicates'] += 1
+                    logger.info(f"  ⚠️ Снимок {frame} уже существует, пропущен")
+                continue
+            
+            self.catalog.append({
+                'frame': frame,
+                'description': description
+            })
+            if villages:
+                self.villages_by_frame[frame] = villages
+            stats['added'] += 1
+            existing_frames.add(frame)
+            
+            if has_np:
+                stats['with_np'] += 1
+                logger.info(f"  ✅ Добавлен снимок с НП: {frame} ({len(villages)} деревень)")
+            else:
+                stats['without_np'] += 1
+                logger.info(f"  ✅ Добавлен снимок БЕЗ НП: {frame}")
+        
+        stats['total'] = len(self.catalog)
+        self._save()
+        
+        logger.info(f"✅ Дополнение каталога АФС завершено: добавлено {stats['added']}, обновлено {stats['updated']}")
+        
+        return stats
+    
+    def replace_with_kml_results(self, results: List[Dict], frames_without_np: List[Dict]) -> Dict:
+        """Заменяет каталог АФС новыми снимками из результатов KML"""
+        removed = len(self.catalog)
+        
+        # Очищаем текущий каталог
+        self.catalog = []
+        self.villages_by_frame = {}
+        
+        stats = {'added': 0, 'with_np': 0, 'without_np': 0, 'removed': removed, 'total': 0}
+        
+        all_frames = []
+        for result in results:
+            all_frames.append({
+                'frame': result.get('photo_num', ''),
+                'description': result.get('description', ''),
+                'villages': result.get('villages', []),
+                'has_np': True
+            })
+        
+        for frame_data in frames_without_np:
+            all_frames.append({
+                'frame': frame_data.get('frame', ''),
+                'description': frame_data.get('description', ''),
+                'villages': [],
+                'has_np': False
+            })
+        
+        logger.info(f"📁 ЗАМЕНА КАТАЛОГА АФС на {len(all_frames)} снимков")
+        
+        for frame_data in all_frames:
+            frame = frame_data['frame']
+            description = frame_data['description']
+            villages = frame_data['villages']
+            has_np = frame_data['has_np']
+            
+            if not frame:
+                continue
+            
+            self.catalog.append({
+                'frame': frame,
+                'description': description
+            })
+            if villages:
+                self.villages_by_frame[frame] = villages
+            stats['added'] += 1
+            
+            if has_np:
+                stats['with_np'] += 1
+                logger.info(f"  ✅ Добавлен снимок с НП: {frame} ({len(villages)} деревень)")
+            else:
+                stats['without_np'] += 1
+                logger.info(f"  ✅ Добавлен снимок БЕЗ НП: {frame}")
+        
+        stats['total'] = len(self.catalog)
+        self._save()
+        
+        logger.info(f"✅ Замена каталога АФС завершена: добавлено {stats['added']}, удалено {stats['removed']}")
+        
+        return stats
+    
+    def compare_with_catalog(self, other_catalog: List[Dict]) -> Dict:
+        """
+        Сравнивает текущий каталог с другим каталогом
+        Возвращает словарь с ключами: 'new', 'missing', 'different'
+        """
+        current_frames = {item['frame']: item for item in self.catalog}
+        other_frames = {item['frame']: item for item in other_catalog}
+        
+        new_frames = []
+        missing_frames = []
+        different_frames = []
+        
+        # Находим новые снимки (есть в другом, нет в текущем)
+        for frame, item in other_frames.items():
+            if frame not in current_frames:
+                new_frames.append(frame)
+        
+        # Находим отсутствующие снимки (есть в текущем, нет в другом)
+        for frame, item in current_frames.items():
+            if frame not in other_frames:
+                missing_frames.append(frame)
+        
+        # Находим снимки с разными описаниями
+        for frame, current_item in current_frames.items():
+            if frame in other_frames:
+                other_item = other_frames[frame]
+                if current_item.get('description') != other_item.get('description'):
+                    different_frames.append({
+                        'frame': frame,
+                        'current_desc': current_item.get('description', ''),
+                        'other_desc': other_item.get('description', '')
+                    })
+        
+        logger.info(f"📊 Сравнение каталогов: новые={len(new_frames)}, отсутствуют={len(missing_frames)}, различаются={len(different_frames)}")
+        
+        return {
+            'new': new_frames,
+            'missing': missing_frames,
+            'different': different_frames
+        }
+    
+    def merge_with_catalog(self, other_catalog: List[Dict]) -> Dict:
+        """
+        Объединяет текущий каталог с другим каталогом
+        Добавляет новые снимки, обновляет описания существующих
+        """
+        stats = {'added': 0, 'updated': 0, 'duplicates': 0, 'total': 0}
+        
+        existing_frames = {item['frame'] for item in self.catalog}
+        
+        logger.info(f"📁 ОБЪЕДИНЕНИЕ КАТАЛОГОВ: {len(other_catalog)} снимков для добавления")
+        
+        for item in other_catalog:
+            frame = item.get('frame', '')
+            description = item.get('description', '')
+            villages = item.get('villages', [])
+            
+            if not frame:
+                continue
+            
+            if frame in existing_frames:
+                # Обновляем описание, если оно изменилось
+                existing_item = next((i for i in self.catalog if i['frame'] == frame), None)
+                if existing_item and existing_item.get('description') != description and description:
+                    existing_item['description'] = description
+                    stats['updated'] += 1
+                    logger.info(f"  📝 Обновлено описание для {frame}")
+                else:
+                    stats['duplicates'] += 1
+                continue
+            
+            self.catalog.append({
+                'frame': frame,
+                'description': description
+            })
+            if villages:
+                self.villages_by_frame[frame] = villages
+            stats['added'] += 1
+            existing_frames.add(frame)
+            logger.info(f"  ✅ Добавлен снимок: {frame}")
+        
+        stats['total'] = len(self.catalog)
+        self._save()
+        
+        logger.info(f"✅ Объединение каталогов завершено: добавлено {stats['added']}, обновлено {stats['updated']}")
         
         return stats
     
