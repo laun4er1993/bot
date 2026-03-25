@@ -3,6 +3,7 @@ import os
 import time
 import tempfile
 import asyncio
+import shutil
 from aiogram import types, F
 from aiogram.fsm.context import FSMContext
 from aiogram.types import FSInputFile, BufferedInputFile
@@ -17,7 +18,7 @@ from keyboards.inline import (
     stats_back_keyboard, get_status_keyboard
 )
 from utils.helpers import safe_edit_text, safe_answer_callback
-from config import logger, TEMP_DIR, DATA_DIR
+from config import logger, TEMP_DIR, DATA_DIR, KML_DIR
 from api_sources import APISourceManager, AVAILABLE_DISTRICTS
 from services.afs_catalog import AFSCatalog
 from services.kml_catalog import KMLCatalog
@@ -31,7 +32,7 @@ kml_catalog = KMLCatalog()
 current_kml_page = 1
 
 
-def register_settings_handlers(dp, village_db):
+def register_settings_handlers(dp, village_db, photos_db):
     global active_download, active_download_user_id, bot_enabled, current_kml_page
     
     @dp.message(F.text == "⚙️ НАСТРОЙКА")
@@ -76,6 +77,52 @@ def register_settings_handlers(dp, village_db):
             reply_markup=get_kml_management_keyboard()
         )
         await safe_answer_callback(callback)
+    
+    @dp.callback_query(lambda c: c.data == "refresh_kml_catalog")
+    async def refresh_kml_catalog_handler(callback: types.CallbackQuery):
+        """Обновление каталога KML"""
+        await safe_edit_text(
+            callback.message,
+            "🔄 <b>Обновление каталога KML</b>\n\n"
+            "Выполняется проверка и обновление описаний из базы данных...\n"
+            "Это может занять несколько секунд.",
+            parse_mode="HTML"
+        )
+        await safe_answer_callback(callback)
+        
+        try:
+            stats = kml_catalog.refresh_catalog(photos_db)
+            
+            text = (
+                f"✅ <b>Обновление каталога KML завершено!</b>\n\n"
+                f"📊 <b>Результат:</b>\n"
+                f"• Всего файлов: {stats['total']}\n"
+                f"• Обновлено описаний: {stats['updated']}\n"
+                f"• Не найдено описаний: {stats['failed']}\n\n"
+            )
+            
+            if stats['details']:
+                text += f"📝 <b>Обновленные записи:</b>\n"
+                for detail in stats['details'][:5]:
+                    text += f"• {detail['frame']}\n"
+                if len(stats['details']) > 5:
+                    text += f"... и ещё {len(stats['details']) - 5}\n"
+            
+            await safe_edit_text(
+                callback.message,
+                text,
+                parse_mode="HTML",
+                reply_markup=get_kml_management_keyboard()
+            )
+            
+        except Exception as e:
+            logger.error(f"Ошибка обновления каталога KML: {e}")
+            await safe_edit_text(
+                callback.message,
+                f"❌ <b>Ошибка при обновлении каталога KML</b>\n\n{str(e)}",
+                parse_mode="HTML",
+                reply_markup=get_kml_management_keyboard()
+            )
     
     @dp.callback_query(lambda c: c.data == "add_kml_manual")
     async def add_kml_manual_start(callback: types.CallbackQuery, state: FSMContext):
