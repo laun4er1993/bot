@@ -23,7 +23,6 @@ def register_callbacks(dp, village_db, db):
     
     @dp.callback_query(lambda c: c.data == "catalog_settings")
     async def catalog_settings_handler(callback: types.CallbackQuery):
-        """Меню настроек каталога АФС"""
         await safe_edit_text(
             callback.message,
             "⚙️ <b>Настройки каталога АФС</b>\n\n"
@@ -45,7 +44,7 @@ def register_callbacks(dp, village_db, db):
             f"Всего доступно районов: {len(AVAILABLE_DISTRICTS)}\n"
             f"Выберите из списка ниже:",
             parse_mode="HTML",
-            reply_markup=get_more_districts_keyboard()
+            reply_markup=get_district_keyboard()
         )
         await safe_answer_callback(callback)
     
