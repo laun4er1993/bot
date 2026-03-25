@@ -9,7 +9,7 @@ def get_main_keyboard() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="🔍 ПОИСК"), KeyboardButton(text="📋 СПИСОК ДЕРЕВЕНЬ")],
             [KeyboardButton(text="📖 ИНСТРУКЦИЯ"), KeyboardButton(text="🗺️ КАРТА РЖЕВ")],
             [KeyboardButton(text="🗺️ LOCUS MAPS"), KeyboardButton(text="⚙️ НАСТРОЙКА")],
-            [KeyboardButton(text="🔄 ОБРАБОТАТЬ KML"), KeyboardButton(text="🏠 ГЛАВНОЕ МЕНЮ")]
+            [KeyboardButton(text="🏠 ГЛАВНОЕ МЕНЮ")]
         ],
         resize_keyboard=True
     )
