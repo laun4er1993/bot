@@ -7,12 +7,25 @@ from api_sources import AVAILABLE_DISTRICTS
 def get_settings_main_keyboard() -> InlineKeyboardMarkup:
     """Главное меню настроек"""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔄 ОБРАБОТАТЬ KML", callback_data="process_kml_menu")],
+        [InlineKeyboardButton(text="🔄 УПРАВЛЕНИЕ KML", callback_data="kml_management_menu")],
         [InlineKeyboardButton(text="📥 ЗАГРУЗКА НП", callback_data="np_settings_menu")],
-        [InlineKeyboardButton(text="📁 НАСТРОЙКА КАТАЛОГА", callback_data="catalog_settings_menu")],
+        [InlineKeyboardButton(text="📁 УПРАВЛЕНИЕ АФС", callback_data="catalog_settings_menu")],
         [InlineKeyboardButton(text="🔧 ПРОВЕРКА РАБОТОСПОСОБНОСТИ", callback_data="check_bot_status")],
         [InlineKeyboardButton(text="🔛 ВКЛЮЧИТЬ БОТА", callback_data="enable_bot")],
         [InlineKeyboardButton(text="🏠 ГЛАВНОЕ МЕНЮ", callback_data="back_to_main")]
+    ])
+
+
+def get_kml_management_keyboard() -> InlineKeyboardMarkup:
+    """Меню управления KML"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📝 Добавить KML вручную", callback_data="add_kml_manual")],
+        [InlineKeyboardButton(text="📤 Загрузить каталог KML", callback_data="load_kml_catalog")],
+        [InlineKeyboardButton(text="📊 Статистика KML", callback_data="kml_stats")],
+        [InlineKeyboardButton(text="📋 Показать каталог KML", callback_data="show_kml_catalog")],
+        [InlineKeyboardButton(text="📥 Скачать каталог KML (TXT)", callback_data="download_kml_catalog")],
+        [InlineKeyboardButton(text="🗑️ Очистить каталог KML", callback_data="clear_kml_catalog")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_settings_main")]
     ])
 
 
@@ -51,9 +64,30 @@ def get_kml_result_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🔄 Заменить каталог АФС", callback_data="replace_afs_catalog")],
         [InlineKeyboardButton(text="📋 Показать каталог АФС", callback_data="show_afs_catalog")],
         [InlineKeyboardButton(text="⚙️ Настройки АФС", callback_data="catalog_settings_menu")],
-        [InlineKeyboardButton(text="🔄 Обработать другой KML", callback_data="process_kml_menu")],
+        [InlineKeyboardButton(text="🔄 Обработать другой KML", callback_data="kml_management_menu")],
         [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_main")]
     ])
+
+
+def get_kml_catalog_keyboard(has_catalog: bool = False, page: int = 1, total_pages: int = 1) -> InlineKeyboardMarkup:
+    """Клавиатура для просмотра каталога KML"""
+    keyboard = []
+    
+    if total_pages > 1:
+        nav_buttons = []
+        if page > 1:
+            nav_buttons.append(InlineKeyboardButton(text="◀️ Назад", callback_data=f"kml_page_{page-1}"))
+        if page < total_pages:
+            nav_buttons.append(InlineKeyboardButton(text="Вперед ▶️", callback_data=f"kml_page_{page+1}"))
+        if nav_buttons:
+            keyboard.append(nav_buttons)
+    
+    if has_catalog:
+        keyboard.append([InlineKeyboardButton(text="⚙️ Управление KML", callback_data="kml_management_menu")])
+    
+    keyboard.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_main")])
+    
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
 def get_afs_catalog_keyboard(has_catalog: bool = False, page: int = 1, total_pages: int = 1) -> InlineKeyboardMarkup:
@@ -88,7 +122,7 @@ def get_afs_compare_keyboard() -> InlineKeyboardMarkup:
 
 
 def get_afs_catalog_load_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура для загрузки общего каталога"""
+    """Клавиатура для загрузки общего каталога АФС"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="➕ Дополнить существующий", callback_data="afs_merge_common")],
         [InlineKeyboardButton(text="🔄 Заменить существующий", callback_data="afs_replace_common")],
@@ -249,7 +283,7 @@ def photo_details_keyboard() -> InlineKeyboardMarkup:
 def process_kml_again_keyboard() -> InlineKeyboardMarkup:
     """Клавиатура для повторной обработки KML"""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔄 Обработать другой KML", callback_data="process_kml_menu")]
+        [InlineKeyboardButton(text="🔄 Обработать другой KML", callback_data="kml_management_menu")]
     ])
 
 
