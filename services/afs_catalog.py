@@ -68,19 +68,45 @@ class AFSCatalog:
         except Exception as e:
             logger.error(f"❌ Ошибка сохранения каталога АФС: {e}")
     
-    def create_from_kml_results(self, results: List[Dict]) -> Dict:
-        """Создает каталог АФС из результатов обработки KML"""
-        stats = {'added': 0, 'duplicates': 0, 'total': 0}
+    def create_from_kml_results(self, results: List[Dict], frames_without_np: List[Dict]) -> Dict:
+        """
+        Создает каталог АФС из ВСЕХ результатов обработки KML
+        (включая снимки без населенных пунктов)
+        
+        Args:
+            results: список снимков с населенными пунктами
+            frames_without_np: список снимков без населенных пунктов
+        
+        Returns:
+            словарь со статистикой
+        """
+        stats = {'added': 0, 'duplicates': 0, 'total': 0, 'with_np': 0, 'without_np': 0}
         
         existing_frames = {item['frame'] for item in self.catalog}
         
-        logger.info(f"📁 СОЗДАНИЕ КАТАЛОГА АФС из {len(results)} снимков")
-        
+        # Собираем все снимки из results (с НП)
+        all_frames = []
         for result in results:
-            frame = result.get('photo_num', '')
-            description = result.get('description', '')
-            if description is None:
-                description = ''
+            all_frames.append({
+                'frame': result.get('photo_num', ''),
+                'description': result.get('description', ''),
+                'has_np': True
+            })
+        
+        # Добавляем снимки без НП
+        for frame_data in frames_without_np:
+            all_frames.append({
+                'frame': frame_data.get('frame', ''),
+                'description': frame_data.get('description', ''),
+                'has_np': False
+            })
+        
+        logger.info(f"📁 СОЗДАНИЕ КАТАЛОГА АФС из {len(all_frames)} снимков (с НП: {len(results)}, без НП: {len(frames_without_np)})")
+        
+        for frame_data in all_frames:
+            frame = frame_data['frame']
+            description = frame_data['description']
+            has_np = frame_data['has_np']
             
             if not frame:
                 continue
@@ -96,28 +122,50 @@ class AFSCatalog:
             })
             stats['added'] += 1
             existing_frames.add(frame)
-            logger.info(f"  ✅ Добавлен снимок: {frame} (описание: {description[:50] if description else 'нет'})")
+            
+            if has_np:
+                stats['with_np'] += 1
+                logger.info(f"  ✅ Добавлен снимок с НП: {frame} (описание: {description[:50] if description else 'нет'})")
+            else:
+                stats['without_np'] += 1
+                logger.info(f"  ✅ Добавлен снимок БЕЗ НП: {frame} (описание: {description[:50] if description else 'нет'})")
         
         stats['total'] = len(self.catalog)
         self._save()
         
-        logger.info(f"✅ Создание каталога АФС завершено: добавлено {stats['added']}, пропущено {stats['duplicates']}")
+        logger.info(f"✅ Создание каталога АФС завершено: добавлено {stats['added']}, из них с НП: {stats['with_np']}, без НП: {stats['without_np']}, пропущено дубликатов: {stats['duplicates']}")
         
         return stats
     
-    def add_from_kml_results(self, results: List[Dict]) -> Dict:
-        """Дополняет существующий каталог из результатов обработки KML"""
-        stats = {'added': 0, 'updated': 0, 'duplicates': 0, 'total': 0}
+    def add_from_kml_results(self, results: List[Dict], frames_without_np: List[Dict]) -> Dict:
+        """Дополняет существующий каталог из ВСЕХ результатов обработки KML"""
+        stats = {'added': 0, 'updated': 0, 'duplicates': 0, 'total': 0, 'with_np': 0, 'without_np': 0}
         
         existing = {item['frame']: item for item in self.catalog}
         
-        logger.info(f"📁 ДОПОЛНЕНИЕ КАТАЛОГА АФС из {len(results)} снимков")
-        
+        # Собираем все снимки из results (с НП)
+        all_frames = []
         for result in results:
-            frame = result.get('photo_num', '')
-            description = result.get('description', '')
-            if description is None:
-                description = ''
+            all_frames.append({
+                'frame': result.get('photo_num', ''),
+                'description': result.get('description', ''),
+                'has_np': True
+            })
+        
+        # Добавляем снимки без НП
+        for frame_data in frames_without_np:
+            all_frames.append({
+                'frame': frame_data.get('frame', ''),
+                'description': frame_data.get('description', ''),
+                'has_np': False
+            })
+        
+        logger.info(f"📁 ДОПОЛНЕНИЕ КАТАЛОГА АФС из {len(all_frames)} снимков (с НП: {len(results)}, без НП: {len(frames_without_np)})")
+        
+        for frame_data in all_frames:
+            frame = frame_data['frame']
+            description = frame_data['description']
+            has_np = frame_data['has_np']
             
             if not frame:
                 continue
@@ -137,7 +185,13 @@ class AFSCatalog:
                 })
                 stats['added'] += 1
                 existing[frame] = self.catalog[-1]
-                logger.info(f"  ✅ Добавлен снимок: {frame} (описание: {description[:50] if description else 'нет'})")
+                
+                if has_np:
+                    stats['with_np'] += 1
+                    logger.info(f"  ✅ Добавлен снимок с НП: {frame}")
+                else:
+                    stats['without_np'] += 1
+                    logger.info(f"  ✅ Добавлен снимок БЕЗ НП: {frame}")
         
         stats['total'] = len(self.catalog)
         self._save()
@@ -146,37 +200,62 @@ class AFSCatalog:
         
         return stats
     
-    def replace_with_kml_results(self, results: List[Dict]) -> Dict:
-        """Заменяет существующий каталог новыми данными"""
+    def replace_with_kml_results(self, results: List[Dict], frames_without_np: List[Dict]) -> Dict:
+        """Заменяет существующий каталог новыми данными из ВСЕХ результатов KML"""
         old_count = len(self.catalog)
         self.catalog = []
         
-        logger.info(f"📁 ЗАМЕНА КАТАЛОГА АФС: {old_count} старых -> {len(results)} новых")
-        
+        # Собираем все снимки из results (с НП)
+        all_frames = []
         for result in results:
-            frame = result.get('photo_num', '')
-            description = result.get('description', '')
-            if description is None:
-                description = ''
+            all_frames.append({
+                'frame': result.get('photo_num', ''),
+                'description': result.get('description', ''),
+                'has_np': True
+            })
+        
+        # Добавляем снимки без НП
+        for frame_data in frames_without_np:
+            all_frames.append({
+                'frame': frame_data.get('frame', ''),
+                'description': frame_data.get('description', ''),
+                'has_np': False
+            })
+        
+        logger.info(f"📁 ЗАМЕНА КАТАЛОГА АФС: {old_count} старых -> {len(all_frames)} новых")
+        
+        stats = {'with_np': 0, 'without_np': 0}
+        
+        for frame_data in all_frames:
+            frame = frame_data['frame']
+            description = frame_data['description']
+            has_np = frame_data['has_np']
             
             if frame:
                 self.catalog.append({
                     'frame': frame,
                     'description': description
                 })
-                logger.info(f"  ✅ Добавлен снимок: {frame}")
+                if has_np:
+                    stats['with_np'] += 1
+                    logger.info(f"  ✅ Добавлен снимок с НП: {frame}")
+                else:
+                    stats['without_np'] += 1
+                    logger.info(f"  ✅ Добавлен снимок БЕЗ НП: {frame}")
         
-        stats = {
+        result_stats = {
             'added': len(self.catalog),
             'removed': old_count,
-            'total': len(self.catalog)
+            'total': len(self.catalog),
+            'with_np': stats['with_np'],
+            'without_np': stats['without_np']
         }
         
         self._save()
         
-        logger.info(f"✅ Замена каталога АФС завершено: добавлено {stats['added']}, удалено {stats['removed']}")
+        logger.info(f"✅ Замена каталога АФС завершено: добавлено {result_stats['added']}, удалено {result_stats['removed']}, из них с НП: {result_stats['with_np']}, без НП: {result_stats['without_np']}")
         
-        return stats
+        return result_stats
     
     def merge_with_catalog(self, new_catalog: List[Dict]) -> Dict:
         """Сливает текущий каталог с другим каталогом"""
