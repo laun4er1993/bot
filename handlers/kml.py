@@ -98,7 +98,10 @@ def register_kml_handlers(dp, kml_processor, village_db, photos_db):
                 
                 for result in data['results'][:10]:
                     frame = result['photo_num']
+                    villages = result['villages']
                     logger.info(f"   📸 Снимок {frame}: {result['village_count']} НП")
+                    if villages:
+                        logger.info(f"      📍 Деревни: {', '.join(villages[:5])}")
                     
                     files = photos_db.photo_files.get(frame, {})
                     if files.get('mbtiles'):
@@ -198,8 +201,17 @@ def register_kml_handlers(dp, kml_processor, village_db, photos_db):
         results = last_kml_results['results']
         frames_without_np = last_kml_results['frames_without_np']
         
+        # Обогащаем результаты списками деревень
+        enriched_results = []
+        for result in results:
+            enriched_results.append({
+                'photo_num': result['photo_num'],
+                'description': result.get('description', ''),
+                'villages': result.get('villages', [])
+            })
+        
         # Создаем каталог из ВСЕХ результатов (включая снимки без НП)
-        stats = afs_catalog.create_from_kml_results(results, frames_without_np)
+        stats = afs_catalog.create_from_kml_results(enriched_results, frames_without_np)
         
         await callback.message.answer(
             f"✅ <b>Каталог АФС создан!</b>\n\n"
@@ -209,7 +221,7 @@ def register_kml_handlers(dp, kml_processor, village_db, photos_db):
             f"  └─ без населенных пунктов: {stats['without_np']}\n"
             f"• Пропущено дубликатов: {stats['duplicates']}\n"
             f"• Всего снимков в каталоге: {stats['total']}\n\n"
-            f"Теперь вы можете просмотреть или скачать каталог через ⚙️ НАСТРОЙКА → УПРАВЛЕНИЕ АФС.",
+            f"Теперь вы можете искать снимки по названиям деревень!",
             parse_mode="HTML",
             reply_markup=get_kml_management_keyboard()
         )
@@ -231,8 +243,16 @@ def register_kml_handlers(dp, kml_processor, village_db, photos_db):
         results = last_kml_results['results']
         frames_without_np = last_kml_results['frames_without_np']
         
-        # Дополняем каталог из ВСЕХ результатов
-        stats = afs_catalog.add_from_kml_results(results, frames_without_np)
+        # Обогащаем результаты списками деревень
+        enriched_results = []
+        for result in results:
+            enriched_results.append({
+                'photo_num': result['photo_num'],
+                'description': result.get('description', ''),
+                'villages': result.get('villages', [])
+            })
+        
+        stats = afs_catalog.add_from_kml_results(enriched_results, frames_without_np)
         
         await callback.message.answer(
             f"✅ <b>Каталог АФС дополнен!</b>\n\n"
@@ -242,8 +262,7 @@ def register_kml_handlers(dp, kml_processor, village_db, photos_db):
             f"  └─ без населенных пунктов: {stats['without_np']}\n"
             f"• Обновлено описаний: {stats['updated']}\n"
             f"• Пропущено дубликатов: {stats['duplicates']}\n"
-            f"• Всего снимков в каталоге: {stats['total']}\n\n"
-            f"Теперь вы можете просмотреть или скачать каталог через ⚙️ НАСТРОЙКА → УПРАВЛЕНИЕ АФС.",
+            f"• Всего снимков в каталоге: {stats['total']}",
             parse_mode="HTML",
             reply_markup=get_kml_management_keyboard()
         )
@@ -265,8 +284,16 @@ def register_kml_handlers(dp, kml_processor, village_db, photos_db):
         results = last_kml_results['results']
         frames_without_np = last_kml_results['frames_without_np']
         
-        # Заменяем каталог из ВСЕХ результатов
-        stats = afs_catalog.replace_with_kml_results(results, frames_without_np)
+        # Обогащаем результаты списками деревень
+        enriched_results = []
+        for result in results:
+            enriched_results.append({
+                'photo_num': result['photo_num'],
+                'description': result.get('description', ''),
+                'villages': result.get('villages', [])
+            })
+        
+        stats = afs_catalog.replace_with_kml_results(enriched_results, frames_without_np)
         
         await callback.message.answer(
             f"✅ <b>Каталог АФС заменен!</b>\n\n"
@@ -275,8 +302,7 @@ def register_kml_handlers(dp, kml_processor, village_db, photos_db):
             f"  └─ с населенными пунктами: {stats['with_np']}\n"
             f"  └─ без населенных пунктов: {stats['without_np']}\n"
             f"• Удалено старых: {stats['removed']}\n"
-            f"• Всего снимков в каталоге: {stats['total']}\n\n"
-            f"Теперь вы можете просмотреть или скачать каталог через ⚙️ НАСТРОЙКА → УПРАВЛЕНИЕ АФС.",
+            f"• Всего снимков в каталоге: {stats['total']}",
             parse_mode="HTML",
             reply_markup=get_kml_management_keyboard()
         )
@@ -291,13 +317,21 @@ def register_kml_handlers(dp, kml_processor, village_db, photos_db):
             f"• Всего снимков: {stats['total']}\n"
             f"• С описаниями: {stats['with_description']}\n"
             f"• Без описаний: {stats['without_description']}\n"
+            f"• Снимков с населенными пунктами: {stats['with_villages']}\n"
+            f"• Снимков без населенных пунктов: {stats['without_villages']}\n"
+            f"• Всего связей (НП в кадрах): {stats['total_village_links']}\n"
             f"• Средняя длина описания: {stats['avg_description_length']} символов\n\n"
         )
         
         if not afs_catalog.is_empty():
             text += f"📌 <b>Последние 5 снимков:</b>\n"
             for item in afs_catalog.catalog[-5:]:
-                text += f"• {item['frame']}\n"
+                frame = item['frame']
+                villages = afs_catalog.get_villages_for_frame(frame)
+                text += f"• {frame}"
+                if villages:
+                    text += f" ({len(villages)} НП)"
+                text += "\n"
         
         await safe_edit_text(
             callback.message,
@@ -418,21 +452,23 @@ def register_kml_handlers(dp, kml_processor, village_db, photos_db):
             await callback.answer()
             return
         
-        # Собираем все снимки из KML (включая без НП)
-        all_kml_frames = []
+        # Создаем временный каталог из KML результатов
+        kml_catalog = []
         for result in last_kml_results['results']:
-            all_kml_frames.append({
+            kml_catalog.append({
                 'frame': result.get('photo_num', ''),
-                'description': result.get('description', '') or ''
+                'description': result.get('description', '') or '',
+                'villages': result.get('villages', [])
             })
         for frame_data in last_kml_results['frames_without_np']:
-            all_kml_frames.append({
+            kml_catalog.append({
                 'frame': frame_data.get('frame', ''),
-                'description': frame_data.get('description', '') or ''
+                'description': frame_data.get('description', '') or '',
+                'villages': []
             })
         
-        diff = afs_catalog.compare_with_catalog(all_kml_frames)
-        last_kml_compare_data = all_kml_frames
+        diff = afs_catalog.compare_with_catalog(kml_catalog)
+        last_kml_compare_data = kml_catalog
         
         text = (
             f"🔄 <b>Сравнение каталогов</b>\n\n"
@@ -553,9 +589,8 @@ def register_kml_handlers(dp, kml_processor, village_db, photos_db):
             "📤 <b>Загрузка общего каталога АФС</b>\n\n"
             "Отправьте TXT файл с каталогом АФС.\n\n"
             "📌 <b>Формат файла:</b>\n"
-            "Каждая строка должна содержать номер снимка и описание через символ |\n\n"
-            "<code>N56E34-266-016|Описание снимка...</code>\n"
-            "<code>N56E34-266-022|Другое описание...</code>\n\n"
+            "Каждая строка должна содержать номер снимка, описание и деревни через символ |\n\n"
+            "<code>N56E34-266-016|Описание снимка|Горбово,Полунино</code>\n\n"
             "Выберите действие:",
             parse_mode="HTML",
             reply_markup=get_afs_catalog_load_keyboard()
@@ -569,7 +604,7 @@ def register_kml_handlers(dp, kml_processor, village_db, photos_db):
             callback.message,
             "📤 <b>Дополнение каталога АФС</b>\n\n"
             "Отправьте TXT файл с каталогом АФС в формате:\n"
-            "<code>номер_снимка|описание</code>\n\n"
+            "<code>номер_снимка|описание|деревни</code>\n\n"
             "Файл будет добавлен к существующему каталогу.\n\n"
             "Отправьте TXT файл:",
             parse_mode="HTML"
@@ -584,7 +619,7 @@ def register_kml_handlers(dp, kml_processor, village_db, photos_db):
             callback.message,
             "📤 <b>Замена каталога АФС</b>\n\n"
             "Отправьте TXT файл с каталогом АФС в формате:\n"
-            "<code>номер_снимка|описание</code>\n\n"
+            "<code>номер_снимка|описание|деревни</code>\n\n"
             "Текущий каталог будет заменен новым.\n\n"
             "Отправьте TXT файл:",
             parse_mode="HTML"
@@ -619,13 +654,21 @@ def register_kml_handlers(dp, kml_processor, village_db, photos_db):
                 if not line or line.startswith('=') or line.startswith('Номер'):
                     continue
                 
-                if '|' in line:
-                    parts = line.split('|', 1)
+                parts = line.split('|')
+                if len(parts) >= 2:
                     frame = parts[0].strip()
                     description = parts[1].strip() if len(parts) > 1 else ''
+                    villages_str = parts[2].strip() if len(parts) > 2 else ''
+                    villages = [v.strip() for v in villages_str.split(',') if v.strip()] if villages_str else []
+                    
                     if description == 'None':
                         description = ''
-                    new_catalog.append({'frame': frame, 'description': description})
+                    
+                    new_catalog.append({
+                        'frame': frame,
+                        'description': description,
+                        'villages': villages
+                    })
             
             if not new_catalog:
                 await message.answer("❌ В файле не найдено корректных записей")
@@ -649,7 +692,18 @@ def register_kml_handlers(dp, kml_processor, village_db, photos_db):
                 )
             else:
                 old_count = len(afs_catalog.catalog)
-                afs_catalog.catalog = new_catalog
+                afs_catalog.catalog = []
+                afs_catalog.villages_by_frame = {}
+                
+                for item in new_catalog:
+                    frame = item['frame']
+                    description = item['description']
+                    villages = item['villages']
+                    
+                    afs_catalog.catalog.append({'frame': frame, 'description': description})
+                    if villages:
+                        afs_catalog.villages_by_frame[frame] = villages
+                
                 afs_catalog._save()
                 
                 await message.answer(
