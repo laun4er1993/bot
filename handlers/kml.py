@@ -79,6 +79,8 @@ def register_kml_handlers(dp, kml_processor, village_db, photos_db):
                 tmp_path = tmp.name
                 original_filename = message.document.file_name
             
+            logger.info(f"📁 Начало обработки KML файла: {original_filename}")
+            
             data = kml_processor.process_kml_file(tmp_path)
             os.unlink(tmp_path)
             
@@ -87,6 +89,25 @@ def register_kml_handlers(dp, kml_processor, village_db, photos_db):
             if stats['total_frames'] > 0:
                 last_kml_results = data
                 report_path = kml_processor.generate_report(data, original_filename)
+                
+                logger.info(f"📊 Обработка KML завершена:")
+                logger.info(f"   • Всего снимков: {stats['total_frames']}")
+                logger.info(f"   • Снимков с НП: {stats['frames_with_np']}")
+                logger.info(f"   • Всего связей: {stats['total_relations']}")
+                
+                for result in data['results'][:10]:
+                    frame = result['photo_num']
+                    logger.info(f"   📸 Снимок {frame}: {result['village_count']} НП")
+                    
+                    files = photos_db.photo_files.get(frame, {})
+                    if files.get('mbtiles'):
+                        logger.info(f"      🗺️ MBTILES: {len(files['mbtiles'])} версий")
+                        for v in files['mbtiles']:
+                            logger.info(f"         - версия {v['version']}, {v['size_mb']} МБ")
+                    if files.get('kmz'):
+                        logger.info(f"      🌍 KMZ: {len(files['kmz'])} версий")
+                        for v in files['kmz']:
+                            logger.info(f"         - версия {v['version']}, {v['size_mb']} МБ")
                 
                 result_text = (
                     f"✅ <b>Обработка KML завершена!</b>\n\n"
