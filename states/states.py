@@ -9,5 +9,5 @@ class SearchStates(StatesGroup):
     waiting_for_add_village = State()
     waiting_for_afs_upload = State()
     waiting_for_add_kml = State()
-    waiting_for_kml_upload = State()  # Для загрузки KML файлов
+    waiting_for_kml_upload = State()
     downloading_in_progress = State()
