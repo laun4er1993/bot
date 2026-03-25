@@ -1,21 +1,22 @@
-# keyboards/main.py
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 
 
 def get_main_keyboard() -> ReplyKeyboardMarkup:
-    """Главное меню"""
+    """Главное меню - улучшенная навигация"""
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="🔍 ПОИСК"), KeyboardButton(text="📋 СПИСОК ДЕРЕВЕНЬ")],
-            [KeyboardButton(text="📖 ИНСТРУКЦИЯ"), KeyboardButton(text="🗺️ КАРТА РЖЕВ")],
-            [KeyboardButton(text="🗺️ LOCUS MAPS"), KeyboardButton(text="⚙️ НАСТРОЙКА")],
+            [KeyboardButton(text="🔍 ПОИСК СНИМКОВ"), KeyboardButton(text="📋 ВСЕ ДЕРЕВНИ")],
+            [KeyboardButton(text="📖 ПОМОЩЬ"), KeyboardButton(text="🗺️ КАРТЫ")],
+            [KeyboardButton(text="🔄 KML ОБРАБОТКА"), KeyboardButton(text="⚙️ НАСТРОЙКИ")],
             [KeyboardButton(text="🏠 ГЛАВНОЕ МЕНЮ")]
         ],
         resize_keyboard=True
     )
 
 
-def back_keyboard():
-    """Клавиатура возврата в главное меню (импортируется из inline)"""
-    from keyboards.inline import back_keyboard
-    return back_keyboard()
+def back_keyboard() -> ReplyKeyboardMarkup:
+    """Клавиатура возврата в главное меню"""
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="🏠 ГЛАВНОЕ МЕНЮ")]],
+        resize_keyboard=True
+    )
