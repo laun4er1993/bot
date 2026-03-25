@@ -15,6 +15,7 @@ DETAILS_FILE = os.path.join(DATA_DIR, "details.txt")
 EXPORT_DIR = os.path.join(DATA_DIR, "export")
 TEMP_DIR = os.path.join(DATA_DIR, "temp")
 AFS_CATALOG_FILE = os.path.join(DATA_DIR, "afs_catalog.txt")  # Каталог АФС
+KML_CATALOG_FILE = os.path.join(DATA_DIR, "kml_catalog.txt")  # Каталог KML
 
 # Параметры
 MAX_RETRIES = 7
