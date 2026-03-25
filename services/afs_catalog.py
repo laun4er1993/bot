@@ -31,7 +31,7 @@ class AFSCatalog:
                     self._create_empty()
                     return
                 
-                for line in lines[1:]:  # Пропускаем заголовок
+                for line in lines[1:]:
                     line = line.strip()
                     if not line:
                         continue
@@ -58,7 +58,6 @@ class AFSCatalog:
             self._create_empty()
     
     def _create_empty(self):
-        """Создает пустой каталог"""
         os.makedirs(os.path.dirname(AFS_CATALOG_FILE), exist_ok=True)
         with open(AFS_CATALOG_FILE, 'w', encoding='utf-8') as f:
             f.write("Номер_снимка|Описание|Деревни\n")
@@ -66,7 +65,6 @@ class AFSCatalog:
         self.villages_by_frame = {}
     
     def _save(self):
-        """Сохраняет каталог в файл"""
         try:
             with open(AFS_CATALOG_FILE, 'w', encoding='utf-8') as f:
                 f.write("Номер_снимка|Описание|Деревни\n")
@@ -99,6 +97,7 @@ class AFSCatalog:
                 'villages': result.get('villages', []),
                 'has_np': True
             })
+            logger.info(f"  📸 Снимок с НП: {result.get('photo_num', '')} - {len(result.get('villages', []))} деревень")
         
         for frame_data in frames_without_np:
             all_frames.append({
@@ -121,6 +120,7 @@ class AFSCatalog:
             
             if frame in existing_frames:
                 stats['duplicates'] += 1
+                logger.info(f"  ⚠️ Снимок {frame} уже существует, пропущен")
                 continue
             
             self.catalog.append({
@@ -135,6 +135,8 @@ class AFSCatalog:
             if has_np:
                 stats['with_np'] += 1
                 logger.info(f"  ✅ Добавлен снимок с НП: {frame} ({len(villages)} деревень)")
+                if villages:
+                    logger.info(f"      📍 Деревни: {', '.join(villages[:10])}")
             else:
                 stats['without_np'] += 1
                 logger.info(f"  ✅ Добавлен снимок БЕЗ НП: {frame}")
@@ -146,191 +148,10 @@ class AFSCatalog:
         
         return stats
     
-    def add_from_kml_results(self, results: List[Dict], frames_without_np: List[Dict]) -> Dict:
-        """Дополняет существующий каталог из ВСЕХ результатов обработки KML"""
-        stats = {'added': 0, 'updated': 0, 'duplicates': 0, 'total': 0, 'with_np': 0, 'without_np': 0}
-        
-        existing = {item['frame']: item for item in self.catalog}
-        
-        all_frames = []
-        for result in results:
-            all_frames.append({
-                'frame': result.get('photo_num', ''),
-                'description': result.get('description', ''),
-                'villages': result.get('villages', []),
-                'has_np': True
-            })
-        
-        for frame_data in frames_without_np:
-            all_frames.append({
-                'frame': frame_data.get('frame', ''),
-                'description': frame_data.get('description', ''),
-                'villages': [],
-                'has_np': False
-            })
-        
-        for frame_data in all_frames:
-            frame = frame_data['frame']
-            description = frame_data['description']
-            villages = frame_data['villages']
-            has_np = frame_data['has_np']
-            
-            if not frame:
-                continue
-            
-            if frame in existing:
-                if existing[frame].get('description', '') != description and description:
-                    existing[frame]['description'] = description
-                    stats['updated'] += 1
-                else:
-                    stats['duplicates'] += 1
-            else:
-                self.catalog.append({
-                    'frame': frame,
-                    'description': description
-                })
-                if villages:
-                    self.villages_by_frame[frame] = villages
-                stats['added'] += 1
-                existing[frame] = self.catalog[-1]
-                if has_np:
-                    stats['with_np'] += 1
-                else:
-                    stats['without_np'] += 1
-        
-        stats['total'] = len(self.catalog)
-        self._save()
-        
-        return stats
-    
-    def replace_with_kml_results(self, results: List[Dict], frames_without_np: List[Dict]) -> Dict:
-        """Заменяет существующий каталог новыми данными из ВСЕХ результатов KML"""
-        old_count = len(self.catalog)
-        self.catalog = []
-        self.villages_by_frame = {}
-        
-        all_frames = []
-        for result in results:
-            all_frames.append({
-                'frame': result.get('photo_num', ''),
-                'description': result.get('description', ''),
-                'villages': result.get('villages', []),
-                'has_np': True
-            })
-        
-        for frame_data in frames_without_np:
-            all_frames.append({
-                'frame': frame_data.get('frame', ''),
-                'description': frame_data.get('description', ''),
-                'villages': [],
-                'has_np': False
-            })
-        
-        stats = {'with_np': 0, 'without_np': 0}
-        
-        for frame_data in all_frames:
-            frame = frame_data['frame']
-            description = frame_data['description']
-            villages = frame_data['villages']
-            has_np = frame_data['has_np']
-            
-            if frame:
-                self.catalog.append({
-                    'frame': frame,
-                    'description': description
-                })
-                if villages:
-                    self.villages_by_frame[frame] = villages
-                if has_np:
-                    stats['with_np'] += 1
-                else:
-                    stats['without_np'] += 1
-        
-        result_stats = {
-            'added': len(self.catalog),
-            'removed': old_count,
-            'total': len(self.catalog),
-            'with_np': stats['with_np'],
-            'without_np': stats['without_np']
-        }
-        
-        self._save()
-        
-        return result_stats
-    
-    def merge_with_catalog(self, new_catalog: List[Dict]) -> Dict:
-        """Сливает текущий каталог с другим каталогом"""
-        stats = {'added': 0, 'updated': 0, 'duplicates': 0, 'total': 0}
-        
-        existing = {item['frame']: item for item in self.catalog}
-        
-        for item in new_catalog:
-            frame = item.get('frame', '')
-            description = item.get('description', '')
-            villages = item.get('villages', [])
-            
-            if not frame:
-                continue
-            
-            if frame in existing:
-                if existing[frame].get('description', '') != description and description:
-                    existing[frame]['description'] = description
-                    stats['updated'] += 1
-                else:
-                    stats['duplicates'] += 1
-            else:
-                self.catalog.append({
-                    'frame': frame,
-                    'description': description
-                })
-                if villages:
-                    self.villages_by_frame[frame] = villages
-                stats['added'] += 1
-                existing[frame] = self.catalog[-1]
-        
-        stats['total'] = len(self.catalog)
-        self._save()
-        
-        return stats
-    
-    def compare_with_catalog(self, other_catalog: List[Dict]) -> Dict:
-        """Сравнивает текущий каталог с другим каталогом"""
-        current = {item['frame']: item for item in self.catalog}
-        other = {item['frame']: item for item in other_catalog}
-        
-        diff = {
-            'new': [],
-            'missing': [],
-            'different': []
-        }
-        
-        for frame in other:
-            if frame not in current:
-                diff['new'].append(frame)
-        
-        for frame in current:
-            if frame not in other:
-                diff['missing'].append(frame)
-        
-        for frame in current:
-            if frame in other:
-                current_desc = current[frame].get('description', '') or ''
-                other_desc = other[frame].get('description', '') or ''
-                if current_desc != other_desc:
-                    diff['different'].append({
-                        'frame': frame,
-                        'current': current_desc[:100],
-                        'other': other_desc[:100]
-                    })
-        
-        return diff
-    
     def get_catalog(self) -> List[Dict]:
-        """Возвращает копию каталога"""
         return self.catalog.copy()
     
     def get_catalog_text(self, with_descriptions: bool = False, page: int = 1, per_page: int = 50) -> Tuple[str, int, int]:
-        """Возвращает текстовое представление каталога с пагинацией"""
         if not self.catalog:
             return "📭 Каталог АФС пуст", 0, 1
         
@@ -359,7 +180,6 @@ class AFSCatalog:
         return text, total_pages, page
     
     def get_statistics(self) -> Dict:
-        """Возвращает расширенную статистику каталога"""
         total = len(self.catalog)
         with_description = sum(1 for item in self.catalog if item.get('description') and item['description'].strip())
         with_villages = len(self.villages_by_frame)
@@ -384,18 +204,16 @@ class AFSCatalog:
         }
     
     def get_photo_details(self, photo_num: str) -> Optional[str]:
-        """Возвращает полное описание снимка из каталога АФС"""
         for item in self.catalog:
             if item['frame'] == photo_num:
                 return item.get('description', '')
         return None
     
     def get_villages_for_frame(self, photo_num: str) -> List[str]:
-        """Возвращает список деревень для снимка"""
         return self.villages_by_frame.get(photo_num, [])
     
     def search_by_village_name(self, village_name: str) -> List[Dict]:
-        """Поиск снимков по названию деревни (по связям)"""
+        """Поиск снимков по названию деревни"""
         if not village_name or not self.catalog:
             return []
         
@@ -408,7 +226,7 @@ class AFSCatalog:
         
         for frame, villages in self.villages_by_frame.items():
             for village in villages:
-                if village_lower in village.lower():
+                if village_lower == village.lower() or village_lower in village.lower():
                     results.append({
                         'frame': frame,
                         'description': self.get_photo_details(frame),
@@ -419,44 +237,13 @@ class AFSCatalog:
         
         logger.info(f"📊 Найдено {len(results)} снимков для деревни '{village_name}'")
         if not results:
-            logger.info("   Снимки в каталоге:")
+            logger.info("   Снимки в каталоге (первые 10):")
             for i, (frame, villages) in enumerate(list(self.villages_by_frame.items())[:10]):
-                logger.info(f"      {i+1}. {frame}: {len(villages)} деревень, первые 3: {villages[:3]}")
+                logger.info(f"      {i+1}. {frame}: {len(villages)} деревень")
         
-        return results
-    
-    def search_by_coordinates(self, lat: float, lon: float, tolerance_km: float = 5.0) -> List[Dict]:
-        """Поиск снимков по координатам (в описании или по деревням)"""
-        if not self.catalog:
-            return []
-        
-        results = []
-        
-        logger.info(f"🔍 ПОИСК снимков по координатам: {lat}, {lon} (точность ±{tolerance_km} км)")
-        
-        for item in self.catalog:
-            frame = item['frame']
-            description = item.get('description', '')
-            
-            coords_found = self._extract_coordinates_from_text(description)
-            
-            for desc_lat, desc_lon in coords_found:
-                distance = self._haversine_distance(lat, lon, desc_lat, desc_lon)
-                if distance <= tolerance_km:
-                    results.append({
-                        'frame': frame,
-                        'description': description,
-                        'villages': self.villages_by_frame.get(frame, []),
-                        'distance_km': round(distance, 2)
-                    })
-                    logger.info(f"  ✅ Найден снимок: {frame} (расстояние {distance:.2f} км)")
-                    break
-        
-        logger.info(f"📊 Найдено {len(results)} снимков по координатам")
         return results
     
     def search_by_frame_name(self, frame_name: str) -> List[Dict]:
-        """Поиск снимка по названию (номеру снимка)"""
         if not frame_name or not self.catalog:
             return []
         
@@ -465,21 +252,17 @@ class AFSCatalog:
         
         logger.info(f"🔍 ПОИСК снимка по названию: {frame_name}")
         
-        # Поддерживаем разные форматы ввода
-        search_variants = [frame_lower]
-        
-        # Если ввели короткий формат (например 266-016)
         if '-' in frame_lower and len(frame_lower.split('-')) == 2:
             suffix = frame_lower
             for item in self.catalog:
                 frame = item['frame'].lower()
-                if frame.endswith(suffix) or suffix in frame:
+                if frame.endswith(suffix):
                     results.append({
                         'frame': item['frame'],
                         'description': item.get('description', ''),
                         'villages': self.villages_by_frame.get(item['frame'], [])
                     })
-                    logger.info(f"  ✅ Найден снимок: {item['frame']} (по суффиксу {suffix})")
+                    logger.info(f"  ✅ Найден снимок: {item['frame']}")
         
         for item in self.catalog:
             frame = item['frame'].lower()
@@ -490,68 +273,12 @@ class AFSCatalog:
                         'description': item.get('description', ''),
                         'villages': self.villages_by_frame.get(item['frame'], [])
                     })
-                    logger.info(f"  ✅ Найден снимок: {item['frame']} (по точному совпадению)")
+                    logger.info(f"  ✅ Найден снимок: {item['frame']}")
         
         logger.info(f"📊 Найдено {len(results)} снимков по названию '{frame_name}'")
         return results
     
-    def _extract_coordinates_from_text(self, text: str) -> List[Tuple[float, float]]:
-        """Извлекает координаты из текста в разных форматах"""
-        coords = []
-        
-        decimal_pattern = r'(\d{1,3}\.\d{4,})\s*[,\s]\s*(\d{1,3}\.\d{4,})'
-        matches = re.findall(decimal_pattern, text)
-        for match in matches:
-            try:
-                lat = float(match[0])
-                lon = float(match[1])
-                if -90 <= lat <= 90 and -180 <= lon <= 180:
-                    coords.append((lat, lon))
-            except:
-                pass
-        
-        dms_pattern = r'(\d+)°(\d+)′([\d.]+)″\s*([сю])\.[^\d]*(\d+)°(\d+)′([\d.]+)″\s*([зв])\.[^\d]*'
-        matches = re.findall(dms_pattern, text, re.IGNORECASE)
-        for match in matches:
-            try:
-                lat_deg, lat_min, lat_sec, lat_dir = match[0], match[1], match[2], match[3]
-                lon_deg, lon_min, lon_sec, lon_dir = match[4], match[5], match[6], match[7]
-                
-                lat = float(lat_deg) + float(lat_min)/60 + float(lat_sec)/3600
-                lon = float(lon_deg) + float(lon_min)/60 + float(lon_sec)/3600
-                
-                if lat_dir.lower() == 'ю':
-                    lat = -lat
-                if lon_dir.lower() == 'з':
-                    lon = -lon
-                
-                coords.append((lat, lon))
-            except:
-                pass
-        
-        return coords
-    
-    def _haversine_distance(self, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-        """Вычисляет расстояние между двумя точками на сфере (в км)"""
-        from math import radians, sin, cos, sqrt, atan2
-        
-        R = 6371.0
-        
-        lat1_rad = radians(lat1)
-        lon1_rad = radians(lon1)
-        lat2_rad = radians(lat2)
-        lon2_rad = radians(lon2)
-        
-        dlat = lat2_rad - lat1_rad
-        dlon = lon2_rad - lon1_rad
-        
-        a = sin(dlat / 2)**2 + cos(lat1_rad) * cos(lat2_rad) * sin(dlon / 2)**2
-        c = 2 * atan2(sqrt(a), sqrt(1 - a))
-        
-        return R * c
-    
     def export_to_txt(self, filename: str = None) -> str:
-        """Экспортирует каталог в TXT файл"""
         from config import EXPORT_DIR
         
         if not filename:
@@ -576,9 +303,7 @@ class AFSCatalog:
                     if item.get('description'):
                         f.write(f"\n   Описание:\n")
                         f.write(f"   {'-' * 76}\n")
-                        desc_lines = str(item['description']).split('\n')
-                        for line in desc_lines:
-                            f.write(f"   {line}\n")
+                        f.write(f"   {item['description']}\n")
                         f.write(f"   {'-' * 76}\n")
                     if villages:
                         f.write(f"\n   Населенные пункты в кадре ({len(villages)}):\n")
@@ -586,13 +311,12 @@ class AFSCatalog:
                             f.write(f"   • {v}\n")
                     f.write("\n")
         except Exception as e:
-            logger.error(f"Ошибка экспорта каталога: {e}")
+            logger.error(f"Ошибка экспорта: {e}")
             return None
         
         return file_path
     
     def clear(self) -> int:
-        """Очищает каталог"""
         removed = len(self.catalog)
         self.catalog = []
         self.villages_by_frame = {}
