@@ -23,7 +23,7 @@ afs_catalog = AFSCatalog()
 current_afs_page = 1
 
 
-def register_kml_handlers(dp, kml_processor, village_db):
+def register_kml_handlers(dp, kml_processor, village_db, photos_db):
     global last_kml_results, last_kml_compare_data, current_afs_page
     
     @dp.callback_query(lambda c: c.data == "process_kml_menu")
