@@ -7,8 +7,12 @@ from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, InlineKeyboar
 
 from states.states import SearchStates
 from keyboards.inline import (
-    process_kml_again_keyboard, back_keyboard, get_kml_result_keyboard,
-    get_afs_catalog_keyboard, get_afs_compare_keyboard, get_afs_catalog_load_keyboard,
+    process_kml_again_keyboard,
+    back_keyboard,
+    get_kml_result_keyboard,
+    get_afs_catalog_keyboard,
+    get_afs_compare_keyboard,
+    get_afs_catalog_load_keyboard,
     get_kml_management_keyboard
 )
 from utils.helpers import safe_delete_message, safe_edit_text, safe_answer_callback
