@@ -9,7 +9,8 @@ from aiogram.types import BufferedInputFile
 from states.states import SearchStates
 from keyboards.inline import (
     process_kml_again_keyboard, back_keyboard, get_kml_result_keyboard,
-    get_afs_catalog_keyboard, get_afs_compare_keyboard, get_afs_catalog_load_keyboard
+    get_afs_catalog_keyboard, get_afs_compare_keyboard, get_afs_catalog_load_keyboard,
+    get_kml_management_keyboard
 )
 from utils.helpers import safe_delete_message, safe_edit_text, safe_answer_callback
 from config import logger, KML_MARGIN_M, KML_USE_INTERSECTS
@@ -24,6 +25,41 @@ current_afs_page = 1
 
 def register_kml_handlers(dp, kml_processor, village_db):
     global last_kml_results, last_kml_compare_data, current_afs_page
+    
+    @dp.callback_query(lambda c: c.data == "process_kml_menu")
+    async def process_kml_menu_handler(callback: types.CallbackQuery, state: FSMContext):
+        """Обработка KML файла из меню управления KML"""
+        if not village_db.villages:
+            await safe_edit_text(
+                callback.message,
+                "❌ <b>Невозможно обработать KML файл</b>\n\n"
+                "Каталог населенных пунктов пуст.\n\n"
+                "Пожалуйста, сначала загрузите населенные пункты:\n"
+                "• через ⚙️ НАСТРОЙКА → ЗАГРУЗКА НП → 📤 Загрузить каталог (TXT)\n"
+                "• или через ⚙️ НАСТРОЙКА → ЗАГРУЗКА НП → 🌐 Загрузить из интернета",
+                parse_mode="HTML",
+                reply_markup=back_keyboard()
+            )
+            await safe_answer_callback(callback)
+            return
+        
+        method_text = "пересечение (точки на границе)" if KML_USE_INTERSECTS else "строгое вхождение"
+        await safe_edit_text(
+            callback.message,
+            f"📤 <b>Загрузите KML файл</b>\n\n"
+            f"Отправьте мне KML файл с каталогом снимков.\n"
+            f"После загрузки я:\n"
+            f"• Найду населенные пункты в каждом кадре\n"
+            f"• Добавлю полные описания снимков из базы данных\n"
+            f"• Создам подробный TXT отчет со статистикой\n\n"
+            f"📌 <b>Параметры обработки:</b>\n"
+            f"• Буфер: {KML_MARGIN_M} м\n"
+            f"• Метод проверки: {method_text}\n\n"
+            f"<i>Файл должен содержать Placemark с названиями Frame-XXX</i>",
+            parse_mode="HTML"
+        )
+        await state.set_state(SearchStates.waiting_for_kml)
+        await safe_answer_callback(callback)
     
     @dp.message(SearchStates.waiting_for_kml, F.document)
     async def process_kml_upload(message: types.Message, state: FSMContext):
@@ -110,7 +146,7 @@ def register_kml_handlers(dp, kml_processor, village_db):
             else:
                 await message.answer(
                     "❌ В KML файле не найдено снимков с названиями Frame-XXX",
-                    reply_markup=back_keyboard()
+                    reply_markup=get_kml_management_keyboard()
                 )
             
         except Exception as e:
@@ -132,7 +168,7 @@ def register_kml_handlers(dp, kml_processor, village_db):
             await callback.message.answer(
                 "❌ Нет данных для создания каталога АФС.\n"
                 "Сначала обработайте KML файл.",
-                reply_markup=back_keyboard()
+                reply_markup=get_kml_management_keyboard()
             )
             await callback.answer()
             return
@@ -148,7 +184,7 @@ def register_kml_handlers(dp, kml_processor, village_db):
             f"• Всего снимков в каталоге: {stats['total']}\n\n"
             f"Теперь вы можете просмотреть или скачать каталог через ⚙️ НАСТРОЙКА → УПРАВЛЕНИЕ АФС.",
             parse_mode="HTML",
-            reply_markup=back_keyboard()
+            reply_markup=get_kml_management_keyboard()
         )
         await callback.answer()
     
@@ -160,7 +196,7 @@ def register_kml_handlers(dp, kml_processor, village_db):
             await callback.message.answer(
                 "❌ Нет данных для дополнения каталога АФС.\n"
                 "Сначала обработайте KML файл.",
-                reply_markup=back_keyboard()
+                reply_markup=get_kml_management_keyboard()
             )
             await callback.answer()
             return
@@ -177,7 +213,7 @@ def register_kml_handlers(dp, kml_processor, village_db):
             f"• Всего снимков в каталоге: {stats['total']}\n\n"
             f"Теперь вы можете просмотреть или скачать каталог через ⚙️ НАСТРОЙКА → УПРАВЛЕНИЕ АФС.",
             parse_mode="HTML",
-            reply_markup=back_keyboard()
+            reply_markup=get_kml_management_keyboard()
         )
         await callback.answer()
     
@@ -189,7 +225,7 @@ def register_kml_handlers(dp, kml_processor, village_db):
             await callback.message.answer(
                 "❌ Нет данных для замены каталога АФС.\n"
                 "Сначала обработайте KML файл.",
-                reply_markup=back_keyboard()
+                reply_markup=get_kml_management_keyboard()
             )
             await callback.answer()
             return
@@ -205,7 +241,7 @@ def register_kml_handlers(dp, kml_processor, village_db):
             f"• Всего снимков в каталоге: {stats['total']}\n\n"
             f"Теперь вы можете просмотреть или скачать каталог через ⚙️ НАСТРОЙКА → УПРАВЛЕНИЕ АФС.",
             parse_mode="HTML",
-            reply_markup=back_keyboard()
+            reply_markup=get_kml_management_keyboard()
         )
         await callback.answer()
     
@@ -243,7 +279,7 @@ def register_kml_handlers(dp, kml_processor, village_db):
                 "Чтобы создать каталог:\n"
                 "1. Обработайте KML файл\n"
                 "2. Нажмите 'Создать каталог АФС'",
-                reply_markup=back_keyboard()
+                reply_markup=get_kml_management_keyboard()
             )
             await callback.answer()
             return
@@ -339,7 +375,7 @@ def register_kml_handlers(dp, kml_processor, village_db):
             await callback.message.answer(
                 "❌ Нет данных для сравнения.\n"
                 "Сначала обработайте KML файл.",
-                reply_markup=back_keyboard()
+                reply_markup=get_kml_management_keyboard()
             )
             await callback.answer()
             return
@@ -393,7 +429,7 @@ def register_kml_handlers(dp, kml_processor, village_db):
         if not last_kml_compare_data:
             await callback.message.answer(
                 "❌ Нет данных для добавления.",
-                reply_markup=back_keyboard()
+                reply_markup=get_kml_management_keyboard()
             )
             await callback.answer()
             return
@@ -421,7 +457,7 @@ def register_kml_handlers(dp, kml_processor, village_db):
         if not last_kml_compare_data:
             await callback.message.answer(
                 "❌ Нет данных для обновления.",
-                reply_markup=back_keyboard()
+                reply_markup=get_kml_management_keyboard()
             )
             await callback.answer()
             return
