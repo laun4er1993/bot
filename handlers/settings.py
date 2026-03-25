@@ -3,6 +3,7 @@ import os
 import time
 import tempfile
 import asyncio
+import shutil
 from aiogram import types, F
 from aiogram.fsm.context import FSMContext
 from aiogram.types import FSInputFile, BufferedInputFile
@@ -22,6 +23,7 @@ from api_sources import APISourceManager, AVAILABLE_DISTRICTS
 from services.afs_catalog import AFSCatalog
 from services.kml_catalog import KMLCatalog
 
+# Глобальные переменные
 active_download = False
 active_download_user_id = None
 bot_enabled = True
@@ -31,7 +33,7 @@ current_kml_page = 1
 
 
 def register_settings_handlers(dp, village_db, photos_db):
-    global active_download, active_download_user_id, bot_enabled, current_kml_page
+    global active_download, active_download_user_id, bot_enabled, current_kml_page, afs_catalog
     
     @dp.message(F.text == "⚙️ НАСТРОЙКА")
     async def menu_settings_main(message: types.Message):
@@ -57,6 +59,7 @@ def register_settings_handlers(dp, village_db, photos_db):
     
     @dp.callback_query(lambda c: c.data == "kml_management_menu")
     async def kml_management_menu(callback: types.CallbackQuery):
+        """Меню управления KML"""
         stats = kml_catalog.get_statistics()
         text = (
             f"🔄 <b>Управление каталогом KML</b>\n\n"
@@ -85,6 +88,7 @@ def register_settings_handlers(dp, village_db, photos_db):
     
     @dp.callback_query(lambda c: c.data == "refresh_kml_catalog")
     async def refresh_kml_catalog_handler(callback: types.CallbackQuery):
+        """Обновление каталога KML"""
         await safe_edit_text(
             callback.message,
             "🔄 <b>Обновление каталога KML</b>\n\n"
@@ -363,6 +367,7 @@ def register_settings_handlers(dp, village_db, photos_db):
     
     @dp.callback_query(lambda c: c.data == "catalog_settings_menu")
     async def catalog_settings_menu(callback: types.CallbackQuery):
+        """Меню настроек каталога АФС"""
         stats = afs_catalog.get_statistics()
         
         text = (
@@ -371,13 +376,21 @@ def register_settings_handlers(dp, village_db, photos_db):
             f"• Всего снимков: {stats['total']}\n"
             f"• С описаниями: {stats['with_description']}\n"
             f"• Без описаний: {stats['without_description']}\n"
+            f"• Снимков с населенными пунктами: {stats['with_villages']}\n"
+            f"• Снимков без населенных пунктов: {stats['without_villages']}\n"
+            f"• Всего связей (НП в кадрах): {stats['total_village_links']}\n"
             f"• Средняя длина описания: {stats['avg_description_length']} символов\n\n"
         )
         
         if stats['recent_items']:
             text += f"📌 <b>Последние 5 снимков:</b>\n"
             for item in stats['recent_items']:
-                text += f"• {item['frame']}\n"
+                frame = item['frame']
+                villages = afs_catalog.get_villages_for_frame(frame)
+                text += f"• {frame}"
+                if villages:
+                    text += f" ({len(villages)} НП)"
+                text += "\n"
             text += "\n"
         
         if stats['total'] == 0:
@@ -402,6 +415,9 @@ def register_settings_handlers(dp, village_db, photos_db):
             f"• Всего снимков: {stats['total']}\n"
             f"• С описаниями: {stats['with_description']}\n"
             f"• Без описаний: {stats['without_description']}\n"
+            f"• Снимков с населенными пунктами: {stats['with_villages']}\n"
+            f"• Снимков без населенных пунктов: {stats['without_villages']}\n"
+            f"• Всего связей (НП в кадрах): {stats['total_village_links']}\n"
             f"• Средняя длина описания: {stats['avg_description_length']} символов\n"
         )
         await safe_edit_text(
@@ -624,7 +640,7 @@ def register_settings_handlers(dp, village_db, photos_db):
         
         await safe_answer_callback(callback)
     
-    # ========== ОСТАЛЬНЫЕ ОБРАБОТЧИКИ ==========
+    # ========== ДОБАВЛЕНИЕ НП ВРУЧНУЮ ==========
     
     @dp.callback_query(lambda c: c.data == "add_village_manual")
     async def add_village_manual_start(callback: types.CallbackQuery, state: FSMContext):
@@ -694,6 +710,8 @@ def register_settings_handlers(dp, village_db, photos_db):
             await message.answer(f"❌ {msg}", reply_markup=back_keyboard())
         
         await state.clear()
+    
+    # ========== ЗАГРУЗКА КАТАЛОГА НП ИЗ TXT ==========
     
     @dp.callback_query(lambda c: c.data == "load_catalog_txt")
     async def load_catalog_txt_start(callback: types.CallbackQuery, state: FSMContext):
@@ -784,6 +802,8 @@ def register_settings_handlers(dp, village_db, photos_db):
         await message.answer("❌ Отправьте TXT файл")
         await state.clear()
     
+    # ========== УДАЛЕНИЕ РАЙОНА ==========
+    
     @dp.callback_query(lambda c: c.data == "delete_district_start")
     async def delete_district_start(callback: types.CallbackQuery):
         districts = village_db.get_districts()
@@ -819,6 +839,8 @@ def register_settings_handlers(dp, village_db, photos_db):
         )
         await safe_answer_callback(callback)
     
+    # ========== ОЧИСТКА КАТАЛОГА НП ==========
+    
     @dp.callback_query(lambda c: c.data == "clear_all_catalog")
     async def clear_all_catalog_confirm(callback: types.CallbackQuery):
         total = village_db.stats['total']
@@ -844,6 +866,8 @@ def register_settings_handlers(dp, village_db, photos_db):
             reply_markup=back_keyboard()
         )
         await safe_answer_callback(callback)
+    
+    # ========== СТАТИСТИКА КАТАЛОГА НП ==========
     
     @dp.callback_query(lambda c: c.data == "village_stats")
     async def show_stats(callback: types.CallbackQuery):
@@ -876,6 +900,8 @@ def register_settings_handlers(dp, village_db, photos_db):
         )
         await safe_answer_callback(callback)
     
+    # ========== СКАЧИВАНИЕ КАТАЛОГА НП ==========
+    
     @dp.callback_query(lambda c: c.data == "download_villages_txt")
     async def download_villages_txt(callback: types.CallbackQuery):
         if not village_db.villages:
@@ -893,6 +919,8 @@ def register_settings_handlers(dp, village_db, photos_db):
         except Exception as e:
             await callback.message.answer(f"❌ Ошибка: {e}")
         await safe_answer_callback(callback)
+    
+    # ========== НАВИГАЦИЯ ==========
     
     @dp.callback_query(lambda c: c.data == "show_more_districts")
     async def show_more_districts(callback: types.CallbackQuery):
