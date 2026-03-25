@@ -329,12 +329,23 @@ class AFSCatalog:
         return len(self.catalog) == 0
     
     def get_statistics(self) -> Dict:
-        """Возвращает статистику каталога"""
+        """Возвращает расширенную статистику каталога"""
         total = len(self.catalog)
         with_description = sum(1 for item in self.catalog if item.get('description'))
+        
+        # Собираем последние 5 добавленных снимков
+        recent_items = []
+        if self.catalog:
+            recent_items = self.catalog[-5:]
+        
+        # Собираем статистику по длине описаний
+        desc_lengths = [len(str(item.get('description', ''))) for item in self.catalog if item.get('description')]
+        avg_desc_length = sum(desc_lengths) / len(desc_lengths) if desc_lengths else 0
         
         return {
             'total': total,
             'with_description': with_description,
-            'without_description': total - with_description
+            'without_description': total - with_description,
+            'recent_items': recent_items,
+            'avg_description_length': round(avg_desc_length, 0)
         }
