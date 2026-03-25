@@ -1,6 +1,6 @@
 from typing import List
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from api_sources import AVAILABLE_DISTRICTS
+from api_sources.config import AVAILABLE_DISTRICTS
 
 
 def get_settings_main_keyboard() -> InlineKeyboardMarkup:
