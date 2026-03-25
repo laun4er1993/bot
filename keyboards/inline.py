@@ -20,13 +20,34 @@ def get_kml_management_keyboard() -> InlineKeyboardMarkup:
     """Меню управления KML"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📝 Добавить KML вручную", callback_data="add_kml_manual")],
-        [InlineKeyboardButton(text="📤 Загрузить каталог KML", callback_data="load_kml_catalog")],
+        [InlineKeyboardButton(text="📤 Загрузить KML файл", callback_data="load_kml_catalog")],
         [InlineKeyboardButton(text="📊 Статистика KML", callback_data="kml_stats")],
         [InlineKeyboardButton(text="📋 Показать каталог KML", callback_data="show_kml_catalog")],
         [InlineKeyboardButton(text="📥 Скачать каталог KML (TXT)", callback_data="download_kml_catalog")],
         [InlineKeyboardButton(text="🗑️ Очистить каталог KML", callback_data="clear_kml_catalog")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_settings_main")]
     ])
+
+
+def get_kml_catalog_keyboard(has_catalog: bool = False, page: int = 1, total_pages: int = 1) -> InlineKeyboardMarkup:
+    """Клавиатура для просмотра каталога KML"""
+    keyboard = []
+    
+    if total_pages > 1:
+        nav_buttons = []
+        if page > 1:
+            nav_buttons.append(InlineKeyboardButton(text="◀️ Назад", callback_data=f"kml_page_{page-1}"))
+        if page < total_pages:
+            nav_buttons.append(InlineKeyboardButton(text="Вперед ▶️", callback_data=f"kml_page_{page+1}"))
+        if nav_buttons:
+            keyboard.append(nav_buttons)
+    
+    if has_catalog:
+        keyboard.append([InlineKeyboardButton(text="⚙️ Управление KML", callback_data="kml_management_menu")])
+    
+    keyboard.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_main")])
+    
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
 def get_np_settings_keyboard() -> InlineKeyboardMarkup:
@@ -67,27 +88,6 @@ def get_kml_result_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🔄 Обработать другой KML", callback_data="kml_management_menu")],
         [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_main")]
     ])
-
-
-def get_kml_catalog_keyboard(has_catalog: bool = False, page: int = 1, total_pages: int = 1) -> InlineKeyboardMarkup:
-    """Клавиатура для просмотра каталога KML"""
-    keyboard = []
-    
-    if total_pages > 1:
-        nav_buttons = []
-        if page > 1:
-            nav_buttons.append(InlineKeyboardButton(text="◀️ Назад", callback_data=f"kml_page_{page-1}"))
-        if page < total_pages:
-            nav_buttons.append(InlineKeyboardButton(text="Вперед ▶️", callback_data=f"kml_page_{page+1}"))
-        if nav_buttons:
-            keyboard.append(nav_buttons)
-    
-    if has_catalog:
-        keyboard.append([InlineKeyboardButton(text="⚙️ Управление KML", callback_data="kml_management_menu")])
-    
-    keyboard.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_main")])
-    
-    return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
 def get_afs_catalog_keyboard(has_catalog: bool = False, page: int = 1, total_pages: int = 1) -> InlineKeyboardMarkup:
