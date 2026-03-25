@@ -1,9 +1,9 @@
-# services/yandex_disk.py
 import os
 import re
 import logging
 import requests
 from typing import Optional, Dict, List
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -26,105 +26,87 @@ class YandexDiskClient:
             if response.status_code == 200:
                 return response.json()
             elif response.status_code == 401:
-                self.logger.error("  ❌ Ошибка 401: Неверный токен")
-            elif response.status_code == 404:
-                self.logger.debug(f"  Ресурс не найден: {url}")
+                self.logger.error("  ❌ Неверный токен")
             return None
         except Exception as e:
             self.logger.error(f"  ❌ Ошибка запроса: {e}")
             return None
     
     def check_root_access(self) -> bool:
-        self.logger.info("🔍 Проверка доступа к Яндекс.Диску...")
         data = self._request(f"{self.base_url}/")
-        if data:
-            self.logger.info("✅ Доступ к диску получен")
-            return True
-        self.logger.error("❌ Нет доступа к Яндекс.Диску")
-        return False
+        return data is not None
     
-    def get_file_download_link(self, file_path: str) -> Optional[str]:
+    def get_file_download_link(self, file_path: str) -> Optional[Dict]:
+        """Возвращает ссылку на скачивание и метаданные файла"""
         file_name = os.path.basename(file_path)
         if ' ' in file_name:
-            self.logger.warning(f"  ⚠️ Пропускаем файл с пробелом: {file_name}")
             return None
         
         url = f"{self.base_url}/resources/download"
         data = self._request(url, {"path": f"/{file_path}"})
         if data and "href" in data:
-            self.logger.debug(f"  ✅ Получена ссылка для {file_name}")
-            return data["href"]
+            return {
+                'download_link': data["href"],
+                'modified': data.get('modified', '')
+            }
         return None
     
     def get_files_in_folder(self, folder_path: str, quiet: bool = False) -> Optional[List[Dict]]:
         url = f"{self.base_url}/resources"
         data = self._request(url, {"path": f"/{folder_path}"})
         if data and "_embedded" in data:
-            items = data["_embedded"].get("items", [])
-            if not quiet:
-                self.logger.info(f"  ✅ Найдено {len(items)} элементов в папке: {folder_path}")
-            return items
-        if not quiet:
-            self.logger.debug(f"  Папка не найдена: {folder_path}")
+            return data["_embedded"].get("items", [])
         return None
     
     def folder_exists(self, folder_path: str, quiet: bool = False) -> bool:
         url = f"{self.base_url}/resources"
         data = self._request(url, {"path": f"/{folder_path}"})
-        exists = data and data.get("type") == "dir"
-        if not quiet:
-            self.logger.debug(f"  Папка {'существует' if exists else 'не существует'}: {folder_path}")
-        return exists
+        return data and data.get("type") == "dir"
     
     def find_map_files(self, square: str, overlay: str, frame: str) -> Dict[str, List[Dict]]:
+        """Поиск файлов MBTILES и KMZ с метаданными"""
+        base_folder = "Компьютер DESKTOP-JMVJ4CL/АФС/КаталогПОСокол"
+        full_name = f"{square}-{overlay}-{frame}"
+        
+        result = {'mbtiles': [], 'kmz': []}
+        
+        paths = [
+            f"{base_folder}/{square}/{square}-{overlay}/{full_name}",
+            f"{base_folder}/{square}/{square}-{overlay}",
+            f"{base_folder}/{square}/{full_name}"
+        ]
+        
+        for path in paths:
+            if not self.folder_exists(path, quiet=True):
+                continue
+            
+            files = self.get_files_in_folder(path, quiet=True)
+            if not files:
+                continue
+            
+            result['mbtiles'].extend(self._extract_versions(files, full_name, '.mbtiles', path))
+            result['kmz'].extend(self._extract_versions(files, full_name, '.kmz', path))
+        
+        result['mbtiles'].sort(key=lambda x: x['version'], reverse=True)
+        result['kmz'].sort(key=lambda x: x['version'], reverse=True)
+        
+        return result
+    
+    def _format_date(self, date_str: str) -> str:
+        """Форматирует дату в читаемый вид"""
+        if not date_str:
+            return ""
         try:
-            base_folder = "Компьютер DESKTOP-JMVJ4CL/АФС/КаталогПОСокол"
-            square_folder = f"{base_folder}/{square}"
-            overlay_folder = f"{square_folder}/{square}-{overlay}"
-            full_name = f"{square}-{overlay}-{frame}"
-            
-            self.logger.info(f"\n🔍 Поиск файлов для {full_name}:")
-            result = {'mbtiles': [], 'kmz': []}
-            
-            paths = [
-                f"{overlay_folder}/{full_name}",
-                overlay_folder,
-                f"{square_folder}/{full_name}"
-            ]
-            
-            for i, path in enumerate(paths, 1):
-                self.logger.info(f"  Вариант {i}: {path}")
-                if self.folder_exists(path, quiet=True):
-                    files = self.get_files_in_folder(path, quiet=True)
-                    if files:
-                        self.logger.info(f"  ✅ Вариант {i}: папка существует")
-                        mbtiles = self._extract_versions(files, full_name, '.mbtiles', path)
-                        kmz = self._extract_versions(files, full_name, '.kmz', path)
-                        result['mbtiles'].extend(mbtiles)
-                        result['kmz'].extend(kmz)
-            
-            result['mbtiles'].sort(key=lambda x: x['version'], reverse=True)
-            result['kmz'].sort(key=lambda x: x['version'], reverse=True)
-            
-            if result['mbtiles']:
-                self.logger.info(f"  ✅ Найдено MBTILES: {len(result['mbtiles'])} версий")
-            if result['kmz']:
-                self.logger.info(f"  ✅ Найдено KMZ: {len(result['kmz'])} версий")
-            if not result['mbtiles'] and not result['kmz']:
-                self.logger.warning(f"  ❌ Файлы не найдены для {full_name}")
-            
-            return result
-        except Exception as e:
-            self.logger.error(f"  ❌ Ошибка поиска: {e}")
-            return {'mbtiles': [], 'kmz': []}
+            dt = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+            return dt.strftime("%d.%m.%Y %H:%M")
+        except:
+            return date_str[:16] if len(date_str) > 16 else date_str
     
     def _extract_versions(self, files: List[Dict], base_name: str, ext: str, folder: str) -> List[Dict]:
         versions = []
         for f in files:
             name = f['name']
-            if not name.startswith(base_name) or not name.endswith(ext):
-                continue
-            if ' ' in name:
+            if not name.startswith(base_name) or not name.endswith(ext) or ' ' in name:
                 continue
             
             version = 0
@@ -132,13 +114,15 @@ class YandexDiskClient:
             if match:
                 version = int(match.group(1))
             
-            link = self.get_file_download_link(f"{folder}/{name}")
-            if link:
+            file_info = self.get_file_download_link(f"{folder}/{name}")
+            if file_info:
                 size_mb = round(f.get('size', 0) / (1024 * 1024))
                 if size_mb >= 10:
                     versions.append({
-                        'name': name, 'version': version, 'download_link': link,
-                        'size_mb': size_mb
+                        'name': name,
+                        'version': version,
+                        'download_link': file_info['download_link'],
+                        'size_mb': size_mb,
+                        'modified': self._format_date(file_info.get('modified', ''))
                     })
-                    self.logger.info(f"    ✅ Добавлен файл: {name} (версия {version}, {size_mb} МБ)")
         return versions
