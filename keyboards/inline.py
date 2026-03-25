@@ -133,18 +133,13 @@ def get_afs_catalog_load_keyboard() -> InlineKeyboardMarkup:
 
 
 def get_district_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура выбора района для загрузки из интернета (показываем ВСЕ районы)"""
+    """Клавиатура выбора района для загрузки из интернета"""
     keyboard = []
     for district in AVAILABLE_DISTRICTS:
         keyboard.append([InlineKeyboardButton(text=f"📍 {district} район", callback_data=f"select_district_{district}")])
     
     keyboard.append([InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_settings_main")])
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
-
-
-def get_more_districts_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура со всеми районами (удалена, так как не нужна)"""
-    return get_district_keyboard()
 
 
 def get_delete_district_keyboard(districts) -> InlineKeyboardMarkup:
@@ -267,7 +262,7 @@ def search_result_keyboard(query: str) -> InlineKeyboardMarkup:
 
 
 def photo_details_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура для деталей снимка"""
+    """Клавиатура для деталей снимка (базовая)"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔙 Назад к списку", callback_data="back_to_photos")],
         [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_main")]
