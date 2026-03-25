@@ -145,7 +145,7 @@ def register_kml_handlers(dp, kml_processor, village_db):
             f"• Добавлено новых снимков: {stats['added']}\n"
             f"• Пропущено дубликатов: {stats['duplicates']}\n"
             f"• Всего снимков в каталоге: {stats['total']}\n\n"
-            f"Теперь вы можете просмотреть или скачать каталог через ⚙️ НАСТРОЙКА → НАСТРОЙКА КАТАЛОГА.",
+            f"Теперь вы можете просмотреть или скачать каталог через ⚙️ НАСТРОЙКА → УПРАВЛЕНИЕ АФС.",
             parse_mode="HTML",
             reply_markup=back_keyboard()
         )
@@ -174,7 +174,7 @@ def register_kml_handlers(dp, kml_processor, village_db):
             f"• Обновлено описаний: {stats['updated']}\n"
             f"• Пропущено дубликатов: {stats['duplicates']}\n"
             f"• Всего снимков в каталоге: {stats['total']}\n\n"
-            f"Теперь вы можете просмотреть или скачать каталог через ⚙️ НАСТРОЙКА → НАСТРОЙКА КАТАЛОГА.",
+            f"Теперь вы можете просмотреть или скачать каталог через ⚙️ НАСТРОЙКА → УПРАВЛЕНИЕ АФС.",
             parse_mode="HTML",
             reply_markup=back_keyboard()
         )
@@ -202,7 +202,7 @@ def register_kml_handlers(dp, kml_processor, village_db):
             f"• Добавлено снимков: {stats['added']}\n"
             f"• Удалено старых: {stats['removed']}\n"
             f"• Всего снимков в каталоге: {stats['total']}\n\n"
-            f"Теперь вы можете просмотреть или скачать каталог через ⚙️ НАСТРОЙКА → НАСТРОЙКА КАТАЛОГА.",
+            f"Теперь вы можете просмотреть или скачать каталог через ⚙️ НАСТРОЙКА → УПРАВЛЕНИЕ АФС.",
             parse_mode="HTML",
             reply_markup=back_keyboard()
         )
@@ -343,7 +343,6 @@ def register_kml_handlers(dp, kml_processor, village_db):
             await callback.answer()
             return
         
-        # Создаем временный каталог из KML результатов
         kml_catalog = []
         for result in last_kml_results['results']:
             kml_catalog.append({
@@ -351,7 +350,6 @@ def register_kml_handlers(dp, kml_processor, village_db):
                 'description': result.get('description', '') or ''
             })
         
-        # Сравниваем
         diff = afs_catalog.compare_with_catalog(kml_catalog)
         last_kml_compare_data = kml_catalog
         
@@ -399,7 +397,6 @@ def register_kml_handlers(dp, kml_processor, village_db):
             await callback.answer()
             return
         
-        # Добавляем только новые снимки
         diff = afs_catalog.compare_with_catalog(last_kml_compare_data)
         new_items = [item for item in last_kml_compare_data if item['frame'] in diff['new']]
         
@@ -428,7 +425,6 @@ def register_kml_handlers(dp, kml_processor, village_db):
             await callback.answer()
             return
         
-        # Обновляем описания
         stats = afs_catalog.merge_with_catalog(last_kml_compare_data)
         
         await safe_edit_text(
@@ -515,7 +511,6 @@ def register_kml_handlers(dp, kml_processor, village_db):
         await state.set_state(SearchStates.waiting_for_afs_upload)
         await callback.answer()
     
-    # Обработчик загрузки TXT для каталога АФС
     @dp.message(SearchStates.waiting_for_afs_upload, F.document)
     async def process_afs_txt_upload(message: types.Message, state: FSMContext):
         if not message.document.file_name.endswith('.txt'):
@@ -535,7 +530,6 @@ def register_kml_handlers(dp, kml_processor, village_db):
                 content = f.read()
             os.unlink(tmp_path)
             
-            # Парсим файл
             lines = content.strip().split('\n')
             new_catalog = []
             
@@ -573,7 +567,6 @@ def register_kml_handlers(dp, kml_processor, village_db):
                     reply_markup=get_afs_catalog_keyboard(has_catalog=True)
                 )
             else:
-                # Заменяем каталог
                 old_count = len(afs_catalog.catalog)
                 afs_catalog.catalog = new_catalog
                 afs_catalog._save()
