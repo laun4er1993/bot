@@ -22,7 +22,8 @@ from keyboards.inline import (
     back_keyboard,
     loading_in_progress_keyboard,
     stats_back_keyboard,
-    get_status_keyboard
+    get_status_keyboard,
+    get_afs_catalog_keyboard
 )
 from utils.helpers import safe_edit_text, safe_answer_callback
 from config import logger, TEMP_DIR
