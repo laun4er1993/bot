@@ -1,4 +1,3 @@
-# handlers/kml.py
 import os
 import time
 import tempfile
@@ -222,15 +221,24 @@ def register_kml_handlers(dp, kml_processor, village_db, photos_db, afs_catalog)
             if villages:
                 logger.info(f"      Первые 5: {', '.join(villages[:5])}")
         
+        # Обновляем ссылки для всех снимков в каталоге
+        await callback.message.answer("⏳ Поиск файлов на Яндекс.Диске... Это может занять несколько секунд.")
+        
+        refresh_stats = photos_db.refresh_all_photo_links()
+        
         await callback.message.answer(
             f"✅ <b>Каталог АФС создан!</b>\n\n"
-            f"📊 <b>Статистика:</b>\n"
+            f"📊 <b>Статистика каталога:</b>\n"
             f"• Добавлено новых снимков: {stats['added']}\n"
             f"  └─ с населенными пунктами: {stats['with_np']}\n"
             f"  └─ без населенных пунктов: {stats['without_np']}\n"
             f"• Пропущено дубликатов: {stats['duplicates']}\n"
             f"• Всего снимков в каталоге: {stats['total']}\n\n"
-            f"Теперь вы можете искать снимки по названиям деревень!",
+            f"📥 <b>Поиск файлов на Яндекс.Диске:</b>\n"
+            f"• Найдено ссылок: {refresh_stats['found']}\n"
+            f"• Не найдено: {refresh_stats['not_found']}\n"
+            f"• Обработано: {refresh_stats['total']}\n\n"
+            f"Теперь вы можете искать снимки по названиям деревень и скачивать файлы!",
             parse_mode="HTML",
             reply_markup=get_kml_management_keyboard()
         )
@@ -262,6 +270,10 @@ def register_kml_handlers(dp, kml_processor, village_db, photos_db, afs_catalog)
         
         stats = afs_catalog.add_from_kml_results(enriched_results, frames_without_np)
         
+        # Обновляем ссылки для всех снимков
+        await callback.message.answer("⏳ Поиск файлов на Яндекс.Диске...")
+        refresh_stats = photos_db.refresh_all_photo_links()
+        
         await callback.message.answer(
             f"✅ <b>Каталог АФС дополнен!</b>\n\n"
             f"📊 <b>Статистика:</b>\n"
@@ -270,7 +282,8 @@ def register_kml_handlers(dp, kml_processor, village_db, photos_db, afs_catalog)
             f"  └─ без населенных пунктов: {stats['without_np']}\n"
             f"• Обновлено описаний: {stats['updated']}\n"
             f"• Пропущено дубликатов: {stats['duplicates']}\n"
-            f"• Всего снимков в каталоге: {stats['total']}",
+            f"• Всего снимков в каталоге: {stats['total']}\n\n"
+            f"📥 <b>Поиск файлов:</b> найдено {refresh_stats['found']} из {refresh_stats['total']}",
             parse_mode="HTML",
             reply_markup=get_kml_management_keyboard()
         )
@@ -302,6 +315,10 @@ def register_kml_handlers(dp, kml_processor, village_db, photos_db, afs_catalog)
         
         stats = afs_catalog.replace_with_kml_results(enriched_results, frames_without_np)
         
+        # Обновляем ссылки для всех снимков
+        await callback.message.answer("⏳ Поиск файлов на Яндекс.Диске...")
+        refresh_stats = photos_db.refresh_all_photo_links()
+        
         await callback.message.answer(
             f"✅ <b>Каталог АФС заменен!</b>\n\n"
             f"📊 <b>Статистика:</b>\n"
@@ -309,7 +326,8 @@ def register_kml_handlers(dp, kml_processor, village_db, photos_db, afs_catalog)
             f"  └─ с населенными пунктами: {stats['with_np']}\n"
             f"  └─ без населенных пунктов: {stats['without_np']}\n"
             f"• Удалено старых: {stats['removed']}\n"
-            f"• Всего снимков в каталоге: {stats['total']}",
+            f"• Всего снимков в каталоге: {stats['total']}\n\n"
+            f"📥 <b>Поиск файлов:</b> найдено {refresh_stats['found']} из {refresh_stats['total']}",
             parse_mode="HTML",
             reply_markup=get_kml_management_keyboard()
         )
