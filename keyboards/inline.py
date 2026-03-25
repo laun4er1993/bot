@@ -7,7 +7,6 @@ from api_sources import AVAILABLE_DISTRICTS
 def get_settings_main_keyboard() -> InlineKeyboardMarkup:
     """Главное меню настроек"""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔄 ОБРАБОТАТЬ KML", callback_data="process_kml_menu")],
         [InlineKeyboardButton(text="🔄 УПРАВЛЕНИЕ KML", callback_data="kml_management_menu")],
         [InlineKeyboardButton(text="📥 ЗАГРУЗКА НП", callback_data="np_settings_menu")],
         [InlineKeyboardButton(text="📁 УПРАВЛЕНИЕ АФС", callback_data="catalog_settings_menu")],
@@ -20,6 +19,7 @@ def get_settings_main_keyboard() -> InlineKeyboardMarkup:
 def get_kml_management_keyboard() -> InlineKeyboardMarkup:
     """Меню управления KML"""
     return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 ОБРАБОТАТЬ KML", callback_data="process_kml_menu")],
         [InlineKeyboardButton(text="📝 Добавить KML вручную", callback_data="add_kml_manual")],
         [InlineKeyboardButton(text="📤 Загрузить KML файл", callback_data="load_kml_catalog")],
         [InlineKeyboardButton(text="📊 Статистика KML", callback_data="kml_stats")],
@@ -86,7 +86,7 @@ def get_kml_result_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🔄 Заменить каталог АФС", callback_data="replace_afs_catalog")],
         [InlineKeyboardButton(text="📋 Показать каталог АФС", callback_data="show_afs_catalog")],
         [InlineKeyboardButton(text="⚙️ Настройки АФС", callback_data="catalog_settings_menu")],
-        [InlineKeyboardButton(text="🔄 Обработать другой KML", callback_data="process_kml_menu")],
+        [InlineKeyboardButton(text="🔄 Обработать другой KML", callback_data="kml_management_menu")],
         [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_main")]
     ])
 
@@ -284,7 +284,7 @@ def photo_details_keyboard() -> InlineKeyboardMarkup:
 def process_kml_again_keyboard() -> InlineKeyboardMarkup:
     """Клавиатура для повторной обработки KML"""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔄 Обработать другой KML", callback_data="process_kml_menu")]
+        [InlineKeyboardButton(text="🔄 Обработать другой KML", callback_data="kml_management_menu")]
     ])
 
 
