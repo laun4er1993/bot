@@ -5,11 +5,12 @@ import tempfile
 import asyncio
 from aiogram import types, F
 from aiogram.fsm.context import FSMContext
-from aiogram.types import FSInputFile
+from aiogram.types import FSInputFile, BufferedInputFile
 
 from states.states import SearchStates
 from keyboards.inline import (
     get_settings_main_keyboard, get_np_settings_keyboard, get_catalog_settings_keyboard,
+    get_kml_management_keyboard, get_kml_catalog_keyboard,
     get_district_keyboard, get_more_districts_keyboard, get_delete_district_keyboard,
     get_confirm_delete_district_keyboard, get_confirm_clear_all_keyboard,
     get_merge_keyboard, back_keyboard, loading_in_progress_keyboard,
@@ -19,16 +20,19 @@ from utils.helpers import safe_edit_text, safe_answer_callback
 from config import logger, TEMP_DIR
 from api_sources import APISourceManager, AVAILABLE_DISTRICTS
 from services.afs_catalog import AFSCatalog
+from services.kml_catalog import KMLCatalog
 
 # Глобальные переменные
 active_download = False
 active_download_user_id = None
 bot_enabled = True
 afs_catalog = AFSCatalog()
+kml_catalog = KMLCatalog()
+current_kml_page = 1
 
 
 def register_settings_handlers(dp, village_db):
-    global active_download, active_download_user_id, bot_enabled
+    global active_download, active_download_user_id, bot_enabled, current_kml_page
     
     @dp.message(F.text == "⚙️ НАСТРОЙКА")
     async def menu_settings_main(message: types.Message):
@@ -50,26 +54,299 @@ def register_settings_handlers(dp, village_db):
         )
         await safe_answer_callback(callback)
     
-    @dp.callback_query(lambda c: c.data == "process_kml_menu")
-    async def process_kml_menu(callback: types.CallbackQuery, state: FSMContext):
-        """Меню обработки KML"""
+    # ========== УПРАВЛЕНИЕ KML ==========
+    
+    @dp.callback_query(lambda c: c.data == "kml_management_menu")
+    async def kml_management_menu(callback: types.CallbackQuery):
+        """Меню управления KML"""
+        stats = kml_catalog.get_statistics()
+        text = (
+            f"🔄 <b>Управление каталогом KML</b>\n\n"
+            f"📊 <b>Статистика каталога:</b>\n"
+            f"• Всего файлов: {stats['total']}\n"
+            f"• С описаниями: {stats['with_description']}\n"
+            f"• Без описаний: {stats['without_description']}\n\n"
+            f"Выберите действие:"
+        )
+        
         await safe_edit_text(
             callback.message,
-            "🔄 <b>Обработка KML файлов</b>\n\n"
-            "Загрузите KML файл с каталогом снимков.\n"
-            "После загрузки я:\n"
-            "• Найду населенные пункты в каждом кадре\n"
-            "• Добавлю полные описания снимков из базы данных\n"
-            "• Создам подробный TXT отчет со статистикой\n\n"
-            "📌 <i>Файл должен содержать Placemark с названиями Frame-XXX</i>",
+            text,
+            parse_mode="HTML",
+            reply_markup=get_kml_management_keyboard()
+        )
+        await safe_answer_callback(callback)
+    
+    @dp.callback_query(lambda c: c.data == "add_kml_manual")
+    async def add_kml_manual_start(callback: types.CallbackQuery, state: FSMContext):
+        await safe_edit_text(
+            callback.message,
+            "📝 <b>Добавление KML файла вручную</b>\n\n"
+            "Введите данные в формате:\n"
+            "<code>номер_снимка|описание</code>\n\n"
+            "📌 <b>Пример:</b>\n"
+            "<code>N56E34-266-016|Снимок Бахмутово, дата 28.10.1942</code>\n\n"
+            "💡 <b>Примечания:</b>\n"
+            "• Описание может быть пустым\n"
+            "• Если файл уже существует, он будет пропущен\n\n"
+            "Введите данные одной строкой:",
             parse_mode="HTML"
         )
-        await state.set_state(SearchStates.waiting_for_kml)
+        await state.set_state(SearchStates.waiting_for_add_kml)
         await safe_answer_callback(callback)
+    
+    @dp.message(SearchStates.waiting_for_add_kml)
+    async def add_kml_parse(message: types.Message, state: FSMContext):
+        data = message.text.strip()
+        
+        if '|' not in data:
+            await message.answer(
+                "❌ Неверный формат. Ожидается:\n"
+                "<code>номер_снимка|описание</code>\n\n"
+                "Пример: <code>N56E34-266-016|Описание снимка</code>",
+                parse_mode="HTML"
+            )
+            return
+        
+        parts = data.split('|', 1)
+        frame = parts[0].strip()
+        description = parts[1].strip() if len(parts) > 1 else ''
+        
+        if not frame:
+            await message.answer("❌ Номер снимка не может быть пустым")
+            return
+        
+        stats = kml_catalog.add_kml(frame, description)
+        
+        if stats['added'] > 0:
+            await message.answer(
+                f"✅ <b>KML файл добавлен!</b>\n\n"
+                f"📊 <b>Данные:</b>\n"
+                f"• Номер снимка: {frame}\n"
+                f"• Описание: {description if description else 'не указано'}\n\n"
+                f"Всего файлов в каталоге: {stats['total']}",
+                parse_mode="HTML",
+                reply_markup=back_keyboard()
+            )
+        else:
+            await message.answer(
+                f"❌ <b>KML файл не добавлен!</b>\n\n"
+                f"Файл с номером {frame} уже существует в каталоге.",
+                parse_mode="HTML",
+                reply_markup=back_keyboard()
+            )
+        
+        await state.clear()
+    
+    @dp.callback_query(lambda c: c.data == "load_kml_catalog")
+    async def load_kml_catalog_start(callback: types.CallbackQuery, state: FSMContext):
+        await safe_edit_text(
+            callback.message,
+            "📤 <b>Загрузка каталога KML</b>\n\n"
+            "Отправьте TXT файл с каталогом KML.\n\n"
+            "📌 <b>Формат файла:</b>\n"
+            "Каждая строка должна содержать номер снимка и описание через символ |\n\n"
+            "<code>N56E34-266-016|Описание снимка...</code>\n"
+            "<code>N56E34-266-022|Другое описание...</code>\n\n"
+            "⚠️ <b>Важно:</b>\n"
+            "• Если файл уже существует в каталоге, он будет пропущен\n"
+            "• Добавятся только новые файлы\n\n"
+            "Отправьте TXT файл:",
+            parse_mode="HTML"
+        )
+        await state.set_state(SearchStates.waiting_for_kml_upload)
+        await safe_answer_callback(callback)
+    
+    @dp.message(SearchStates.waiting_for_kml_upload, F.document)
+    async def process_kml_txt_upload(message: types.Message, state: FSMContext):
+        if not message.document.file_name.endswith('.txt'):
+            await message.answer("❌ Отправьте TXT файл (с расширением .txt)")
+            await state.clear()
+            return
+        
+        await message.answer("⏳ Загрузка и обработка файла...")
+        
+        try:
+            file_info = await message.bot.get_file(message.document.file_id)
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.txt') as tmp:
+                await message.bot.download_file(file_info.file_path, tmp)
+                tmp_path = tmp.name
+            
+            with open(tmp_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            os.unlink(tmp_path)
+            
+            lines = content.strip().split('\n')
+            kml_list = []
+            
+            for line in lines:
+                line = line.strip()
+                if not line or line.startswith('=') or line.startswith('Номер'):
+                    continue
+                
+                if '|' in line:
+                    parts = line.split('|', 1)
+                    frame = parts[0].strip()
+                    description = parts[1].strip() if len(parts) > 1 else ''
+                    if description == 'None':
+                        description = ''
+                    if frame:
+                        kml_list.append({'frame': frame, 'description': description})
+            
+            if not kml_list:
+                await message.answer("❌ В файле не найдено корректных записей")
+                await state.clear()
+                return
+            
+            stats = kml_catalog.add_kml_batch(kml_list)
+            
+            await message.answer(
+                f"✅ <b>Обработка TXT завершена!</b>\n\n"
+                f"📊 <b>Результат:</b>\n"
+                f"• Добавлено новых файлов: {stats['added']}\n"
+                f"• Пропущено дубликатов: {stats['duplicates']}\n"
+                f"• Всего файлов в каталоге: {stats['total']}",
+                parse_mode="HTML",
+                reply_markup=back_keyboard()
+            )
+            
+        except Exception as e:
+            logger.error(f"Ошибка: {e}")
+            await message.answer(f"❌ Ошибка при загрузке файла:\n{str(e)}")
+        
+        await state.clear()
+    
+    @dp.message(SearchStates.waiting_for_kml_upload)
+    async def process_kml_txt_invalid(message: types.Message, state: FSMContext):
+        await message.answer("❌ Отправьте TXT файл (с расширением .txt)")
+        await state.clear()
+    
+    @dp.callback_query(lambda c: c.data == "kml_stats")
+    async def kml_stats_handler(callback: types.CallbackQuery):
+        stats = kml_catalog.get_statistics()
+        
+        text = (
+            f"📊 <b>Статистика каталога KML</b>\n\n"
+            f"• Всего файлов: {stats['total']}\n"
+            f"• С описаниями: {stats['with_description']}\n"
+            f"• Без описаний: {stats['without_description']}\n\n"
+        )
+        
+        if not kml_catalog.is_empty():
+            text += f"📌 <b>Последние 5 файлов:</b>\n"
+            for item in kml_catalog.catalog[-5:]:
+                text += f"• {item['frame']}\n"
+        
+        await safe_edit_text(
+            callback.message,
+            text,
+            parse_mode="HTML",
+            reply_markup=get_kml_management_keyboard()
+        )
+        await safe_answer_callback(callback)
+    
+    @dp.callback_query(lambda c: c.data.startswith("kml_page_"))
+    async def kml_page_handler(callback: types.CallbackQuery):
+        global current_kml_page
+        
+        page = int(callback.data.replace("kml_page_", ""))
+        current_kml_page = page
+        
+        text, total_pages, current = kml_catalog.get_catalog_text(
+            with_descriptions=False,
+            page=page,
+            per_page=50
+        )
+        
+        await safe_edit_text(
+            callback.message,
+            text,
+            parse_mode="HTML",
+            reply_markup=get_kml_catalog_keyboard(
+                has_catalog=not kml_catalog.is_empty(),
+                page=current,
+                total_pages=total_pages
+            )
+        )
+        await callback.answer()
+    
+    @dp.callback_query(lambda c: c.data == "show_kml_catalog")
+    async def show_kml_catalog_handler(callback: types.CallbackQuery):
+        global current_kml_page
+        
+        if kml_catalog.is_empty():
+            await callback.message.answer(
+                "📭 Каталог KML пуст.\n\n"
+                "Чтобы добавить файлы:\n"
+                "• Добавьте вручную\n"
+                "• Загрузите TXT файл",
+                reply_markup=back_keyboard()
+            )
+            await callback.answer()
+            return
+        
+        current_kml_page = 1
+        text, total_pages, current = kml_catalog.get_catalog_text(
+            with_descriptions=False,
+            page=1,
+            per_page=50
+        )
+        
+        await safe_edit_text(
+            callback.message,
+            text,
+            parse_mode="HTML",
+            reply_markup=get_kml_catalog_keyboard(
+                has_catalog=True,
+                page=current,
+                total_pages=total_pages
+            )
+        )
+        await callback.answer()
+    
+    @dp.callback_query(lambda c: c.data == "download_kml_catalog")
+    async def download_kml_catalog_handler(callback: types.CallbackQuery):
+        if kml_catalog.is_empty():
+            await callback.message.answer("❌ Каталог KML пуст. Сначала добавьте файлы.")
+            await callback.answer()
+            return
+        
+        try:
+            filepath = kml_catalog.export_to_txt()
+            
+            if filepath and os.path.exists(filepath):
+                with open(filepath, 'rb') as f:
+                    await callback.message.answer_document(
+                        BufferedInputFile(f.read(), filename=os.path.basename(filepath)),
+                        caption=f"📁 <b>Каталог KML</b>\nВсего: {len(kml_catalog.catalog)} файлов",
+                        parse_mode="HTML"
+                    )
+                os.unlink(filepath)
+            else:
+                await callback.message.answer("❌ Ошибка при создании файла.")
+        except Exception as e:
+            logger.error(f"Ошибка: {e}")
+            await callback.message.answer(f"❌ Ошибка при создании файла: {e}")
+        
+        await callback.answer()
+    
+    @dp.callback_query(lambda c: c.data == "clear_kml_catalog")
+    async def clear_kml_catalog_handler(callback: types.CallbackQuery):
+        removed = kml_catalog.clear()
+        
+        await safe_edit_text(
+            callback.message,
+            f"🗑️ <b>Каталог KML очищен!</b>\n\n"
+            f"Удалено файлов: {removed}",
+            parse_mode="HTML",
+            reply_markup=get_kml_management_keyboard()
+        )
+        await callback.answer()
+    
+    # ========== УПРАВЛЕНИЕ НАСЕЛЕННЫМИ ПУНКТАМИ ==========
     
     @dp.callback_query(lambda c: c.data == "np_settings_menu")
     async def np_settings_menu(callback: types.CallbackQuery):
-        """Меню настроек населенных пунктов"""
         stats = village_db.get_stats()
         text = (
             f"📥 <b>Управление каталогом населенных пунктов</b>\n\n"
@@ -96,9 +373,10 @@ def register_settings_handlers(dp, village_db):
         )
         await safe_answer_callback(callback)
     
+    # ========== УПРАВЛЕНИЕ КАТАЛОГОМ АФС ==========
+    
     @dp.callback_query(lambda c: c.data == "catalog_settings_menu")
     async def catalog_settings_menu(callback: types.CallbackQuery):
-        """Меню настроек каталога АФС"""
         stats = afs_catalog.get_statistics()
         text = (
             f"📁 <b>Управление каталогом АФС</b>\n\n"
@@ -116,23 +394,24 @@ def register_settings_handlers(dp, village_db):
         )
         await safe_answer_callback(callback)
     
+    # ========== ПРОВЕРКА РАБОТОСПОСОБНОСТИ ==========
+    
     @dp.callback_query(lambda c: c.data == "check_bot_status")
     async def check_bot_status(callback: types.CallbackQuery):
-        """Проверка работоспособности бота"""
-        # Проверка населенных пунктов
         np_stats = village_db.get_stats()
         np_status = "✅" if np_stats['total'] > 0 else "❌"
         np_text = f"{np_status} Населенные пункты: {np_stats['total']} записей"
         
-        # Проверка АФС
         afs_stats = afs_catalog.get_statistics()
         afs_status = "✅" if afs_stats['total'] > 0 else "❌"
         afs_text = f"{afs_status} Каталог АФС: {afs_stats['total']} снимков"
         
-        # Проверка состояния бота
+        kml_stats = kml_catalog.get_statistics()
+        kml_status = "✅" if kml_stats['total'] > 0 else "❌"
+        kml_text = f"{kml_status} Каталог KML: {kml_stats['total']} файлов"
+        
         bot_status = "✅ Включен" if bot_enabled else "❌ Выключен"
         
-        # Проверка наличия файлов
         files_status = []
         data_dir = "data"
         if os.path.exists(data_dir):
@@ -143,7 +422,8 @@ def register_settings_handlers(dp, village_db):
             f"🔧 <b>ПРОВЕРКА РАБОТОСПОСОБНОСТИ БОТА</b>\n\n"
             f"📊 <b>Статус данных:</b>\n"
             f"{np_text}\n"
-            f"{afs_text}\n\n"
+            f"{afs_text}\n"
+            f"{kml_text}\n\n"
             f"🤖 <b>Статус бота:</b>\n"
             f"{bot_status}\n\n"
             f"📂 <b>Файловая система:</b>\n"
@@ -161,7 +441,6 @@ def register_settings_handlers(dp, village_db):
     
     @dp.callback_query(lambda c: c.data == "enable_bot")
     async def enable_bot(callback: types.CallbackQuery):
-        """Включение/выключение бота"""
         global bot_enabled
         bot_enabled = not bot_enabled
         
@@ -175,6 +454,8 @@ def register_settings_handlers(dp, village_db):
             reply_markup=get_settings_main_keyboard()
         )
         await safe_answer_callback(callback)
+    
+    # ========== ОСТАЛЬНЫЕ ОБРАБОТЧИКИ (добавление НП, загрузка TXT, удаление и т.д.) ==========
     
     @dp.callback_query(lambda c: c.data == "add_village_manual")
     async def add_village_manual_start(callback: types.CallbackQuery, state: FSMContext):
