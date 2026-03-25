@@ -23,11 +23,9 @@ class KMLProcessor:
         self.polygon_cache: Dict[str, Polygon] = {} if KML_CACHE_POLYGONS else None
     
     def _meters_to_degrees(self, lat: float, meters: float) -> float:
-        """Конвертирует метры в градусы с учетом широты"""
         return meters / 111320.0
     
     def _parse_coords(self, coords_text: str) -> List[Tuple[float, float]]:
-        """Парсит координаты из KML"""
         coords = []
         for point in coords_text.strip().split():
             parts = point.split(',')
@@ -41,7 +39,6 @@ class KMLProcessor:
         return coords
     
     def _create_buffered_polygon(self, photo_num: str, coordinates: List[Tuple[float, float]], margin_m: float) -> Optional[Polygon]:
-        """Создает буферизованный полигон для кадра"""
         if KML_CACHE_POLYGONS and self.polygon_cache and photo_num in self.polygon_cache:
             return self.polygon_cache[photo_num]
         
@@ -68,96 +65,36 @@ class KMLProcessor:
             return None
     
     def _get_bbox(self, coordinates: List[Tuple[float, float]], margin_m: float) -> Tuple[float, float, float, float]:
-        """Вычисляет ограничивающий прямоугольник (bbox)"""
         lats = [lat for lat, _ in coordinates]
         lons = [lon for _, lon in coordinates]
-        
         avg_lat = sum(lats) / len(lats)
         margin_deg = self._meters_to_degrees(avg_lat, margin_m)
-        
         return (min(lats) - margin_deg, max(lats) + margin_deg,
                 min(lons) - margin_deg, max(lons) + margin_deg)
     
     def _point_in_polygon(self, lat: float, lon: float, buffered_polygon: Polygon, bbox: Tuple[float, float, float, float]) -> bool:
-        """Проверяет, находится ли точка внутри полигона"""
         if not (bbox[0] <= lat <= bbox[1] and bbox[2] <= lon <= bbox[3]):
             return False
-        
         point = Point(lon, lat)
-        
         if KML_USE_INTERSECTS:
             return buffered_polygon.intersects(point)
         else:
             return buffered_polygon.contains(point)
     
-    def _parse_frame_info(self, photo_num: str) -> Dict:
-        """Парсит номер снимка для извлечения информации о квадрате, налете и кадре"""
-        parts = photo_num.split('-')
-        result = {
-            'square': parts[0] if len(parts) >= 1 else '',
-            'overlay': parts[1] if len(parts) >= 2 else '',
-            'frame': parts[2] if len(parts) >= 3 else '',
-            'full': photo_num
-        }
-        return result
-    
-    def _generate_full_description(self, photo_num: str, original_description: str = None) -> str:
-        """Генерирует полное описание снимка на основе имеющихся данных"""
-        frame_info = self._parse_frame_info(photo_num)
-        
-        # Пытаемся извлечь информацию из существующего описания
-        description = original_description or ""
-        
-        # Формируем полное описание
-        full_desc = f"📸 **Снимок {photo_num}**"
-        
-        # Добавляем квадрат
-        if frame_info['square']:
-            full_desc += f"\n📍 Квадрат: {frame_info['square']}"
-        
-        # Добавляем налет и кадр
-        if frame_info['overlay']:
-            full_desc += f"\n🖼️ Налет: {frame_info['overlay']}"
-        if frame_info['frame']:
-            full_desc += f"\n🎞️ Кадр: {frame_info['frame']}"
-        
-        # Извлекаем дополнительную информацию из описания
-        if description:
-            # Дата
-            date_match = re.search(r'дата[:]\s*([\d.]+)', description, re.IGNORECASE)
-            if date_match:
-                full_desc += f"\n📅 Дата: {date_match.group(1)}"
-            
-            # Масштаб
-            scale_match = re.search(r'масштаб[:]\s*([\d:]+)', description, re.IGNORECASE)
-            if scale_match:
-                full_desc += f"\n📏 Масштаб: {scale_match.group(1)}"
-            
-            # Вылет
-            flight_match = re.search(r'вылет[:]\s*([^\n]+)', description, re.IGNORECASE)
-            if flight_match:
-                full_desc += f"\n✈️ Вылет: {flight_match.group(1)}"
-            
-            # Качество
-            quality_match = re.search(r'качество[:]\s*([^\n]+)', description, re.IGNORECASE)
-            if quality_match:
-                full_desc += f"\n⭐ Качество: {quality_match.group(1)}"
-            
-            # Владелец
-            owner_match = re.search(r'владелец[:]\s*([^\n]+)', description, re.IGNORECASE)
-            if owner_match:
-                full_desc += f"\n🏢 Владелец: {owner_match.group(1)}"
-        
-        return full_desc
+    def _extract_description(self, placemark) -> str:
+        """Извлекает описание из Placemark"""
+        desc_elem = placemark.find('description')
+        if desc_elem:
+            return desc_elem.text.strip()
+        return ""
     
     def _process_polygon(self, photo_num: str, coordinates: List[Tuple[float, float]], margin_m: float, description: str = None) -> Dict:
-        """Обрабатывает полигон и находит населенные пункты внутри"""
         bbox = self._get_bbox(coordinates, margin_m)
         
         buffered_polygon = self._create_buffered_polygon(photo_num, coordinates, margin_m)
         if buffered_polygon is None:
             return {'photo_num': photo_num, 'villages': [], 'villages_with_district': [],
-                    'village_count': 0, 'description': self._generate_full_description(photo_num, description), 'error': True}
+                    'village_count': 0, 'description': description or "", 'error': True}
         
         villages_in_photo = []
         villages_with_district = []
@@ -182,20 +119,16 @@ class KMLProcessor:
             except Exception as e:
                 continue
         
-        # Генерируем полное описание снимка
-        full_description = self._generate_full_description(photo_num, description)
-        
         return {
             'photo_num': photo_num,
             'villages': villages_in_photo,
             'villages_with_district': villages_with_district,
             'village_count': len(villages_in_photo),
-            'description': full_description,
+            'description': description or "",
             'error': False
         }
     
     def process_kml_file(self, kml_path: str, margin_m: float = KML_MARGIN_M) -> Dict:
-        """Обрабатывает KML файл и возвращает подробный результат"""
         if KML_CACHE_POLYGONS and self.polygon_cache is not None:
             self.polygon_cache.clear()
         
@@ -224,57 +157,46 @@ class KMLProcessor:
             photo_num = name_elem.text.replace('Frame-', '')
             logger.info(f"📍 Обработка кадра: {photo_num}")
             
-            # Получаем существующее описание из базы данных (если есть)
-            existing_description = self.photos_db.get_photo_details(photo_num)
+            # Извлекаем описание из KML
+            description = self._extract_description(placemark)
             
             polygon_elem = placemark.find('Polygon')
             if not polygon_elem:
-                frames_without_np.append({'frame': photo_num, 'description': existing_description, 'error': 'no_polygon'})
+                frames_without_np.append({'frame': photo_num, 'description': description, 'error': 'no_polygon'})
                 logger.warning(f"  ❌ Не найден полигон для {photo_num}")
                 continue
             
             coords_elem = polygon_elem.find('coordinates')
             if not coords_elem:
-                frames_without_np.append({'frame': photo_num, 'description': existing_description, 'error': 'no_coordinates'})
+                frames_without_np.append({'frame': photo_num, 'description': description, 'error': 'no_coordinates'})
                 logger.warning(f"  ❌ Не найдены координаты для {photo_num}")
                 continue
             
             coordinates = self._parse_coords(coords_elem.text.strip())
             if len(coordinates) < 3:
-                frames_without_np.append({'frame': photo_num, 'description': existing_description, 'error': 'invalid_coordinates'})
+                frames_without_np.append({'frame': photo_num, 'description': description, 'error': 'invalid_coordinates'})
                 logger.warning(f"  ❌ Некорректные координаты для {photo_num}")
                 continue
             
-            result = self._process_polygon(photo_num, coordinates, margin_m, existing_description)
+            result = self._process_polygon(photo_num, coordinates, margin_m, description)
             
             if result.get('error'):
                 errors.append({'frame': photo_num, 'error': result.get('error')})
-                frames_without_np.append({'frame': photo_num, 'description': existing_description, 'error': 'polygon_error'})
+                frames_without_np.append({'frame': photo_num, 'description': description, 'error': 'polygon_error'})
                 continue
             
             if result['village_count'] > 0:
                 results.append(result)
                 logger.info(f"  ✅ Найдено {result['village_count']} населенных пунктов")
+                if result['villages']:
+                    logger.info(f"      📍 Деревни: {', '.join(result['villages'][:5])}")
                 for village in result['villages_with_district']:
                     district = village['district']
                     if district:
                         district_counter[district] = district_counter.get(district, 0) + 1
             else:
-                frames_without_np.append({'frame': photo_num, 'description': result['description']})
+                frames_without_np.append({'frame': photo_num, 'description': description})
                 logger.info(f"  ℹ️ Населенные пункты не найдены")
-            
-            # Логируем информацию о файлах на Яндекс.Диске
-            files = self.photos_db.photo_files.get(photo_num, {})
-            if files.get('mbtiles') or files.get('kmz'):
-                logger.info(f"  📁 Файлы на Яндекс.Диске:")
-                if files.get('mbtiles'):
-                    for v in files['mbtiles']:
-                        logger.info(f"    🗺️ MBTILES: версия {v['version']}, {v['size_mb']} МБ")
-                if files.get('kmz'):
-                    for v in files['kmz']:
-                        logger.info(f"    🌍 KMZ: версия {v['version']}, {v['size_mb']} МБ")
-            else:
-                logger.warning(f"  ❌ Файлы для {photo_num} не найдены на Яндекс.Диске")
         
         results.sort(key=lambda x: x['village_count'], reverse=True)
         
@@ -303,7 +225,6 @@ class KMLProcessor:
         logger.info(f"   • Снимков с НП: {stats['frames_with_np']}")
         logger.info(f"   • Снимков без НП: {stats['frames_without_np']}")
         logger.info(f"   • Всего связей: {stats['total_relations']}")
-        logger.info(f"   • Среднее НП на кадр: {stats['avg_np_per_frame']}")
         logger.info("=" * 60)
         
         return {
@@ -316,7 +237,6 @@ class KMLProcessor:
         }
     
     def generate_report(self, data: Dict, filename: str) -> str:
-        """Генерирует TXT отчет по результатам обработки KML"""
         os.makedirs(EXPORT_DIR, exist_ok=True)
         
         timestamp = time.strftime('%Y%m%d_%H%M%S')
@@ -372,7 +292,7 @@ class KMLProcessor:
                     f.write(f"Количество НП: {result['village_count']}\n")
                     
                     if result.get('description'):
-                        f.write(f"\n📝 ПОЛНОЕ ОПИСАНИЕ СНИМКА:\n")
+                        f.write(f"\n📝 ОПИСАНИЕ СНИМКА:\n")
                         f.write(f"{result['description']}\n\n")
                     
                     if result['villages_with_district']:
