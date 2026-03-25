@@ -2,6 +2,8 @@
 from keyboards.main import get_main_keyboard, back_keyboard
 from keyboards.inline import (
     get_settings_main_keyboard,
+    get_kml_management_keyboard,
+    get_kml_catalog_keyboard,
     get_np_settings_keyboard,
     get_catalog_settings_keyboard,
     get_kml_result_keyboard,
@@ -32,6 +34,8 @@ __all__ = [
     'get_main_keyboard',
     'back_keyboard',
     'get_settings_main_keyboard',
+    'get_kml_management_keyboard',
+    'get_kml_catalog_keyboard',
     'get_np_settings_keyboard',
     'get_catalog_settings_keyboard',
     'get_kml_result_keyboard',
