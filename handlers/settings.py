@@ -1,4 +1,3 @@
-# handlers/settings.py
 import os
 import time
 import tempfile
@@ -9,13 +8,21 @@ from aiogram.types import FSInputFile, BufferedInputFile
 
 from states.states import SearchStates
 from keyboards.inline import (
-    get_settings_main_keyboard, get_np_settings_keyboard, get_catalog_settings_keyboard,
-    get_kml_management_keyboard, get_kml_catalog_keyboard,
-    get_district_keyboard, get_delete_district_keyboard,
+    get_settings_main_keyboard,
+    get_np_settings_keyboard,
+    get_catalog_settings_keyboard,
+    get_kml_management_keyboard,
+    get_kml_catalog_keyboard,
+    get_district_keyboard,
     get_all_districts_keyboard,
-    get_confirm_delete_district_keyboard, get_confirm_clear_all_keyboard,
-    get_merge_keyboard, back_keyboard, loading_in_progress_keyboard,
-    stats_back_keyboard, get_status_keyboard
+    get_delete_district_keyboard,
+    get_confirm_delete_district_keyboard,
+    get_confirm_clear_all_keyboard,
+    get_merge_keyboard,
+    back_keyboard,
+    loading_in_progress_keyboard,
+    stats_back_keyboard,
+    get_status_keyboard
 )
 from utils.helpers import safe_edit_text, safe_answer_callback
 from config import logger, TEMP_DIR
@@ -34,7 +41,7 @@ def register_settings_handlers(dp, village_db, photos_db, afs_catalog):
     """Регистрирует обработчики настроек"""
     global active_download, active_download_user_id, bot_enabled, current_kml_page
     
-    @dp.message(F.text == "⚙️ НАСТРОЙКА")
+    @dp.message(F.text == "⚙️ НАСТРОЙКИ")
     async def menu_settings_main(message: types.Message):
         await message.answer(
             "⚙️ <b>Центр управления ботом</b>\n\n"
@@ -924,7 +931,7 @@ def register_settings_handlers(dp, village_db, photos_db, afs_catalog):
             callback.message,
             "🌐 <b>Выберите район</b>",
             parse_mode="HTML",
-            reply_markup=get_district_keyboard()
+            reply_markup=get_all_districts_keyboard()
         )
         await safe_answer_callback(callback)
     
@@ -937,10 +944,6 @@ def register_settings_handlers(dp, village_db, photos_db, afs_catalog):
             reply_markup=get_district_keyboard()
         )
         await safe_answer_callback(callback)
-    
-    @dp.callback_query(lambda c: c.data == "np_settings")
-    async def back_to_np_settings(callback: types.CallbackQuery):
-        await np_settings_menu(callback)
     
     @dp.callback_query(lambda c: c.data == "enable_bot")
     async def enable_bot(callback: types.CallbackQuery):
