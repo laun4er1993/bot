@@ -66,9 +66,17 @@ def register_settings_handlers(dp, village_db, photos_db):
             f"📊 <b>Статистика каталога:</b>\n"
             f"• Всего файлов: {stats['total']}\n"
             f"• С описаниями: {stats['with_description']}\n"
-            f"• Без описаний: {stats['without_description']}\n\n"
-            f"Выберите действие:"
+            f"• Без описаний: {stats['without_description']}\n"
+            f"• Файлов на диске: {stats['with_file']}\n\n"
         )
+        
+        if stats['recent_items']:
+            text += f"📌 <b>Последние добавленные файлы:</b>\n"
+            for item in stats['recent_items']:
+                text += f"• {item['frame']}\n"
+                if item.get('file_name'):
+                    text += f"  📄 {item['file_name']}\n"
+            text += "\n"
         
         await safe_edit_text(
             callback.message,
@@ -266,7 +274,8 @@ def register_settings_handlers(dp, village_db, photos_db):
             f"📊 <b>Статистика каталога KML</b>\n\n"
             f"• Всего файлов: {stats['total']}\n"
             f"• С описаниями: {stats['with_description']}\n"
-            f"• Без описаний: {stats['without_description']}\n\n"
+            f"• Без описаний: {stats['without_description']}\n"
+            f"• Файлов на диске: {stats['with_file']}\n\n"
         )
         
         if not kml_catalog.is_empty():
@@ -417,14 +426,23 @@ def register_settings_handlers(dp, village_db, photos_db):
     
     @dp.callback_query(lambda c: c.data == "catalog_settings_menu")
     async def catalog_settings_menu(callback: types.CallbackQuery):
+        """Меню настроек каталога АФС"""
         stats = afs_catalog.get_statistics()
+        
         text = (
             f"📁 <b>Управление каталогом АФС</b>\n\n"
             f"📊 <b>Статистика каталога:</b>\n"
             f"• Всего снимков: {stats['total']}\n"
             f"• С описаниями: {stats['with_description']}\n"
             f"• Без описаний: {stats['without_description']}\n"
+            f"• Средняя длина описания: {stats['avg_description_length']} символов\n\n"
         )
+        
+        if stats['recent_items']:
+            text += f"📌 <b>Последние добавленные снимки:</b>\n"
+            for item in stats['recent_items']:
+                text += f"• {item['frame']}\n"
+            text += "\n"
         
         await safe_edit_text(
             callback.message,
@@ -1051,7 +1069,6 @@ def register_settings_handlers(dp, village_db, photos_db):
     
     @dp.callback_query(lambda c: c.data == "show_more_districts")
     async def show_more_districts(callback: types.CallbackQuery):
-        # Этот обработчик больше не используется, но оставлен для обратной совместимости
         await safe_edit_text(
             callback.message,
             "🌐 <b>Выберите район для загрузки</b>\n\n"
