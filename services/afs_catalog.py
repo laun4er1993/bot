@@ -15,7 +15,7 @@ class AFSCatalog:
     
     def __init__(self):
         self.catalog: List[Dict] = []
-        self.villages_by_frame: Dict[str, List[str]] = {}  # frame -> список деревень
+        self.villages_by_frame: Dict[str, List[str]] = {}
         self._load()
     
     def _load(self):
@@ -348,10 +348,7 @@ class AFSCatalog:
             villages = self.villages_by_frame.get(frame, [])
             text += f"{i}. {frame}"
             if with_descriptions and item.get('description'):
-                desc_preview = str(item['description'])[:100].replace('\n', ' ')
-                if len(str(item['description'])) > 100:
-                    desc_preview += "..."
-                text += f"\n   📝 {desc_preview}"
+                text += f"\n   📝 {item['description']}"
             if villages:
                 villages_preview = ', '.join(villages[:5])
                 if len(villages) > 5:
@@ -387,7 +384,7 @@ class AFSCatalog:
         }
     
     def get_photo_details(self, photo_num: str) -> Optional[str]:
-        """Возвращает описание снимка из каталога АФС"""
+        """Возвращает полное описание снимка из каталога АФС"""
         for item in self.catalog:
             if item['frame'] == photo_num:
                 return item.get('description', '')
@@ -422,7 +419,6 @@ class AFSCatalog:
         
         logger.info(f"📊 Найдено {len(results)} снимков для деревни '{village_name}'")
         if not results:
-            # Логируем первые 10 снимков для отладки
             logger.info("   Снимки в каталоге:")
             for i, (frame, villages) in enumerate(list(self.villages_by_frame.items())[:10]):
                 logger.info(f"      {i+1}. {frame}: {len(villages)} деревень, первые 3: {villages[:3]}")
@@ -442,7 +438,6 @@ class AFSCatalog:
             frame = item['frame']
             description = item.get('description', '')
             
-            # Поиск координат в описании
             coords_found = self._extract_coordinates_from_text(description)
             
             for desc_lat, desc_lon in coords_found:
@@ -475,7 +470,6 @@ class AFSCatalog:
         
         # Если ввели короткий формат (например 266-016)
         if '-' in frame_lower and len(frame_lower.split('-')) == 2:
-            # Ищем снимки, оканчивающиеся на эту комбинацию
             suffix = frame_lower
             for item in self.catalog:
                 frame = item['frame'].lower()
@@ -487,11 +481,9 @@ class AFSCatalog:
                     })
                     logger.info(f"  ✅ Найден снимок: {item['frame']} (по суффиксу {suffix})")
         
-        # Стандартный поиск по полному совпадению
         for item in self.catalog:
             frame = item['frame'].lower()
             if frame == frame_lower or frame_lower in frame:
-                # Проверяем, не добавили ли уже этот снимок
                 if not any(r['frame'] == item['frame'] for r in results):
                     results.append({
                         'frame': item['frame'],
@@ -507,7 +499,6 @@ class AFSCatalog:
         """Извлекает координаты из текста в разных форматах"""
         coords = []
         
-        # Формат: 56.2345, 34.1234 или 56.2345 34.1234
         decimal_pattern = r'(\d{1,3}\.\d{4,})\s*[,\s]\s*(\d{1,3}\.\d{4,})'
         matches = re.findall(decimal_pattern, text)
         for match in matches:
@@ -519,7 +510,6 @@ class AFSCatalog:
             except:
                 pass
         
-        # Формат: 56°13'41" с.ш. 34°08'10" в.д.
         dms_pattern = r'(\d+)°(\d+)′([\d.]+)″\s*([сю])\.[^\d]*(\d+)°(\d+)′([\d.]+)″\s*([зв])\.[^\d]*'
         matches = re.findall(dms_pattern, text, re.IGNORECASE)
         for match in matches:
