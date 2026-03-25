@@ -1,4 +1,3 @@
-# services/photos_db.py
 import os
 import logging
 import re
@@ -58,6 +57,65 @@ class PhotosDatabase:
         logger.info(f"   • Снимков в каталоге АФС: {len(self.afs_catalog.catalog)}")
         logger.info(f"   • Снимков с файлами: {len(self.photo_files)}")
     
+    def find_files_for_photo(self, photo_num: str) -> Dict[str, List[Dict]]:
+        """Поиск файлов для конкретного снимка на Яндекс.Диске"""
+        logger.info(f"🔍 Поиск файлов для снимка {photo_num}")
+        
+        parts = photo_num.split('-')
+        if len(parts) >= 3:
+            square = parts[0]
+            overlay = parts[1]
+            frame = parts[2]
+            
+            files = self.yd_client.find_map_files(square, overlay, frame)
+            
+            if files['mbtiles'] or files['kmz']:
+                self.photo_files[photo_num] = files
+                logger.info(f"  ✅ Найдены файлы для {photo_num}: MBTILES={len(files['mbtiles'])}, KMZ={len(files['kmz'])}")
+                return files
+            else:
+                logger.warning(f"  ❌ Файлы не найдены для {photo_num}")
+                return {'mbtiles': [], 'kmz': []}
+        
+        return {'mbtiles': [], 'kmz': []}
+    
+    def refresh_all_photo_links(self) -> Dict:
+        """
+        Обновляет ссылки для всех снимков в каталоге АФС.
+        Вызывается после сохранения каталога АФС.
+        """
+        logger.info("🔄 МАССОВОЕ ОБНОВЛЕНИЕ ССЫЛОК ДЛЯ ВСЕХ СНИМКОВ")
+        
+        stats = {'total': 0, 'found': 0, 'not_found': 0, 'errors': 0}
+        
+        for item in self.afs_catalog.catalog:
+            photo_num = item['frame']
+            stats['total'] += 1
+            
+            logger.info(f"  [{stats['total']}] Проверка снимка: {photo_num}")
+            
+            # Проверяем, есть ли уже файлы в кэше
+            if photo_num in self.photo_files:
+                existing = self.photo_files[photo_num]
+                if existing.get('mbtiles') or existing.get('kmz'):
+                    logger.info(f"    ✅ Уже есть ссылки в кэше")
+                    stats['found'] += 1
+                    continue
+            
+            # Ищем файлы на Яндекс.Диске
+            files = self.find_files_for_photo(photo_num)
+            
+            if files.get('mbtiles') or files.get('kmz'):
+                stats['found'] += 1
+                logger.info(f"    ✅ Найдены ссылки: MBTILES={len(files['mbtiles'])}, KMZ={len(files['kmz'])}")
+            else:
+                stats['not_found'] += 1
+                logger.warning(f"    ❌ Файлы не найдены")
+        
+        logger.info(f"📊 ИТОГО: обработано {stats['total']}, найдено {stats['found']}, не найдено {stats['not_found']}")
+        
+        return stats
+    
     def search_by_village(self, query: str) -> List[Dict]:
         if not query:
             return []
@@ -108,6 +166,7 @@ class PhotosDatabase:
     def get_photo_details(self, photo_num: str) -> Optional[str]:
         """
         Возвращает полное описание снимка со ссылками на файлы и списком населенных пунктов.
+        Если файлы не найдены в кэше - выполняет поиск на Яндекс.Диске.
         """
         logger.info(f"📸 ЗАПРОШЕН СНИМОК: {photo_num}")
         
@@ -145,10 +204,13 @@ class PhotosDatabase:
             result_text += f"📍 <b>Населенные пункты в кадре:</b>\n"
             result_text += f"  ℹ️ Нет данных о населенных пунктах в этом кадре\n"
         
-        # Получаем ссылки на файлы с Яндекс.Диска
-        files = self.photo_files.get(photo_num, {})
-        links = []
+        # ПРОВЕРЯЕМ: если файлов нет в кэше, ищем на Яндекс.Диске
+        files = self.photo_files.get(photo_num)
+        if not files or (not files.get('mbtiles') and not files.get('kmz')):
+            logger.info(f"  🔍 Файлы не найдены в кэше, выполняем поиск на Яндекс.Диске...")
+            files = self.find_files_for_photo(photo_num)
         
+        links = []
         for file_type, label in [('mbtiles', '🗺️ Locus Maps'), ('kmz', '🌍 Google Earth KMZ')]:
             for v in files.get(file_type, []):
                 version = f"версия {v['version']}" if v['version'] > 0 else ""
@@ -161,6 +223,10 @@ class PhotosDatabase:
             logger.info(f"  ✅ Добавлено {len(links)} ссылок на скачивание")
         else:
             result_text += "\n\n❌ <b>Файлы не найдены на Яндекс.Диске</b>"
+            result_text += "\n\n💡 <b>Возможные причины:</b>"
+            result_text += "\n• Снимок еще не загружен на диск"
+            result_text += "\n• Изменилась структура папок"
+            result_text += "\n• Неверный токен доступа"
             logger.warning(f"  ❌ Файлы для снимка {photo_num} не найдены")
         
         return result_text
