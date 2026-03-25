@@ -2,10 +2,11 @@
 import os
 import time
 import logging
+import shutil
 from typing import List, Dict, Optional, Tuple
 from bs4 import BeautifulSoup
 
-from config import KML_CATALOG_FILE, DATA_DIR
+from config import KML_CATALOG_FILE, DATA_DIR, KML_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +96,7 @@ class KMLCatalog:
     
     def add_kml_from_file(self, kml_path: str, original_filename: str) -> Dict:
         """Добавляет KML файл в каталог из загруженного файла"""
-        stats = {'added': 0, 'duplicate': 0, 'error': 0, 'frame': ''}
+        stats = {'added': 0, 'duplicate': 0, 'error': 0, 'frame': '', 'total': 0}
         
         try:
             # Парсим KML файл для извлечения информации
@@ -126,19 +127,18 @@ class KMLCatalog:
             existing_frames = {item['frame'] for item in self.catalog}
             if frame in existing_frames:
                 stats['duplicate'] = 1
+                stats['frame'] = frame
                 return stats
             
             # Сохраняем файл в папку data/kml/
-            kml_dir = os.path.join(DATA_DIR, "kml")
-            os.makedirs(kml_dir, exist_ok=True)
+            os.makedirs(KML_DIR, exist_ok=True)
             
             # Генерируем уникальное имя файла
             timestamp = time.strftime('%Y%m%d_%H%M%S')
             saved_filename = f"{frame}_{timestamp}.kml"
-            saved_path = os.path.join(kml_dir, saved_filename)
+            saved_path = os.path.join(KML_DIR, saved_filename)
             
             # Копируем файл
-            import shutil
             shutil.copy2(kml_path, saved_path)
             
             # Добавляем в каталог
