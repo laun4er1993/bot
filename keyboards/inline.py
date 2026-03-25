@@ -22,6 +22,7 @@ def get_kml_management_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🔄 ОБРАБОТАТЬ KML", callback_data="process_kml_menu")],
         [InlineKeyboardButton(text="📝 Добавить KML вручную", callback_data="add_kml_manual")],
         [InlineKeyboardButton(text="📤 Загрузить KML файл", callback_data="load_kml_catalog")],
+        [InlineKeyboardButton(text="🔄 Обновить каталог", callback_data="refresh_kml_catalog")],
         [InlineKeyboardButton(text="📊 Статистика KML", callback_data="kml_stats")],
         [InlineKeyboardButton(text="📋 Показать каталог KML", callback_data="show_kml_catalog")],
         [InlineKeyboardButton(text="📥 Скачать каталог KML (TXT)", callback_data="download_kml_catalog")],
