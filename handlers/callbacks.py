@@ -23,7 +23,7 @@ from keyboards.inline import (
     get_all_districts_keyboard
 )
 from utils.helpers import safe_edit_text, safe_answer_callback, safe_delete_message
-from config import logger, AVAILABLE_DISTRICTS
+from config import logger
 from handlers.start import cmd_start
 from states.states import SearchStates
 
@@ -47,6 +47,7 @@ def register_callbacks(dp, village_db, db):
     
     @dp.callback_query(lambda c: c.data == "show_more_districts")
     async def show_more_districts(callback: types.CallbackQuery):
+        from api_sources.config import AVAILABLE_DISTRICTS
         await safe_edit_text(
             callback.message,
             "🌐 <b>Выберите район для загрузки</b>\n\n"
