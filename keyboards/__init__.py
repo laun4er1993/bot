@@ -1,4 +1,3 @@
-# keyboards/__init__.py
 from keyboards.main import get_main_keyboard, back_keyboard
 from keyboards.inline import (
     get_settings_main_keyboard,
@@ -11,6 +10,7 @@ from keyboards.inline import (
     get_afs_compare_keyboard,
     get_afs_catalog_load_keyboard,
     get_district_keyboard,
+    get_all_districts_keyboard,
     get_delete_district_keyboard,
     get_confirm_delete_district_keyboard,
     get_confirm_clear_all_keyboard,
@@ -37,7 +37,7 @@ __all__ = [
     'get_catalog_settings_keyboard',
     'get_kml_result_keyboard',
     'get_afs_catalog_keyboard', 'get_afs_compare_keyboard', 'get_afs_catalog_load_keyboard',
-    'get_district_keyboard',
+    'get_district_keyboard', 'get_all_districts_keyboard',
     'get_delete_district_keyboard', 'get_confirm_delete_district_keyboard',
     'get_confirm_clear_all_keyboard',
     'get_merge_keyboard',
