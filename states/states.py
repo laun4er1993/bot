@@ -11,3 +11,4 @@ class SearchStates(StatesGroup):
     waiting_for_add_kml = State()
     waiting_for_kml_upload = State()
     downloading_in_progress = State()
+    waiting_for_link_edit = State()
