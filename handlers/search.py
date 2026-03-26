@@ -43,8 +43,7 @@ def parse_coordinates(text: str) -> Tuple[Optional[float], Optional[float]]:
             pass
     
     # ========== ФОРМАТ 2: ГРАДУСЫ И ДЕСЯТИЧНЫЕ МИНУТЫ (DDM) ==========
-    # Ищем широту (N/S) и долготу (E/W) раздельно, удаляя найденные части
-    
+    # Ищем широту (N/S) и долготу (E/W) раздельно
     lat = None
     lon = None
     remaining_text = text
@@ -55,23 +54,20 @@ def parse_coordinates(text: str) -> Tuple[Optional[float], Optional[float]]:
     
     if lat_match:
         try:
-            # Извлекаем широту
             lat_dir1 = lat_match.group(1).upper() if lat_match.group(1) else ''
             lat_deg = float(lat_match.group(2))
             lat_min = float(lat_match.group(3))
             lat_dir2 = lat_match.group(4).upper() if lat_match.group(4) else ''
             
-            # Определяем направление широты
             lat_dir = lat_dir1 or lat_dir2
             lat_sign = -1 if lat_dir == 'S' else 1
             
             lat = lat_sign * (lat_deg + lat_min / 60)
             
-            # Удаляем найденную широту из текста для поиска долготы
+            # Удаляем найденную широту
             start_pos = lat_match.start()
             end_pos = lat_match.end()
             remaining_text = text[:start_pos] + text[end_pos:]
-            logger.debug(f"  После удаления широты: {remaining_text}")
             
         except Exception as e:
             logger.debug(f"  Ошибка парсинга широты: {e}")
@@ -87,7 +83,6 @@ def parse_coordinates(text: str) -> Tuple[Optional[float], Optional[float]]:
             lon_min = float(lon_match.group(3))
             lon_dir2 = lon_match.group(4).upper() if lon_match.group(4) else ''
             
-            # Определяем направление долготы
             lon_dir = lon_dir1 or lon_dir2
             lon_sign = -1 if lon_dir == 'W' else 1
             
@@ -96,19 +91,16 @@ def parse_coordinates(text: str) -> Tuple[Optional[float], Optional[float]]:
         except Exception as e:
             logger.debug(f"  Ошибка парсинга долготы: {e}")
     
-    # Если нашли обе координаты
     if lat is not None and lon is not None:
         if -90 <= lat <= 90 and -180 <= lon <= 180:
             logger.info(f"  📍 Распознаны DDM координаты: широта={lat:.5f}, долгота={lon:.5f}")
             return lat, lon
     
     # ========== ФОРМАТ 3: ГРАДУСЫ, МИНУТЫ, СЕКУНДЫ (DMS) ==========
-    # Аналогично, ищем отдельно широту и долготу
     lat = None
     lon = None
     remaining_text = text
     
-    # Ищем широту в формате DMS
     lat_dms_pattern = r'(\d+)°(\d+)′([\d.]+)″?\s*([NS]?)'
     lat_match = re.search(lat_dms_pattern, text, re.IGNORECASE)
     
@@ -123,7 +115,6 @@ def parse_coordinates(text: str) -> Tuple[Optional[float], Optional[float]]:
             if lat_dir == 'S':
                 lat = -lat
             
-            # Удаляем найденную широту
             start_pos = lat_match.start()
             end_pos = lat_match.end()
             remaining_text = text[:start_pos] + text[end_pos:]
@@ -131,7 +122,6 @@ def parse_coordinates(text: str) -> Tuple[Optional[float], Optional[float]]:
         except Exception as e:
             logger.debug(f"  Ошибка парсинга DMS широты: {e}")
     
-    # Ищем долготу в формате DMS
     lon_dms_pattern = r'(\d+)°(\d+)′([\d.]+)″?\s*([EW]?)'
     lon_match = re.search(lon_dms_pattern, remaining_text, re.IGNORECASE)
     
@@ -154,7 +144,7 @@ def parse_coordinates(text: str) -> Tuple[Optional[float], Optional[float]]:
             logger.info(f"  📍 Распознаны DMS координаты: широта={lat:.5f}, долгота={lon:.5f}")
             return lat, lon
     
-    # ========== ФОРМАТ 4: ПРОСТО ЧИСЛА С РАЗДЕЛИТЕЛЯМИ ==========
+    # ========== ФОРМАТ 4: ПРОСТО ЧИСЛА ==========
     numbers = re.findall(r'-?\d+\.?\d*', text)
     if len(numbers) >= 2:
         try:
@@ -170,33 +160,62 @@ def parse_coordinates(text: str) -> Tuple[Optional[float], Optional[float]]:
     return None, None
 
 
-def find_photos_by_coordinates(lat: float, lon: float, kml_catalog, village_db, db) -> List[str]:
+def find_photos_by_coordinates_in_afs(lat: float, lon: float, afs_catalog) -> List[str]:
     """
-    Находит снимки, в полигоны которых попадает заданная точка.
-    Использует кэш полигонов из kml_processor.
+    Находит снимки в каталоге АФС, в полигоны которых попадает заданная точка.
     """
     from services.kml_processor import KMLProcessor
     from config import KML_MARGIN_M
+    from services.kml_catalog import KMLCatalog
     
     photos_covering_point = []
     point = Point(lon, lat)
     
-    for item in kml_catalog.catalog:
+    # Получаем список всех снимков из каталога АФС
+    all_photos = afs_catalog.get_catalog()
+    
+    if not all_photos:
+        logger.info("  Каталог АФС пуст")
+        return []
+    
+    # Для каждого снимка нужно проверить полигон
+    # Полигоны хранятся в KML файлах, которые были привязаны к снимкам
+    kml_catalog = KMLCatalog()
+    
+    if kml_catalog.is_empty():
+        logger.info("  Каталог KML пуст, невозможно проверить полигоны")
+        return []
+    
+    logger.info(f"  Проверка {len(all_photos)} снимков на попадание точки")
+    
+    for item in all_photos:
         photo_num = item['frame']
-        kml_path = os.path.join(KML_DIR, item['file_name'])
+        
+        # Ищем KML файл для этого снимка
+        kml_item = None
+        for k in kml_catalog.catalog:
+            if k['frame'] == photo_num:
+                kml_item = k
+                break
+        
+        if not kml_item:
+            logger.debug(f"  KML файл не найден для снимка {photo_num}")
+            continue
+        
+        kml_path = os.path.join(KML_DIR, kml_item['file_name'])
         
         if not os.path.exists(kml_path):
             logger.debug(f"  Файл KML не найден: {kml_path}")
             continue
         
         # Временный процессор для проверки
-        temp_processor = KMLProcessor(village_db, db)
+        from services.village_db import VillageDatabase
+        temp_processor = KMLProcessor(VillageDatabase(), None)
         data = temp_processor.process_kml_file(kml_path, KML_MARGIN_M)
         
         # Проверяем, есть ли этот снимок в результатах
         for result in data['results']:
             if result['photo_num'] == photo_num:
-                # Проверяем, попадает ли точка в полигон
                 if temp_processor.polygon_cache and photo_num in temp_processor.polygon_cache:
                     polygon = temp_processor.polygon_cache[photo_num]
                     if polygon.contains(point) or polygon.intersects(point):
@@ -281,21 +300,19 @@ def register_search_handlers(dp, db, village_db):
         if lat and lon:
             logger.info(f"  📍 Определены координаты: {lat:.5f}, {lon:.5f}")
             
-            from services.kml_catalog import KMLCatalog
-            kml_catalog = KMLCatalog()
-            
-            if kml_catalog.is_empty():
+            # Проверяем, есть ли каталог АФС
+            if db.afs_catalog.is_empty():
                 await message.answer(
                     f"📍 <b>Координаты получены:</b>\n\n"
                     f"Широта: {lat:.5f}\nДолгота: {lon:.5f}\n\n"
-                    f"❌ Каталог KML пуст. Сначала обработайте KML файл через настройки.",
+                    f"❌ Каталог АФС пуст. Сначала создайте каталог АФС через обработку KML.",
                     parse_mode="HTML",
                     reply_markup=search_result_keyboard(query)
                 )
                 return
             
-            # Ищем снимки, в которые попадает точка
-            photos_covering_point = find_photos_by_coordinates(lat, lon, kml_catalog, village_db, db)
+            # Ищем снимки, в которые попадает точка (по каталогу АФС)
+            photos_covering_point = find_photos_by_coordinates_in_afs(lat, lon, db.afs_catalog)
             
             if photos_covering_point:
                 db.set_last_photos(user_id, photos_covering_point)
@@ -324,7 +341,6 @@ def register_search_handlers(dp, db, village_db):
                         try:
                             v_lat = float(v['lat'])
                             v_lon = float(v['lon'])
-                            # Евклидово расстояние (приблизительное)
                             distance = math.sqrt((v_lat - lat) ** 2 + (v_lon - lon) ** 2)
                             if distance < min_distance:
                                 min_distance = distance
@@ -333,7 +349,6 @@ def register_search_handlers(dp, db, village_db):
                             continue
                 
                 if nearest_village:
-                    # Переводим расстояние в километры (1 градус ≈ 111 км)
                     distance_km = min_distance * 111
                     
                     await message.answer(
