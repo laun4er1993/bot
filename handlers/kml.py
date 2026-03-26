@@ -232,23 +232,7 @@ def register_kml_handlers(dp, kml_processor, village_db, photos_db, afs_catalog)
             parse_mode="HTML"
         )
         
-        async def update_progress(current, total, photo_num):
-            percent = int(current / total * 100)
-            bar_length = 20
-            filled = int(bar_length * current / total)
-            bar = "█" * filled + "░" * (bar_length - filled)
-            
-            await progress_msg.edit_text(
-                f"🔍 <b>Поиск файлов на Яндекс.Диске...</b>\n\n"
-                f"┌─────────────────────────────────┐\n"
-                f"│ {bar} │\n"
-                f"│ {percent}% ({current}/{total})                  │\n"
-                f"└─────────────────────────────────┘\n\n"
-                f"📸 Текущий снимок: <code>{photo_num}</code>",
-                parse_mode="HTML"
-            )
-        
-        refresh_stats = await photos_db.refresh_all_photo_links_with_progress(update_progress)
+        refresh_stats = photos_db.refresh_all_photo_links()
         
         await progress_msg.delete()
         
@@ -308,23 +292,7 @@ def register_kml_handlers(dp, kml_processor, village_db, photos_db, afs_catalog)
             parse_mode="HTML"
         )
         
-        async def update_progress(current, total, photo_num):
-            percent = int(current / total * 100)
-            bar_length = 20
-            filled = int(bar_length * current / total)
-            bar = "█" * filled + "░" * (bar_length - filled)
-            
-            await progress_msg.edit_text(
-                f"🔍 <b>Поиск файлов на Яндекс.Диске...</b>\n\n"
-                f"┌─────────────────────────────────┐\n"
-                f"│ {bar} │\n"
-                f"│ {percent}% ({current}/{total})                  │\n"
-                f"└─────────────────────────────────┘\n\n"
-                f"📸 Текущий снимок: <code>{photo_num}</code>",
-                parse_mode="HTML"
-            )
-        
-        refresh_stats = await photos_db.refresh_all_photo_links_with_progress(update_progress)
+        refresh_stats = photos_db.refresh_all_photo_links()
         
         await progress_msg.delete()
         
@@ -384,23 +352,7 @@ def register_kml_handlers(dp, kml_processor, village_db, photos_db, afs_catalog)
             parse_mode="HTML"
         )
         
-        async def update_progress(current, total, photo_num):
-            percent = int(current / total * 100)
-            bar_length = 20
-            filled = int(bar_length * current / total)
-            bar = "█" * filled + "░" * (bar_length - filled)
-            
-            await progress_msg.edit_text(
-                f"🔍 <b>Поиск файлов на Яндекс.Диске...</b>\n\n"
-                f"┌─────────────────────────────────┐\n"
-                f"│ {bar} │\n"
-                f"│ {percent}% ({current}/{total})                  │\n"
-                f"└─────────────────────────────────┘\n\n"
-                f"📸 Текущий снимок: <code>{photo_num}</code>",
-                parse_mode="HTML"
-            )
-        
-        refresh_stats = await photos_db.refresh_all_photo_links_with_progress(update_progress)
+        refresh_stats = photos_db.refresh_all_photo_links()
         
         await progress_msg.delete()
         
