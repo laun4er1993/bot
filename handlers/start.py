@@ -33,6 +33,8 @@ def register_start_handlers(dp):
     
     @dp.message(F.text == "📖 ИНСТРУКЦИЯ")
     async def menu_instruction(message: types.Message):
+        from config import LOCUS_INSTRUCTION_URL, LOCUS_DOWNLOAD_URL, MAP_RZHEV_URL
+        
         instruction_text = (
             "📖 <b>ИНСТРУКЦИЯ ПО ИСПОЛЬЗОВАНИЮ БОТА</b>\n\n"
             "🔍 <b>ПОИСК СНИМКОВ</b>\n"
@@ -42,10 +44,9 @@ def register_start_handlers(dp):
             "• Или введите номер снимка: N56E34-266-016 или 266-016\n"
             "• Нажмите на номер снимка для просмотра описания и скачивания\n\n"
             "🗺️ <b>LOCUS MAPS</b>\n"
-            "• Скачайте приложение из меню «🗺️ LOCUS MAPS»\n"
-            "• Загрузите карту Ржевского района\n"
-            "• Скачайте MBTILES файл снимка\n"
-            "• Откройте MBTILES файл в приложении для просмотра\n\n"
+            f"• Скачайте приложение: <a href='{LOCUS_DOWNLOAD_URL}'>Locus Maps</a>\n"
+            f"• Инструкция: <a href='{LOCUS_INSTRUCTION_URL}'>PDF инструкция</a>\n"
+            f"• Карта Ржева: <a href='{MAP_RZHEV_URL}'>Скачать карту</a>\n\n"
             "🔄 <b>KML ОБРАБОТКА (в меню НАСТРОЙКИ)</b>\n"
             "• Загрузите KML файл с каталогом снимков\n"
             "• Бот найдет населенные пункты в каждом кадре\n"
@@ -54,18 +55,23 @@ def register_start_handlers(dp):
             "⚙️ <b>НАСТРОЙКИ</b>\n"
             "• Управление KML файлами\n"
             "• Управление населенными пунктами\n"
-            "• Управление каталогом АФС\n\n"
+            "• Управление каталогом АФС\n"
+            "• Управление ссылками (Locus Maps, карты, инструкции)\n\n"
             "🛩️ <b>ПРИЯТНОГО ИСПОЛЬЗОВАНИЯ!</b>"
         )
         await message.answer(instruction_text, parse_mode="HTML", reply_markup=back_keyboard())
     
     @dp.message(F.text == "🗺️ КАРТА РЖЕВ")
     async def menu_map(message: types.Message):
+        from config import MAP_RZHEV_URL
+        from keyboards.inline import get_map_download_keyboard
+        
         await message.answer(
-            "🗺️ <b>Карта Ржевского района для Locus Maps</b>\n\n"
-            "Нажмите кнопку для скачивания:",
+            f"🗺️ <b>Карта Ржевского района для Locus Maps</b>\n\n"
+            f"Ссылка: <a href='{MAP_RZHEV_URL}'>Скачать карту</a>\n\n"
+            f"Нажмите кнопку для скачивания:",
             parse_mode="HTML",
-            reply_markup=map_download_keyboard()
+            reply_markup=get_map_download_keyboard(MAP_RZHEV_URL)
         )
     
     @dp.message(F.text == "🗺️ LOCUS MAPS")
