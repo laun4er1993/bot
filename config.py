@@ -26,6 +26,26 @@ KML_MARGIN_M = 100.0
 KML_USE_INTERSECTS = True
 KML_CACHE_POLYGONS = True
 
+# ========== НАСТРОЙКИ ЛОГИРОВАНИЯ ==========
+
+# Создаем логгер
+logger = logging.getLogger(__name__)
+
+# Настройка логирования
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+    handlers=[
+        logging.StreamHandler(),  # Вывод в консоль
+        logging.FileHandler(os.path.join(DATA_DIR, "bot.log"), encoding='utf-8')  # Вывод в файл
+    ]
+)
+
+# Создаем директорию для логов, если её нет
+os.makedirs(DATA_DIR, exist_ok=True)
+
+logger.info("🚀 Конфигурация бота загружена")
+
 # ========== ССЫЛКИ ==========
 
 # Ссылки по умолчанию
@@ -64,9 +84,9 @@ def load_links_config():
                         MAP_RZHEV_URL = value
                     elif key == 'LOCUS_INSTRUCTION_URL':
                         LOCUS_INSTRUCTION_URL = value
-        logging.info(f"✅ Загружены ссылки из {LINKS_CONFIG_FILE}")
+        logger.info(f"✅ Загружены ссылки из {LINKS_CONFIG_FILE}")
     except Exception as e:
-        logging.error(f"❌ Ошибка загрузки ссылок: {e}")
+        logger.error(f"❌ Ошибка загрузки ссылок: {e}")
         save_links_config()
 
 
@@ -82,9 +102,9 @@ def save_links_config():
             f.write(f"LOCUS_DOWNLOAD_URL={LOCUS_DOWNLOAD_URL}\n")
             f.write(f"MAP_RZHEV_URL={MAP_RZHEV_URL}\n")
             f.write(f"LOCUS_INSTRUCTION_URL={LOCUS_INSTRUCTION_URL}\n")
-        logging.info(f"✅ Сохранены ссылки в {LINKS_CONFIG_FILE}")
+        logger.info(f"✅ Сохранены ссылки в {LINKS_CONFIG_FILE}")
     except Exception as e:
-        logging.error(f"❌ Ошибка сохранения ссылок: {e}")
+        logger.error(f"❌ Ошибка сохранения ссылок: {e}")
 
 
 def update_link(link_type: str, new_url: str):
@@ -98,16 +118,10 @@ def update_link(link_type: str, new_url: str):
     elif link_type == "locus_instruction":
         LOCUS_INSTRUCTION_URL = new_url
     
-    logging.info(f"✅ Обновлена ссылка {link_type}: {new_url}")
+    logger.info(f"✅ Обновлена ссылка {link_type}: {new_url}")
 
 
 # Загружаем ссылки при старте
 load_links_config()
 
-
-# Настройки логирования
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
-)
-logger = logging.getLogger(__name__)
+logger.info("✅ Конфигурация полностью загружена")
