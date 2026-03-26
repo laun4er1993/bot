@@ -1,33 +1,100 @@
 import asyncio
 import re
+import os
+from config import KML_DIR
 from aiogram import types, F
 from aiogram.fsm.context import FSMContext
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from states.states import SearchStates
 from keyboards.inline import photos_keyboard, search_result_keyboard, back_keyboard
-from config import logger
+from config import logger, KML_MARGIN_M
+from shapely.geometry import Point, Polygon
+from shapely.validation import make_valid
 
 
 def parse_coordinates(text: str):
-    """Парсит координаты из текста"""
-    # Формат: 56.2345 34.1234
-    decimal_match = re.search(r'(-?\d+\.\d+)[,\s]+(-?\d+\.\d+)', text)
-    if decimal_match:
+    """
+    Парсит координаты из текста.
+    Поддерживаемые форматы:
+    1. Десятичные градусы: 56.2345 34.1234
+    2. Градусы, минуты, секунды (DMS): 56°13'41″ N 34°08'10″ E
+    3. Градусы и десятичные минуты (DDM): N 56° 19.938', E 034° 20.525'
+    4. Градусы и десятичные минуты без пробелов: 56°19.938'N 34°20.525'E
+    """
+    if not text:
+        return None, None
+    
+    text = text.strip()
+    original_text = text
+    
+    # Заменяем запятые на точки для десятичных чисел
+    text = text.replace(',', '.')
+    
+    # ========== ФОРМАТ 1: ДЕСЯТИЧНЫЕ ГРАДУСЫ ==========
+    decimal_pattern = r'(-?\d+\.\d+)[,\s]+(-?\d+\.\d+)'
+    match = re.search(decimal_pattern, text)
+    if match:
         try:
-            lat = float(decimal_match.group(1))
-            lon = float(decimal_match.group(2))
-            return lat, lon
+            lat = float(match.group(1))
+            lon = float(match.group(2))
+            if -90 <= lat <= 90 and -180 <= lon <= 180:
+                logger.info(f"  📍 Распознаны десятичные координаты: {lat}, {lon}")
+                return lat, lon
         except:
             pass
     
-    # Формат: 56°13'41″ N 34°08'10″ E
-    dms_pattern = r'(\d+)°(\d+)′([\d.]+)″\s*([NSEW]?)\s+(\d+)°(\d+)′([\d.]+)″\s*([NSEW]?)'
+    # ========== ФОРМАТ 2: ГРАДУСЫ И ДЕСЯТИЧНЫЕ МИНУТЫ (DDM) ==========
+    # Формат: N 56° 19.938', E 034° 20.525'
+    ddm_pattern = r'([NS]?)\s*(\d+)°\s*([\d.]+)\'?\s*([NS]?)\s*[,;]?\s*([EW]?)\s*(\d+)°\s*([\d.]+)\'?\s*([EW]?)'
+    match = re.search(ddm_pattern, text, re.IGNORECASE)
+    if match:
+        try:
+            lat_dir1 = match.group(1).upper() if match.group(1) else ''
+            lat_deg = float(match.group(2))
+            lat_min = float(match.group(3))
+            lat_dir2 = match.group(4).upper() if match.group(4) else ''
+            
+            lon_dir1 = match.group(5).upper() if match.group(5) else ''
+            lon_deg = float(match.group(6))
+            lon_min = float(match.group(7))
+            lon_dir2 = match.group(8).upper() if match.group(8) else ''
+            
+            # Определяем направление широты
+            lat_dir = lat_dir1 or lat_dir2
+            if lat_dir == 'S':
+                lat_sign = -1
+            else:
+                lat_sign = 1
+            
+            # Определяем направление долготы
+            lon_dir = lon_dir1 or lon_dir2
+            if lon_dir == 'W':
+                lon_sign = -1
+            else:
+                lon_sign = 1
+            
+            lat = lat_sign * (lat_deg + lat_min / 60)
+            lon = lon_sign * (lon_deg + lon_min / 60)
+            
+            if -90 <= lat <= 90 and -180 <= lon <= 180:
+                logger.info(f"  📍 Распознаны DDM координаты: {lat}, {lon}")
+                return lat, lon
+        except Exception as e:
+            logger.debug(f"  Ошибка парсинга DDM: {e}")
+    
+    # ========== ФОРМАТ 3: ГРАДУСЫ, МИНУТЫ, СЕКУНДЫ (DMS) ==========
+    dms_pattern = r'(\d+)°(\d+)′([\d.]+)″?\s*([NS]?)\s+(\d+)°(\d+)′([\d.]+)″?\s*([EW]?)'
     match = re.search(dms_pattern, text, re.IGNORECASE)
     if match:
         try:
-            lat_deg, lat_min, lat_sec = int(match.group(1)), int(match.group(2)), float(match.group(3))
+            lat_deg = int(match.group(1))
+            lat_min = int(match.group(2))
+            lat_sec = float(match.group(3))
             lat_dir = match.group(4).upper() if match.group(4) else ''
-            lon_deg, lon_min, lon_sec = int(match.group(5)), int(match.group(6)), float(match.group(7))
+            lon_deg = int(match.group(5))
+            lon_min = int(match.group(6))
+            lon_sec = float(match.group(7))
             lon_dir = match.group(8).upper() if match.group(8) else ''
             
             lat = lat_deg + lat_min/60 + lat_sec/3600
@@ -38,30 +105,43 @@ def parse_coordinates(text: str):
             if lon_dir == 'W':
                 lon = -lon
             
-            return lat, lon
+            if -90 <= lat <= 90 and -180 <= lon <= 180:
+                logger.info(f"  📍 Распознаны DMS координаты: {lat}, {lon}")
+                return lat, lon
+        except Exception as e:
+            logger.debug(f"  Ошибка парсинга DMS: {e}")
+    
+    # ========== ФОРМАТ 4: ПРОСТО ЧИСЛА С РАЗДЕЛИТЕЛЯМИ ==========
+    numbers = re.findall(r'-?\d+\.?\d*', text)
+    if len(numbers) >= 2:
+        try:
+            lat = float(numbers[0])
+            lon = float(numbers[1])
+            if -90 <= lat <= 90 and -180 <= lon <= 180:
+                logger.info(f"  📍 Распознаны координаты из чисел: {lat}, {lon}")
+                return lat, lon
         except:
             pass
     
+    logger.warning(f"  ❌ Не удалось распознать координаты: {original_text}")
     return None, None
 
 
-def parse_photo_number(text: str) -> str:
-    """Парсит номер снимка из текста"""
-    # Формат: N56E34-266-016 или 266-016
-    text = text.strip().upper()
+def point_in_photo_polygon(lat: float, lon: float, kml_processor, photo_num: str) -> bool:
+    """
+    Проверяет, попадает ли точка в полигон снимка.
+    Использует кэш полигонов из kml_processor.
+    """
+    try:
+        # Проверяем, есть ли полигон в кэше
+        if kml_processor.polygon_cache and photo_num in kml_processor.polygon_cache:
+            polygon = kml_processor.polygon_cache[photo_num]
+            point = Point(lon, lat)
+            return polygon.contains(point) or polygon.intersects(point)
+    except Exception as e:
+        logger.debug(f"  Ошибка проверки точки в полигоне {photo_num}: {e}")
     
-    # Полный формат N56E34-266-016
-    full_match = re.match(r'([NS]\d+[EW]\d+)-(\d+)-(\d+)', text)
-    if full_match:
-        return f"{full_match.group(1)}-{full_match.group(2)}-{full_match.group(3)}"
-    
-    # Сокращенный формат 266-016
-    short_match = re.match(r'(\d+)-(\d+)$', text)
-    if short_match:
-        # Нужно найти квадрат по координатам? Пока возвращаем как есть
-        return text
-    
-    return None
+    return False
 
 
 def register_search_handlers(dp, db, village_db):
@@ -73,7 +153,9 @@ def register_search_handlers(dp, db, village_db):
             "Введите название деревни, координаты или номер снимка:\n\n"
             "📌 <b>Примеры:</b>\n"
             "• <b>По названию деревни:</b> Горбово, Полунино\n"
-            "• <b>По координатам:</b> 56.2345 34.1234 или 56°13'41″ N 34°08'10″ E\n"
+            "• <b>По координатам (десятичные):</b> 56.2345 34.1234\n"
+            "• <b>По координатам (градусы, минуты, секунды):</b> 56°13'41″ N 34°08'10″ E\n"
+            "• <b>По координатам (градусы и десятичные минуты):</b> N 56° 19.938', E 034° 20.525'\n"
             "• <b>По номеру снимка:</b> N56E34-266-016 или 266-016\n\n"
             "💡 <i>Можно вводить как полное название, так и его часть</i>",
             parse_mode="HTML"
@@ -131,51 +213,137 @@ def register_search_handlers(dp, db, village_db):
         
         logger.info(f"🔍 ПОИСК: пользователь {user_id} ищет '{query}'")
         
-        # Пробуем распарсить как координаты
+        # ========== 1. ПРОБУЕМ РАСПАРСИТЬ КАК КООРДИНАТЫ ==========
         lat, lon = parse_coordinates(query)
         if lat and lon:
             logger.info(f"  📍 Определены координаты: {lat}, {lon}")
-            # Поиск деревни по координатам
-            nearest_village = None
-            min_distance = float('inf')
             
-            for v in village_db.villages:
-                if v.get('lat') and v.get('lon'):
-                    try:
-                        v_lat = float(v['lat'])
-                        v_lon = float(v['lon'])
-                        # Евклидово расстояние (приблизительно)
-                        distance = ((v_lat - lat) ** 2 + (v_lon - lon) ** 2) ** 0.5
-                        if distance < min_distance:
-                            min_distance = distance
-                            nearest_village = v
-                    except:
-                        continue
+            # Получаем kml_processor из db (нужно передать или получить)
+            # Временное решение - создаем новый экземпляр или берем из глобальной переменной
+            from services.kml_processor import KMLProcessor
+            from services.kml_catalog import KMLCatalog
             
-            if nearest_village and min_distance < 0.1:  # ~10 км
+            # Загружаем каталог KML
+            kml_catalog = KMLCatalog()
+            
+            if kml_catalog.is_empty():
                 await message.answer(
-                    f"📍 <b>Найдена деревня по координатам:</b>\n\n"
-                    f"• <b>{nearest_village['name']}</b> ({nearest_village.get('type', 'деревня')})\n"
-                    f"  🏠 Район: {nearest_village.get('district', 'не указан')}\n\n"
-                    f"🔍 Ищу снимки для этой деревни...",
-                    parse_mode="HTML"
-                )
-                query = nearest_village['name']
-            else:
-                await message.answer(
-                    f"📍 <b>Координаты получены</b>\n\n"
+                    f"📍 <b>Координаты получены:</b>\n\n"
                     f"Широта: {lat}\nДолгота: {lon}\n\n"
-                    f"❌ Ближайшая деревня не найдена в каталоге",
+                    f"❌ Каталог KML пуст. Сначала обработайте KML файл через настройки.",
                     parse_mode="HTML",
                     reply_markup=search_result_keyboard(query)
                 )
                 return
+            
+            # Ищем снимки, в которые попадает точка
+            photos_covering_point = []
+            
+            for item in kml_catalog.catalog:
+                photo_num = item['frame']
+                kml_path = os.path.join(KML_DIR, item['file_name'])
+                
+                if not os.path.exists(kml_path):
+                    continue
+                
+                # Временный процессор для проверки
+                temp_processor = KMLProcessor(village_db, db)
+                data = temp_processor.process_kml_file(kml_path, KML_MARGIN_M)
+                
+                # Проверяем, есть ли этот снимок в результатах
+                for result in data['results']:
+                    if result['photo_num'] == photo_num:
+                        # Проверяем, попадает ли точка в полигон
+                        # Для этого нужно получить полигон из кэша
+                        if temp_processor.polygon_cache and photo_num in temp_processor.polygon_cache:
+                            polygon = temp_processor.polygon_cache[photo_num]
+                            point = Point(lon, lat)
+                            if polygon.contains(point) or polygon.intersects(point):
+                                photos_covering_point.append(photo_num)
+                                logger.info(f"  ✅ Точка попадает в снимок: {photo_num}")
+            
+            if photos_covering_point:
+                # Убираем дубликаты
+                photos_covering_point = list(dict.fromkeys(photos_covering_point))
+                
+                db.set_last_photos(user_id, photos_covering_point)
+                db.set_last_villages(user_id, f"поиск по координатам ({lat}, {lon})")
+                
+                result_text = (
+                    f"📍 <b>Поиск по координатам:</b>\n\n"
+                    f"Широта: {lat}\nДолгота: {lon}\n\n"
+                    f"✅ <b>Найдено снимков, покрывающих эту точку: {len(photos_covering_point)}</b>\n\n"
+                    f"📸 <b>Снимки:</b>\n" + "\n".join([f"• {p}" for p in photos_covering_point])
+                )
+                
+                await message.answer(
+                    result_text,
+                    parse_mode="HTML",
+                    reply_markup=photos_keyboard(photos_covering_point)
+                )
+                return
+            else:
+                # Если нет снимков, показываем ближайшую деревню
+                nearest_village = None
+                min_distance = float('inf')
+                
+                for v in village_db.villages:
+                    if v.get('lat') and v.get('lon'):
+                        try:
+                            v_lat = float(v['lat'])
+                            v_lon = float(v['lon'])
+                            # Евклидово расстояние (приблизительное)
+                            distance = ((v_lat - lat) ** 2 + (v_lon - lon) ** 2) ** 0.5
+                            if distance < min_distance:
+                                min_distance = distance
+                                nearest_village = v
+                        except:
+                            continue
+                
+                if nearest_village:
+                    # Переводим расстояние в километры (1 градус ≈ 111 км)
+                    distance_km = min_distance * 111
+                    
+                    await message.answer(
+                        f"📍 <b>Координаты получены:</b>\n\n"
+                        f"Широта: {lat}\nДолгота: {lon}\n\n"
+                        f"❌ <b>Снимки, покрывающие эту точку, не найдены</b>\n\n"
+                        f"🔍 <b>Ближайшая деревня:</b>\n"
+                        f"• <b>{nearest_village['name']}</b> ({nearest_village.get('type', 'деревня')})\n"
+                        f"  🏠 Район: {nearest_village.get('district', 'не указан')}\n"
+                        f"  📏 Расстояние: ~{distance_km:.1f} км\n\n"
+                        f"💡 Попробуйте поискать снимки по названию этой деревни",
+                        parse_mode="HTML",
+                        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                            [InlineKeyboardButton(text="🔍 ПОИСК ПО ДЕРЕВНЕ", callback_data=f"search_village_{nearest_village['name']}")],
+                            [InlineKeyboardButton(text="🏠 ГЛАВНОЕ МЕНЮ", callback_data="back_to_main")]
+                        ])
+                    )
+                else:
+                    await message.answer(
+                        f"📍 <b>Координаты получены:</b>\n\n"
+                        f"Широта: {lat}\nДолгота: {lon}\n\n"
+                        f"❌ <b>Снимки, покрывающие эту точку, не найдены</b>\n"
+                        f"❌ Ближайшая деревня не найдена в каталоге",
+                        parse_mode="HTML",
+                        reply_markup=search_result_keyboard(query)
+                    )
+                return
         
-        # Пробуем распарсить как номер снимка
+        # ========== 2. ПРОБУЕМ РАСПАРСИТЬ КАК НОМЕР СНИМКА ==========
+        def parse_photo_number(text: str) -> str:
+            text = text.strip().upper()
+            full_match = re.match(r'([NS]\d+[EW]\d+)-(\d+)-(\d+)', text)
+            if full_match:
+                return f"{full_match.group(1)}-{full_match.group(2)}-{full_match.group(3)}"
+            short_match = re.match(r'(\d+)-(\d+)$', text)
+            if short_match:
+                return text
+            return None
+        
         photo_num = parse_photo_number(query)
         if photo_num:
             logger.info(f"  🖼️ Определен номер снимка: {photo_num}")
-            # Ищем снимок в каталоге АФС
             results = db.afs_catalog.search_by_frame_name(photo_num)
             if results:
                 photos = [r['frame'] for r in results]
@@ -198,7 +366,7 @@ def register_search_handlers(dp, db, village_db):
                 )
                 return
         
-        # Поиск по названию деревни
+        # ========== 3. ПОИСК ПО НАЗВАНИЮ ДЕРЕВНИ ==========
         results = db.search_by_village(query)
         
         if results:
@@ -231,10 +399,11 @@ def register_search_handlers(dp, db, village_db):
             logger.info(f"❌ Результаты для '{query}' не найдены")
             
             await message.answer(
-                f"❌ <b>Ничего не найдено para '{query}'</b>\n\n"
+                f"❌ <b>Ничего не найдено для '{query}'</b>\n\n"
                 f"Попробуйте:\n"
                 f"• Ввести полное название деревни\n"
                 f"• Ввести координаты в формате: 56.2345 34.1234\n"
+                f"• Ввести координаты в формате: N 56° 19.938', E 034° 20.525'\n"
                 f"• Ввести номер снимка: N56E34-266-016 или 266-016\n"
                 f"• Посмотреть список всех деревень в меню",
                 parse_mode="HTML",
