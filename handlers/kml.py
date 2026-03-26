@@ -217,7 +217,6 @@ def register_kml_handlers(dp, kml_processor, village_db, photos_db, afs_catalog)
         
         stats = afs_catalog.create_from_kml_results(enriched_results, frames_without_np)
         
-        # Проверяем, что деревни сохранились
         logger.info(f"📊 ПРОВЕРКА ПОСЛЕ СОЗДАНИЯ:")
         logger.info(f"   Всего снимков: {len(afs_catalog.catalog)}")
         logger.info(f"   Снимков со связями: {len(afs_catalog.villages_by_frame)}")
@@ -227,12 +226,33 @@ def register_kml_handlers(dp, kml_processor, village_db, photos_db, afs_catalog)
             if villages:
                 logger.info(f"      Первые 5: {', '.join(villages[:5])}")
         
-        # Обновляем ссылки для всех снимков в каталоге
-        msg = await callback.message.answer("⏳ Поиск файлов на Яндекс.Диске... Это может занять несколько секунд.")
+        progress_msg = await callback.message.answer(
+            "🔍 <b>Поиск файлов на Яндекс.Диске...</b>\n\n"
+            "⏳ Подготовка...",
+            parse_mode="HTML"
+        )
         
-        refresh_stats = photos_db.refresh_all_photo_links()
+        async def update_progress(current, total, photo_num):
+            percent = int(current / total * 100)
+            bar_length = 20
+            filled = int(bar_length * current / total)
+            bar = "█" * filled + "░" * (bar_length - filled)
+            
+            await progress_msg.edit_text(
+                f"🔍 <b>Поиск файлов на Яндекс.Диске...</b>\n\n"
+                f"┌─────────────────────────────────┐\n"
+                f"│ {bar} │\n"
+                f"│ {percent}% ({current}/{total})                  │\n"
+                f"└─────────────────────────────────┘\n\n"
+                f"📸 Текущий снимок: <code>{photo_num}</code>",
+                parse_mode="HTML"
+            )
         
-        await msg.delete()
+        refresh_stats = await photos_db.refresh_all_photo_links_with_progress(update_progress)
+        
+        await progress_msg.delete()
+        
+        yandex_status = "✅ Доступен" if photos_db.get_yandex_disk_status() else "❌ Недоступен"
         
         await safe_edit_text(
             callback.message,
@@ -244,6 +264,7 @@ def register_kml_handlers(dp, kml_processor, village_db, photos_db, afs_catalog)
             f"• Пропущено дубликатов: {stats['duplicates']}\n"
             f"• Всего снимков в каталоге: {stats['total']}\n\n"
             f"📥 <b>Поиск файлов на Яндекс.Диске:</b>\n"
+            f"• Статус: {yandex_status}\n"
             f"• Найдено ссылок: {refresh_stats['found']}\n"
             f"• Не найдено: {refresh_stats['not_found']}\n"
             f"• Обработано: {refresh_stats['total']}\n\n"
@@ -281,10 +302,33 @@ def register_kml_handlers(dp, kml_processor, village_db, photos_db, afs_catalog)
         
         stats = afs_catalog.add_from_kml_results(enriched_results, frames_without_np)
         
-        # Обновляем ссылки для всех снимков
-        msg = await callback.message.answer("⏳ Поиск файлов на Яндекс.Диске...")
-        refresh_stats = photos_db.refresh_all_photo_links()
-        await msg.delete()
+        progress_msg = await callback.message.answer(
+            "🔍 <b>Поиск файлов на Яндекс.Диске...</b>\n\n"
+            "⏳ Подготовка...",
+            parse_mode="HTML"
+        )
+        
+        async def update_progress(current, total, photo_num):
+            percent = int(current / total * 100)
+            bar_length = 20
+            filled = int(bar_length * current / total)
+            bar = "█" * filled + "░" * (bar_length - filled)
+            
+            await progress_msg.edit_text(
+                f"🔍 <b>Поиск файлов на Яндекс.Диске...</b>\n\n"
+                f"┌─────────────────────────────────┐\n"
+                f"│ {bar} │\n"
+                f"│ {percent}% ({current}/{total})                  │\n"
+                f"└─────────────────────────────────┘\n\n"
+                f"📸 Текущий снимок: <code>{photo_num}</code>",
+                parse_mode="HTML"
+            )
+        
+        refresh_stats = await photos_db.refresh_all_photo_links_with_progress(update_progress)
+        
+        await progress_msg.delete()
+        
+        yandex_status = "✅ Доступен" if photos_db.get_yandex_disk_status() else "❌ Недоступен"
         
         await safe_edit_text(
             callback.message,
@@ -296,7 +340,11 @@ def register_kml_handlers(dp, kml_processor, village_db, photos_db, afs_catalog)
             f"• Обновлено описаний: {stats['updated']}\n"
             f"• Пропущено дубликатов: {stats['duplicates']}\n"
             f"• Всего снимков в каталоге: {stats['total']}\n\n"
-            f"📥 <b>Поиск файлов:</b> найдено {refresh_stats['found']} из {refresh_stats['total']}",
+            f"📥 <b>Поиск файлов на Яндекс.Диске:</b>\n"
+            f"• Статус: {yandex_status}\n"
+            f"• Найдено ссылок: {refresh_stats['found']}\n"
+            f"• Не найдено: {refresh_stats['not_found']}\n"
+            f"• Обработано: {refresh_stats['total']}",
             parse_mode="HTML",
             reply_markup=get_kml_management_keyboard()
         )
@@ -330,10 +378,33 @@ def register_kml_handlers(dp, kml_processor, village_db, photos_db, afs_catalog)
         
         stats = afs_catalog.replace_with_kml_results(enriched_results, frames_without_np)
         
-        # Обновляем ссылки для всех снимков
-        msg = await callback.message.answer("⏳ Поиск файлов на Яндекс.Диске...")
-        refresh_stats = photos_db.refresh_all_photo_links()
-        await msg.delete()
+        progress_msg = await callback.message.answer(
+            "🔍 <b>Поиск файлов на Яндекс.Диске...</b>\n\n"
+            "⏳ Подготовка...",
+            parse_mode="HTML"
+        )
+        
+        async def update_progress(current, total, photo_num):
+            percent = int(current / total * 100)
+            bar_length = 20
+            filled = int(bar_length * current / total)
+            bar = "█" * filled + "░" * (bar_length - filled)
+            
+            await progress_msg.edit_text(
+                f"🔍 <b>Поиск файлов на Яндекс.Диске...</b>\n\n"
+                f"┌─────────────────────────────────┐\n"
+                f"│ {bar} │\n"
+                f"│ {percent}% ({current}/{total})                  │\n"
+                f"└─────────────────────────────────┘\n\n"
+                f"📸 Текущий снимок: <code>{photo_num}</code>",
+                parse_mode="HTML"
+            )
+        
+        refresh_stats = await photos_db.refresh_all_photo_links_with_progress(update_progress)
+        
+        await progress_msg.delete()
+        
+        yandex_status = "✅ Доступен" if photos_db.get_yandex_disk_status() else "❌ Недоступен"
         
         await safe_edit_text(
             callback.message,
@@ -344,7 +415,11 @@ def register_kml_handlers(dp, kml_processor, village_db, photos_db, afs_catalog)
             f"  └─ без населенных пунктов: {stats['without_np']}\n"
             f"• Удалено старых: {stats['removed']}\n"
             f"• Всего снимков в каталоге: {stats['total']}\n\n"
-            f"📥 <b>Поиск файлов:</b> найдено {refresh_stats['found']} из {refresh_stats['total']}",
+            f"📥 <b>Поиск файлов на Яндекс.Диске:</b>\n"
+            f"• Статус: {yandex_status}\n"
+            f"• Найдено ссылок: {refresh_stats['found']}\n"
+            f"• Не найдено: {refresh_stats['not_found']}\n"
+            f"• Обработано: {refresh_stats['total']}",
             parse_mode="HTML",
             reply_markup=get_kml_management_keyboard()
         )
