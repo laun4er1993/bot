@@ -13,8 +13,7 @@ async def cmd_start(message: types.Message):
         f"• 🔍 <b>ПОИСК</b> — найдите снимки по названию деревни, координатам или номеру снимка\n"
         f"• 📋 <b>СПИСОК ДЕРЕВЕНЬ</b> — все доступные населенные пункты\n"
         f"• 📖 <b>ИНСТРУКЦИЯ</b> — подробная помощь по боту\n"
-        f"• 🗺️ <b>КАРТА РЖЕВ</b> — скачать карту для Locus Maps\n"
-        f"• 🗺️ <b>LOCUS MAPS</b> — инструкция и скачивание приложения\n"
+        f"• 🗺️ <b>LOCUS MAPS</b> — инструкция, скачивание приложения и карты\n"
         f"• ⚙️ <b>НАСТРОЙКИ</b> — управление данными, обработка KML, загрузка НП\n\n"
         f"👇 <b>Выберите действие:</b>"
     )
@@ -60,19 +59,6 @@ def register_start_handlers(dp):
             "🛩️ <b>ПРИЯТНОГО ИСПОЛЬЗОВАНИЯ!</b>"
         )
         await message.answer(instruction_text, parse_mode="HTML", reply_markup=back_keyboard())
-    
-    @dp.message(F.text == "🗺️ КАРТА РЖЕВ")
-    async def menu_map(message: types.Message):
-        from config import MAP_RZHEV_URL
-        from keyboards.inline import get_map_download_keyboard
-        
-        await message.answer(
-            f"🗺️ <b>Карта Ржевского района для Locus Maps</b>\n\n"
-            f"Ссылка: <a href='{MAP_RZHEV_URL}'>Скачать карту</a>\n\n"
-            f"Нажмите кнопку для скачивания:",
-            parse_mode="HTML",
-            reply_markup=get_map_download_keyboard(MAP_RZHEV_URL)
-        )
     
     @dp.message(F.text == "🗺️ LOCUS MAPS")
     async def menu_locus(message: types.Message):
