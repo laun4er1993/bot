@@ -1,16 +1,14 @@
-import asyncio
-import re
 import os
-from config import KML_DIR
+import re
+import math
 from aiogram import types, F
 from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from states.states import SearchStates
 from keyboards.inline import photos_keyboard, search_result_keyboard, back_keyboard
-from config import logger, KML_MARGIN_M
-from shapely.geometry import Point, Polygon
-from shapely.validation import make_valid
+from config import logger, KML_DIR
+from shapely.geometry import Point
 
 
 def parse_coordinates(text: str):
@@ -46,19 +44,31 @@ def parse_coordinates(text: str):
     
     # ========== ФОРМАТ 2: ГРАДУСЫ И ДЕСЯТИЧНЫЕ МИНУТЫ (DDM) ==========
     # Формат: N 56° 19.938', E 034° 20.525'
-    ddm_pattern = r'([NS]?)\s*(\d+)°\s*([\d.]+)\'?\s*([NS]?)\s*[,;]?\s*([EW]?)\s*(\d+)°\s*([\d.]+)\'?\s*([EW]?)'
-    match = re.search(ddm_pattern, text, re.IGNORECASE)
-    if match:
+    # Формат: 56°19.938'N 34°20.525'E
+    # Формат: 56° 19.938' N, 34° 20.525' E
+    
+    # Ищем широту
+    lat_pattern = r'([NS]?)\s*(\d+)°\s*([\d.]+)\'?\s*([NS]?)'
+    lon_pattern = r'([EW]?)\s*(\d+)°\s*([\d.]+)\'?\s*([EW]?)'
+    
+    # Ищем широту в тексте
+    lat_match = re.search(lat_pattern, text, re.IGNORECASE)
+    # Ищем долготу в тексте (после широты или отдельно)
+    lon_match = re.search(lon_pattern, text, re.IGNORECASE)
+    
+    if lat_match and lon_match:
         try:
-            lat_dir1 = match.group(1).upper() if match.group(1) else ''
-            lat_deg = float(match.group(2))
-            lat_min = float(match.group(3))
-            lat_dir2 = match.group(4).upper() if match.group(4) else ''
+            # Широта
+            lat_dir1 = lat_match.group(1).upper() if lat_match.group(1) else ''
+            lat_deg = float(lat_match.group(2))
+            lat_min = float(lat_match.group(3))
+            lat_dir2 = lat_match.group(4).upper() if lat_match.group(4) else ''
             
-            lon_dir1 = match.group(5).upper() if match.group(5) else ''
-            lon_deg = float(match.group(6))
-            lon_min = float(match.group(7))
-            lon_dir2 = match.group(8).upper() if match.group(8) else ''
+            # Долгота
+            lon_dir1 = lon_match.group(1).upper() if lon_match.group(1) else ''
+            lon_deg = float(lon_match.group(2))
+            lon_min = float(lon_match.group(3))
+            lon_dir2 = lon_match.group(4).upper() if lon_match.group(4) else ''
             
             # Определяем направление широты
             lat_dir = lat_dir1 or lat_dir2
@@ -74,11 +84,13 @@ def parse_coordinates(text: str):
             else:
                 lon_sign = 1
             
+            # Вычисляем десятичные градусы
             lat = lat_sign * (lat_deg + lat_min / 60)
             lon = lon_sign * (lon_deg + lon_min / 60)
             
+            # Проверка корректности
             if -90 <= lat <= 90 and -180 <= lon <= 180:
-                logger.info(f"  📍 Распознаны DDM координаты: {lat}, {lon}")
+                logger.info(f"  📍 Распознаны DDM координаты: {lat} ({lat_deg}°{lat_min}'), {lon} ({lon_deg}°{lon_min}')")
                 return lat, lon
         except Exception as e:
             logger.debug(f"  Ошибка парсинга DDM: {e}")
@@ -127,21 +139,41 @@ def parse_coordinates(text: str):
     return None, None
 
 
-def point_in_photo_polygon(lat: float, lon: float, kml_processor, photo_num: str) -> bool:
+def find_photos_by_coordinates(lat: float, lon: float, kml_catalog, village_db, db) -> List[str]:
     """
-    Проверяет, попадает ли точка в полигон снимка.
+    Находит снимки, в полигоны которых попадает заданная точка.
     Использует кэш полигонов из kml_processor.
     """
-    try:
-        # Проверяем, есть ли полигон в кэше
-        if kml_processor.polygon_cache and photo_num in kml_processor.polygon_cache:
-            polygon = kml_processor.polygon_cache[photo_num]
-            point = Point(lon, lat)
-            return polygon.contains(point) or polygon.intersects(point)
-    except Exception as e:
-        logger.debug(f"  Ошибка проверки точки в полигоне {photo_num}: {e}")
+    from services.kml_processor import KMLProcessor
+    from config import KML_MARGIN_M
     
-    return False
+    photos_covering_point = []
+    point = Point(lon, lat)
+    
+    for item in kml_catalog.catalog:
+        photo_num = item['frame']
+        kml_path = os.path.join(KML_DIR, item['file_name'])
+        
+        if not os.path.exists(kml_path):
+            logger.debug(f"  Файл KML не найден: {kml_path}")
+            continue
+        
+        # Временный процессор для проверки
+        temp_processor = KMLProcessor(village_db, db)
+        data = temp_processor.process_kml_file(kml_path, KML_MARGIN_M)
+        
+        # Проверяем, есть ли этот снимок в результатах
+        for result in data['results']:
+            if result['photo_num'] == photo_num:
+                # Проверяем, попадает ли точка в полигон
+                if temp_processor.polygon_cache and photo_num in temp_processor.polygon_cache:
+                    polygon = temp_processor.polygon_cache[photo_num]
+                    if polygon.contains(point) or polygon.intersects(point):
+                        photos_covering_point.append(photo_num)
+                        logger.info(f"  ✅ Точка попадает в снимок: {photo_num}")
+                        break
+    
+    return list(dict.fromkeys(photos_covering_point))
 
 
 def register_search_handlers(dp, db, village_db):
@@ -218,12 +250,7 @@ def register_search_handlers(dp, db, village_db):
         if lat and lon:
             logger.info(f"  📍 Определены координаты: {lat}, {lon}")
             
-            # Получаем kml_processor из db (нужно передать или получить)
-            # Временное решение - создаем новый экземпляр или берем из глобальной переменной
-            from services.kml_processor import KMLProcessor
             from services.kml_catalog import KMLCatalog
-            
-            # Загружаем каталог KML
             kml_catalog = KMLCatalog()
             
             if kml_catalog.is_empty():
@@ -237,41 +264,15 @@ def register_search_handlers(dp, db, village_db):
                 return
             
             # Ищем снимки, в которые попадает точка
-            photos_covering_point = []
-            
-            for item in kml_catalog.catalog:
-                photo_num = item['frame']
-                kml_path = os.path.join(KML_DIR, item['file_name'])
-                
-                if not os.path.exists(kml_path):
-                    continue
-                
-                # Временный процессор для проверки
-                temp_processor = KMLProcessor(village_db, db)
-                data = temp_processor.process_kml_file(kml_path, KML_MARGIN_M)
-                
-                # Проверяем, есть ли этот снимок в результатах
-                for result in data['results']:
-                    if result['photo_num'] == photo_num:
-                        # Проверяем, попадает ли точка в полигон
-                        # Для этого нужно получить полигон из кэша
-                        if temp_processor.polygon_cache and photo_num in temp_processor.polygon_cache:
-                            polygon = temp_processor.polygon_cache[photo_num]
-                            point = Point(lon, lat)
-                            if polygon.contains(point) or polygon.intersects(point):
-                                photos_covering_point.append(photo_num)
-                                logger.info(f"  ✅ Точка попадает в снимок: {photo_num}")
+            photos_covering_point = find_photos_by_coordinates(lat, lon, kml_catalog, village_db, db)
             
             if photos_covering_point:
-                # Убираем дубликаты
-                photos_covering_point = list(dict.fromkeys(photos_covering_point))
-                
                 db.set_last_photos(user_id, photos_covering_point)
-                db.set_last_villages(user_id, f"поиск по координатам ({lat}, {lon})")
+                db.set_last_villages(user_id, f"поиск по координатам ({lat:.5f}, {lon:.5f})")
                 
                 result_text = (
                     f"📍 <b>Поиск по координатам:</b>\n\n"
-                    f"Широта: {lat}\nДолгота: {lon}\n\n"
+                    f"Широта: {lat:.5f}\nДолгота: {lon:.5f}\n\n"
                     f"✅ <b>Найдено снимков, покрывающих эту точку: {len(photos_covering_point)}</b>\n\n"
                     f"📸 <b>Снимки:</b>\n" + "\n".join([f"• {p}" for p in photos_covering_point])
                 )
@@ -293,7 +294,7 @@ def register_search_handlers(dp, db, village_db):
                             v_lat = float(v['lat'])
                             v_lon = float(v['lon'])
                             # Евклидово расстояние (приблизительное)
-                            distance = ((v_lat - lat) ** 2 + (v_lon - lon) ** 2) ** 0.5
+                            distance = math.sqrt((v_lat - lat) ** 2 + (v_lon - lon) ** 2)
                             if distance < min_distance:
                                 min_distance = distance
                                 nearest_village = v
@@ -306,7 +307,7 @@ def register_search_handlers(dp, db, village_db):
                     
                     await message.answer(
                         f"📍 <b>Координаты получены:</b>\n\n"
-                        f"Широта: {lat}\nДолгота: {lon}\n\n"
+                        f"Широта: {lat:.5f}\nДолгота: {lon:.5f}\n\n"
                         f"❌ <b>Снимки, покрывающие эту точку, не найдены</b>\n\n"
                         f"🔍 <b>Ближайшая деревня:</b>\n"
                         f"• <b>{nearest_village['name']}</b> ({nearest_village.get('type', 'деревня')})\n"
@@ -322,7 +323,7 @@ def register_search_handlers(dp, db, village_db):
                 else:
                     await message.answer(
                         f"📍 <b>Координаты получены:</b>\n\n"
-                        f"Широта: {lat}\nДолгота: {lon}\n\n"
+                        f"Широта: {lat:.5f}\nДолгота: {lon:.5f}\n\n"
                         f"❌ <b>Снимки, покрывающие эту точку, не найдены</b>\n"
                         f"❌ Ближайшая деревня не найдена в каталоге",
                         parse_mode="HTML",
