@@ -643,3 +643,56 @@ def register_callbacks(dp, village_db, db):
             reply_markup=get_settings_main_keyboard()
         )
         await safe_answer_callback(callback)
+    
+    @dp.callback_query(lambda c: c.data.startswith("search_village_"))
+    async def search_village_handler(callback: types.CallbackQuery, state: FSMContext):
+        """Обработчик поиска по деревне из результата поиска по координатам"""
+        village_name = callback.data.replace("search_village_", "")
+        
+        await safe_edit_text(
+            callback.message,
+            f"🔍 <b>Поиск снимков для деревни:</b> {village_name}\n\n"
+            f"⏳ Подождите, идет поиск...",
+            parse_mode="HTML"
+        )
+        
+        results = db.search_by_village(village_name)
+        
+        if results:
+            photos = []
+            for r in results:
+                photos.extend(r['photos'])
+            photos = list(dict.fromkeys(photos))
+            
+            villages = []
+            for r in results:
+                villages.extend(r['villages'])
+            villages = sorted(list(set(villages)))
+            villages_text = ', '.join(villages[:15])
+            if len(villages) > 15:
+                villages_text += f" и ещё {len(villages)-15}"
+            
+            db.set_last_photos(callback.from_user.id, photos)
+            db.set_last_villages(callback.from_user.id, villages_text)
+            db.set_last_query(callback.from_user.id, village_name)
+            
+            result_text = f"✅ <b>Найдено по запросу '{village_name}':</b>\n\n"
+            result_text += f"📍 <b>Населенные пункты:</b> {villages_text}"
+            result_text += f"\n\n📸 <b>Снимки ({len(photos)} шт.):</b>\n" + "\n".join([f"• {p}" for p in photos])
+            
+            await safe_edit_text(
+                callback.message,
+                result_text,
+                parse_mode="HTML",
+                reply_markup=photos_keyboard(photos)
+            )
+        else:
+            await safe_edit_text(
+                callback.message,
+                f"❌ <b>Не найдено снимков для деревни '{village_name}'</b>\n\n"
+                f"Возможно, каталог АФС пуст. Создайте его через обработку KML.",
+                parse_mode="HTML",
+                reply_markup=back_keyboard()
+            )
+        
+        await safe_answer_callback(callback)
