@@ -17,6 +17,7 @@ AFS_CATALOG_FILE = os.path.join(DATA_DIR, "afs_catalog.txt")
 KML_CATALOG_FILE = os.path.join(DATA_DIR, "kml_catalog.txt")
 KML_DIR = os.path.join(DATA_DIR, "kml")
 LINKS_CONFIG_FILE = os.path.join(DATA_DIR, "links_config.txt")
+LOG_FILE = os.path.join(DATA_DIR, "bot.log")
 
 # Параметры
 MAX_RETRIES = 7
@@ -26,23 +27,36 @@ KML_MARGIN_M = 100.0
 KML_USE_INTERSECTS = True
 KML_CACHE_POLYGONS = True
 
+# ========== СОЗДАНИЕ ДИРЕКТОРИЙ ==========
+
+# Создаем директории, если их нет
+os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(EXPORT_DIR, exist_ok=True)
+os.makedirs(TEMP_DIR, exist_ok=True)
+os.makedirs(KML_DIR, exist_ok=True)
+
 # ========== НАСТРОЙКИ ЛОГИРОВАНИЯ ==========
 
 # Создаем логгер
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
-# Настройка логирования
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
-    handlers=[
-        logging.StreamHandler(),  # Вывод в консоль
-        logging.FileHandler(os.path.join(DATA_DIR, "bot.log"), encoding='utf-8')  # Вывод в файл
-    ]
-)
+# Формат логов
+formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(name)s - %(message)s")
 
-# Создаем директорию для логов, если её нет
-os.makedirs(DATA_DIR, exist_ok=True)
+# Обработчик для вывода в консоль
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
+
+# Обработчик для вывода в файл (создаем файл, если его нет)
+try:
+    file_handler = logging.FileHandler(LOG_FILE, encoding='utf-8')
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+    logger.info(f"✅ Логирование в файл: {LOG_FILE}")
+except Exception as e:
+    logger.warning(f"⚠️ Не удалось создать файл логов: {e}")
 
 logger.info("🚀 Конфигурация бота загружена")
 
@@ -94,7 +108,6 @@ def save_links_config():
     """Сохраняет ссылки в файл конфигурации"""
     global LOCUS_DOWNLOAD_URL, MAP_RZHEV_URL, LOCUS_INSTRUCTION_URL
     
-    os.makedirs(DATA_DIR, exist_ok=True)
     try:
         with open(LINKS_CONFIG_FILE, 'w', encoding='utf-8') as f:
             f.write("# Файл конфигурации ссылок бота\n")
