@@ -122,16 +122,26 @@ class PhotosDatabase:
         
         return [{'id': hash(query), 'villages': [v['name'] for v in villages], 'photos': all_photos}]
     
-    def _format_file_link(self, file_info: Dict, label: str, icon: str) -> str:
-        """Форматирует ссылку на файл с красивым отображением"""
+    def _format_file_link(self, file_info: Dict, file_type: str, label: str, extension: str, icon: str) -> str:
+        """
+        Форматирует ссылку на файл с красивым отображением:
+        Загрузить файлы для Locus Maps .MBTILES (775 МБ) (12.03.2025)
+        """
         version = f"версия {file_info['version']}" if file_info['version'] > 0 else ""
         size = f"{file_info['size_mb']} МБ"
         date = file_info.get('modified', '')
         
-        date_str = f" 📅 {date}" if date else ""
-        version_str = f" [{version}]" if version else ""
+        # Форматируем дату
+        date_str = f" ({date})" if date else ""
         
-        return f"<a href='{file_info['download_link']}'>{icon} {label}{version_str} {size}{date_str}</a>"
+        # Форматируем версию
+        version_str = f" {version}" if version else ""
+        
+        # Формируем красивую ссылку
+        # Пример: 🗺️ Загрузить файлы для Locus Maps .MBTILES (775 МБ) (12.03.2025)
+        link_text = f"{icon} Загрузить файлы для {label} .{extension} ({size}){date_str}{version_str}"
+        
+        return f"<a href='{file_info['download_link']}'>{link_text}</a>"
     
     def get_photo_details(self, photo_num: str) -> Optional[str]:
         """
@@ -174,11 +184,13 @@ class PhotosDatabase:
         
         links = []
         
+        # Формируем красивые ссылки для MBTILES
         for v in files.get('mbtiles', []):
-            links.append(self._format_file_link(v, "Locus Maps", "🗺️"))
+            links.append(self._format_file_link(v, "MBTILES", "Locus Maps", "MBTILES", "🗺️"))
         
+        # Формируем красивые ссылки для KMZ
         for v in files.get('kmz', []):
-            links.append(self._format_file_link(v, "Google Earth", "🌍"))
+            links.append(self._format_file_link(v, "KMZ", "Google Earth", "KMZ", "🌍"))
         
         if links:
             result_text += "📥 <b>Скачать файлы:</b>\n" + "\n".join(links)
@@ -232,10 +244,10 @@ class PhotosDatabase:
         links = []
         
         for v in files.get('mbtiles', []):
-            links.append(self._format_file_link(v, "Locus Maps", "🗺️"))
+            links.append(self._format_file_link(v, "MBTILES", "Locus Maps", "MBTILES", "🗺️"))
         
         for v in files.get('kmz', []):
-            links.append(self._format_file_link(v, "Google Earth", "🌍"))
+            links.append(self._format_file_link(v, "KMZ", "Google Earth", "KMZ", "🌍"))
         
         if links:
             result_text += "📥 <b>Скачать файлы:</b>\n" + "\n".join(links)
