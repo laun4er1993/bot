@@ -1,6 +1,7 @@
 import os
 import re
 import math
+from typing import List, Optional, Tuple
 from aiogram import types, F
 from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -11,7 +12,7 @@ from config import logger, KML_DIR
 from shapely.geometry import Point
 
 
-def parse_coordinates(text: str):
+def parse_coordinates(text: str) -> Tuple[Optional[float], Optional[float]]:
     """
     Парсит координаты из текста.
     Поддерживаемые форматы:
@@ -256,7 +257,7 @@ def register_search_handlers(dp, db, village_db):
             if kml_catalog.is_empty():
                 await message.answer(
                     f"📍 <b>Координаты получены:</b>\n\n"
-                    f"Широта: {lat}\nДолгота: {lon}\n\n"
+                    f"Широта: {lat:.5f}\nДолгота: {lon:.5f}\n\n"
                     f"❌ Каталог KML пуст. Сначала обработайте KML файл через настройки.",
                     parse_mode="HTML",
                     reply_markup=search_result_keyboard(query)
@@ -332,7 +333,7 @@ def register_search_handlers(dp, db, village_db):
                 return
         
         # ========== 2. ПРОБУЕМ РАСПАРСИТЬ КАК НОМЕР СНИМКА ==========
-        def parse_photo_number(text: str) -> str:
+        def parse_photo_number(text: str) -> Optional[str]:
             text = text.strip().upper()
             full_match = re.match(r'([NS]\d+[EW]\d+)-(\d+)-(\d+)', text)
             if full_match:
