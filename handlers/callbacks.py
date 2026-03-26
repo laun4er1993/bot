@@ -135,6 +135,7 @@ def register_callbacks(dp, village_db, db):
             [InlineKeyboardButton(text="🏠 ГЛАВНОЕ МЕНЮ", callback_data="back_to_main")]
         ])
         
+        # Если есть больше 5 деревень, добавляем кнопку "Показать все"
         if len(villages) > 5:
             keyboard.inline_keyboard.insert(
                 0,
@@ -151,21 +152,19 @@ def register_callbacks(dp, village_db, db):
     
     @dp.callback_query(lambda c: c.data.startswith("show_all_villages_"))
     async def show_all_villages_handler(callback: types.CallbackQuery):
+        """Показывает все населенные пункты для снимка с полным описанием"""
         photo_num = callback.data.replace("show_all_villages_", "")
-        villages = db.afs_catalog.get_villages_for_frame(photo_num)
         
-        if not villages:
+        # Получаем полное описание снимка со всеми НП
+        details = db.get_photo_details_with_full_villages(photo_num)
+        
+        if not details:
             await callback.answer("Нет данных о населенных пунктах")
             return
         
-        text = f"📸 <b>Снимок {photo_num}</b>\n\n"
-        text += f"📍 <b>Все населенные пункты в кадре ({len(villages)}):</b>\n\n"
-        
-        for i, v in enumerate(villages, 1):
-            text += f"{i}. {v}\n"
-        
+        # Отправляем новым сообщением, чтобы не терять предыдущее
         await callback.message.answer(
-            text,
+            details,
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔙 НАЗАД К СНИМКУ", callback_data=f"photo_{photo_num}")],
