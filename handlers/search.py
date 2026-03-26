@@ -19,7 +19,6 @@ def parse_coordinates(text: str) -> Tuple[Optional[float], Optional[float]]:
     1. Десятичные градусы: 56.2345 34.1234
     2. Градусы, минуты, секунды (DMS): 56°13'41″ N 34°08'10″ E
     3. Градусы и десятичные минуты (DDM): N 56° 19.938', E 034° 20.525'
-    4. Градусы и десятичные минуты без пробелов: 56°19.938'N 34°20.525'E
     """
     if not text:
         return None, None
@@ -44,85 +43,116 @@ def parse_coordinates(text: str) -> Tuple[Optional[float], Optional[float]]:
             pass
     
     # ========== ФОРМАТ 2: ГРАДУСЫ И ДЕСЯТИЧНЫЕ МИНУТЫ (DDM) ==========
-    # Формат: N 56° 19.938', E 034° 20.525'
-    # Формат: 56°19.938'N 34°20.525'E
-    # Формат: 56° 19.938' N, 34° 20.525' E
+    # Ищем широту (N/S) и долготу (E/W) раздельно, удаляя найденные части
     
-    # Ищем широту
+    lat = None
+    lon = None
+    remaining_text = text
+    
+    # ШАГ 1: Ищем широту (N или S)
     lat_pattern = r'([NS]?)\s*(\d+)°\s*([\d.]+)\'?\s*([NS]?)'
-    lon_pattern = r'([EW]?)\s*(\d+)°\s*([\d.]+)\'?\s*([EW]?)'
-    
-    # Ищем широту в тексте
     lat_match = re.search(lat_pattern, text, re.IGNORECASE)
-    # Ищем долготу в тексте (после широты или отдельно)
-    lon_match = re.search(lon_pattern, text, re.IGNORECASE)
     
-    if lat_match and lon_match:
+    if lat_match:
         try:
-            # Широта
+            # Извлекаем широту
             lat_dir1 = lat_match.group(1).upper() if lat_match.group(1) else ''
             lat_deg = float(lat_match.group(2))
             lat_min = float(lat_match.group(3))
             lat_dir2 = lat_match.group(4).upper() if lat_match.group(4) else ''
             
-            # Долгота
+            # Определяем направление широты
+            lat_dir = lat_dir1 or lat_dir2
+            lat_sign = -1 if lat_dir == 'S' else 1
+            
+            lat = lat_sign * (lat_deg + lat_min / 60)
+            
+            # Удаляем найденную широту из текста для поиска долготы
+            start_pos = lat_match.start()
+            end_pos = lat_match.end()
+            remaining_text = text[:start_pos] + text[end_pos:]
+            logger.debug(f"  После удаления широты: {remaining_text}")
+            
+        except Exception as e:
+            logger.debug(f"  Ошибка парсинга широты: {e}")
+    
+    # ШАГ 2: Ищем долготу (E или W) в оставшемся тексте
+    lon_pattern = r'([EW]?)\s*(\d+)°\s*([\d.]+)\'?\s*([EW]?)'
+    lon_match = re.search(lon_pattern, remaining_text, re.IGNORECASE)
+    
+    if lon_match:
+        try:
             lon_dir1 = lon_match.group(1).upper() if lon_match.group(1) else ''
             lon_deg = float(lon_match.group(2))
             lon_min = float(lon_match.group(3))
             lon_dir2 = lon_match.group(4).upper() if lon_match.group(4) else ''
             
-            # Определяем направление широты
-            lat_dir = lat_dir1 or lat_dir2
-            if lat_dir == 'S':
-                lat_sign = -1
-            else:
-                lat_sign = 1
-            
             # Определяем направление долготы
             lon_dir = lon_dir1 or lon_dir2
-            if lon_dir == 'W':
-                lon_sign = -1
-            else:
-                lon_sign = 1
+            lon_sign = -1 if lon_dir == 'W' else 1
             
-            # Вычисляем десятичные градусы
-            lat = lat_sign * (lat_deg + lat_min / 60)
             lon = lon_sign * (lon_deg + lon_min / 60)
             
-            # Проверка корректности
-            if -90 <= lat <= 90 and -180 <= lon <= 180:
-                logger.info(f"  📍 Распознаны DDM координаты: {lat} ({lat_deg}°{lat_min}'), {lon} ({lon_deg}°{lon_min}')")
-                return lat, lon
         except Exception as e:
-            logger.debug(f"  Ошибка парсинга DDM: {e}")
+            logger.debug(f"  Ошибка парсинга долготы: {e}")
+    
+    # Если нашли обе координаты
+    if lat is not None and lon is not None:
+        if -90 <= lat <= 90 and -180 <= lon <= 180:
+            logger.info(f"  📍 Распознаны DDM координаты: широта={lat:.5f}, долгота={lon:.5f}")
+            return lat, lon
     
     # ========== ФОРМАТ 3: ГРАДУСЫ, МИНУТЫ, СЕКУНДЫ (DMS) ==========
-    dms_pattern = r'(\d+)°(\d+)′([\d.]+)″?\s*([NS]?)\s+(\d+)°(\d+)′([\d.]+)″?\s*([EW]?)'
-    match = re.search(dms_pattern, text, re.IGNORECASE)
-    if match:
+    # Аналогично, ищем отдельно широту и долготу
+    lat = None
+    lon = None
+    remaining_text = text
+    
+    # Ищем широту в формате DMS
+    lat_dms_pattern = r'(\d+)°(\d+)′([\d.]+)″?\s*([NS]?)'
+    lat_match = re.search(lat_dms_pattern, text, re.IGNORECASE)
+    
+    if lat_match:
         try:
-            lat_deg = int(match.group(1))
-            lat_min = int(match.group(2))
-            lat_sec = float(match.group(3))
-            lat_dir = match.group(4).upper() if match.group(4) else ''
-            lon_deg = int(match.group(5))
-            lon_min = int(match.group(6))
-            lon_sec = float(match.group(7))
-            lon_dir = match.group(8).upper() if match.group(8) else ''
+            lat_deg = int(lat_match.group(1))
+            lat_min = int(lat_match.group(2))
+            lat_sec = float(lat_match.group(3))
+            lat_dir = lat_match.group(4).upper() if lat_match.group(4) else ''
             
             lat = lat_deg + lat_min/60 + lat_sec/3600
-            lon = lon_deg + lon_min/60 + lon_sec/3600
-            
             if lat_dir == 'S':
                 lat = -lat
+            
+            # Удаляем найденную широту
+            start_pos = lat_match.start()
+            end_pos = lat_match.end()
+            remaining_text = text[:start_pos] + text[end_pos:]
+            
+        except Exception as e:
+            logger.debug(f"  Ошибка парсинга DMS широты: {e}")
+    
+    # Ищем долготу в формате DMS
+    lon_dms_pattern = r'(\d+)°(\d+)′([\d.]+)″?\s*([EW]?)'
+    lon_match = re.search(lon_dms_pattern, remaining_text, re.IGNORECASE)
+    
+    if lon_match:
+        try:
+            lon_deg = int(lon_match.group(1))
+            lon_min = int(lon_match.group(2))
+            lon_sec = float(lon_match.group(3))
+            lon_dir = lon_match.group(4).upper() if lon_match.group(4) else ''
+            
+            lon = lon_deg + lon_min/60 + lon_sec/3600
             if lon_dir == 'W':
                 lon = -lon
             
-            if -90 <= lat <= 90 and -180 <= lon <= 180:
-                logger.info(f"  📍 Распознаны DMS координаты: {lat}, {lon}")
-                return lat, lon
         except Exception as e:
-            logger.debug(f"  Ошибка парсинга DMS: {e}")
+            logger.debug(f"  Ошибка парсинга DMS долготы: {e}")
+    
+    if lat is not None and lon is not None:
+        if -90 <= lat <= 90 and -180 <= lon <= 180:
+            logger.info(f"  📍 Распознаны DMS координаты: широта={lat:.5f}, долгота={lon:.5f}")
+            return lat, lon
     
     # ========== ФОРМАТ 4: ПРОСТО ЧИСЛА С РАЗДЕЛИТЕЛЯМИ ==========
     numbers = re.findall(r'-?\d+\.?\d*', text)
@@ -249,7 +279,7 @@ def register_search_handlers(dp, db, village_db):
         # ========== 1. ПРОБУЕМ РАСПАРСИТЬ КАК КООРДИНАТЫ ==========
         lat, lon = parse_coordinates(query)
         if lat and lon:
-            logger.info(f"  📍 Определены координаты: {lat}, {lon}")
+            logger.info(f"  📍 Определены координаты: {lat:.5f}, {lon:.5f}")
             
             from services.kml_catalog import KMLCatalog
             kml_catalog = KMLCatalog()
