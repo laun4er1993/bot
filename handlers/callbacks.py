@@ -96,12 +96,15 @@ def register_callbacks(dp, village_db, db):
     
     @dp.callback_query(lambda c: c.data == "map_rzhev")
     async def map_rzhev_handler(callback: types.CallbackQuery):
+        from config import MAP_RZHEV_URL
+        from keyboards.inline import map_download_keyboard
         await safe_edit_text(
             callback.message,
             "🗺️ <b>Карта Ржевского района для Locus Maps</b>\n\n"
+            f"Ссылка: <a href='{MAP_RZHEV_URL}'>Скачать карту</a>\n\n"
             "Нажмите кнопку для скачивания:",
             parse_mode="HTML",
-            reply_markup=map_download_keyboard()
+            reply_markup=map_download_keyboard(MAP_RZHEV_URL)
         )
         await safe_answer_callback(callback)
     
@@ -135,7 +138,6 @@ def register_callbacks(dp, village_db, db):
             [InlineKeyboardButton(text="🏠 ГЛАВНОЕ МЕНЮ", callback_data="back_to_main")]
         ])
         
-        # Если есть больше 5 деревень, добавляем кнопку "Показать все"
         if len(villages) > 5:
             keyboard.inline_keyboard.insert(
                 0,
@@ -155,14 +157,12 @@ def register_callbacks(dp, village_db, db):
         """Показывает все населенные пункты для снимка с полным описанием"""
         photo_num = callback.data.replace("show_all_villages_", "")
         
-        # Получаем полное описание снимка со всеми НП
         details = db.get_photo_details_with_full_villages(photo_num)
         
         if not details:
             await callback.answer("Нет данных о населенных пунктах")
             return
         
-        # Отправляем новым сообщением, чтобы не терять предыдущее
         await callback.message.answer(
             details,
             parse_mode="HTML",
@@ -204,9 +204,10 @@ def register_callbacks(dp, village_db, db):
     
     @dp.callback_query(lambda c: c.data == "show_villages")
     async def show_villages(callback: types.CallbackQuery):
+        """Показывает полную информацию о всех населенных пунктах"""
         await safe_delete_message(callback.message)
         
-        villages = db.get_all_villages_list()
+        villages = village_db.villages
         if not villages:
             await callback.message.answer(
                 "📭 Список деревень пуст.\n\n"
@@ -217,14 +218,32 @@ def register_callbacks(dp, village_db, db):
             await safe_answer_callback(callback)
             return
         
-        chunks = [villages[i:i+25] for i in range(0, len(villages), 25)]
+        villages_sorted = sorted(villages, key=lambda x: x['name'])
+        chunks = [villages_sorted[i:i+15] for i in range(0, len(villages_sorted), 15)]
+        
         for i, chunk in enumerate(chunks):
-            text = f"📋 <b>Все населенные пункты ({len(villages)} шт.):</b>\n\n" if i == 0 else ""
-            text += "\n".join([f"• {v}" for v in chunk])
+            text = f"📋 <b>Населенные пункты ({len(villages_sorted)} шт.)</b>\n\n" if i == 0 else ""
+            
+            for v in chunk:
+                name = v['name']
+                village_type = v.get('type', 'деревня')
+                lat = v.get('lat', '')
+                lon = v.get('lon', '')
+                district = v.get('district', '')
+                
+                if lat and lon:
+                    coords = f"📍 {lat}, {lon}"
+                else:
+                    coords = "📍 координаты не указаны"
+                
+                text += f"• <b>{name}</b> ({village_type})\n"
+                text += f"  {coords}\n"
+                text += f"  🏠 Район: {district}\n\n"
+            
             await callback.message.answer(text, parse_mode="HTML")
         
         await callback.message.answer(
-            "💡 Нажмите 🔍 ПОИСК СНИМКОВ и введите название деревни",
+            "💡 Нажмите 🔍 ПОИСК и введите название деревни, координаты или номер снимка",
             reply_markup=back_keyboard()
         )
         await safe_answer_callback(callback)
