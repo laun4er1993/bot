@@ -611,6 +611,7 @@ def register_callbacks(dp, village_db, db):
         afs_stats = db.afs_catalog.get_statistics()
         kml_catalog = KMLCatalog()
         kml_stats = kml_catalog.get_statistics()
+        yandex_status = "✅ Доступен" if db.get_yandex_disk_status() else "❌ Недоступен"
         
         text = (
             f"🔧 <b>Статус бота</b>\n\n"
@@ -619,6 +620,7 @@ def register_callbacks(dp, village_db, db):
             f"{'✅' if afs_stats['total'] > 0 else '❌'} Каталог АФС: {afs_stats['total']} снимков\n"
             f"{'✅' if kml_stats['total'] > 0 else '❌'} Каталог KML: {kml_stats['total']} файлов\n"
             f"{'✅' if len(db.photo_files) > 0 else '❌'} Файлы на Яндекс.Диске: {len(db.photo_files)}\n\n"
+            f"☁️ <b>Яндекс.Диск:</b> {yandex_status}\n\n"
             f"🤖 <b>Бот:</b> ✅ Активен"
         )
         
