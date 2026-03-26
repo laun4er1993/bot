@@ -42,7 +42,7 @@ def register_start_handlers(dp):
             "• Или введите координаты: 56.2345 34.1234\n"
             "• Или введите номер снимка: N56E34-266-016 или 266-016\n"
             "• Нажмите на номер снимка для просмотра описания и скачивания\n\n"
-            "🗺️ <b>LOCUS MAPS</b>\n"
+            "🗺️ <b>Locus Maps</b>\n"
             f"• Скачайте приложение: <a href='{LOCUS_DOWNLOAD_URL}'>Locus Maps</a>\n"
             f"• Инструкция: <a href='{LOCUS_INSTRUCTION_URL}'>PDF инструкция</a>\n"
             f"• Карта Ржева: <a href='{MAP_RZHEV_URL}'>Скачать карту</a>\n\n"
