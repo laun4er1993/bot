@@ -74,51 +74,18 @@ class PhotosDatabase:
                 return files
         return {'mbtiles': [], 'kmz': []}
     
-    def refresh_all_photo_links(self, progress_callback=None) -> Dict:
-        """Обновляет ссылки для всех снимков в каталоге АФС с прогрессом"""
+    def refresh_all_photo_links(self) -> Dict:
+        """Обновляет ссылки для всех снимков в каталоге АФС"""
         if not self.yandex_disk_available:
             return {'total': 0, 'found': 0, 'not_found': 0, 'yandex_disk_unavailable': True}
         
-        stats = {'total': 0, 'found': 0, 'not_found': 0, 'current': 0}
+        stats = {'total': 0, 'found': 0, 'not_found': 0}
         
         total_items = len(self.afs_catalog.catalog)
         stats['total'] = total_items
         
-        for i, item in enumerate(self.afs_catalog.catalog):
+        for item in self.afs_catalog.catalog:
             photo_num = item['frame']
-            stats['current'] = i + 1
-            
-            if progress_callback:
-                await progress_callback(stats['current'], stats['total'], photo_num)
-            
-            if photo_num in self.photo_files and (self.photo_files[photo_num].get('mbtiles') or self.photo_files[photo_num].get('kmz')):
-                stats['found'] += 1
-                continue
-            
-            files = self.find_files_for_photo(photo_num)
-            if files.get('mbtiles') or files.get('kmz'):
-                stats['found'] += 1
-            else:
-                stats['not_found'] += 1
-        
-        return stats
-    
-    async def refresh_all_photo_links_with_progress(self, progress_callback) -> Dict:
-        """Обновляет ссылки для всех снимков в каталоге АФС с прогрессом (асинхронная версия)"""
-        if not self.yandex_disk_available:
-            return {'total': 0, 'found': 0, 'not_found': 0, 'yandex_disk_unavailable': True}
-        
-        stats = {'total': 0, 'found': 0, 'not_found': 0, 'current': 0}
-        
-        total_items = len(self.afs_catalog.catalog)
-        stats['total'] = total_items
-        
-        for i, item in enumerate(self.afs_catalog.catalog):
-            photo_num = item['frame']
-            stats['current'] = i + 1
-            
-            if progress_callback:
-                await progress_callback(stats['current'], stats['total'], photo_num)
             
             if photo_num in self.photo_files and (self.photo_files[photo_num].get('mbtiles') or self.photo_files[photo_num].get('kmz')):
                 stats['found'] += 1
