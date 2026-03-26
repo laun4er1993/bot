@@ -9,9 +9,39 @@ def get_settings_main_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🗺️ УПРАВЛЕНИЕ KML", callback_data="kml_management_menu")],
         [InlineKeyboardButton(text="🏘️ НАСЕЛЕННЫЕ ПУНКТЫ", callback_data="np_settings_menu")],
         [InlineKeyboardButton(text="📸 КАТАЛОГ АФС", callback_data="catalog_settings_menu")],
+        [InlineKeyboardButton(text="🔗 УПРАВЛЕНИЕ ССЫЛКАМИ", callback_data="links_settings_menu")],
         [InlineKeyboardButton(text="🔧 ПРОВЕРКА БОТА", callback_data="check_bot_status")],
         [InlineKeyboardButton(text="🔛 ВКЛ/ВЫКЛ БОТА", callback_data="enable_bot")],
         [InlineKeyboardButton(text="🏠 ГЛАВНОЕ МЕНЮ", callback_data="back_to_main")]
+    ])
+
+
+def get_links_settings_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура управления ссылками"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🗺️ LOCUS MAPS (СКАЧИВАНИЕ)", callback_data="edit_link_locus_download")],
+        [InlineKeyboardButton(text="🗺️ КАРТА РЖЕВА", callback_data="edit_link_map_rzhev")],
+        [InlineKeyboardButton(text="📖 ИНСТРУКЦИЯ LOCUS MAPS (PDF)", callback_data="edit_link_locus_instruction")],
+        [InlineKeyboardButton(text="🔄 ОБНОВИТЬ ВСЕ ССЫЛКИ", callback_data="refresh_all_links")],
+        [InlineKeyboardButton(text="🔙 НАЗАД", callback_data="back_to_settings_main")]
+    ])
+
+
+def get_link_edit_keyboard(link_type: str, current_url: str) -> InlineKeyboardMarkup:
+    """Клавиатура для редактирования конкретной ссылки"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ ИЗМЕНИТЬ ССЫЛКУ", callback_data=f"change_link_{link_type}")],
+        [InlineKeyboardButton(text="📋 ПОКАЗАТЬ ТЕКУЩУЮ", callback_data=f"show_current_link_{link_type}")],
+        [InlineKeyboardButton(text="🔄 СБРОСИТЬ ПО УМОЛЧАНИЮ", callback_data=f"reset_link_{link_type}")],
+        [InlineKeyboardButton(text="🔙 НАЗАД", callback_data="links_settings_menu")]
+    ])
+
+
+def get_link_save_keyboard(link_type: str) -> InlineKeyboardMarkup:
+    """Клавиатура для сохранения измененной ссылки"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ СОХРАНИТЬ", callback_data=f"save_link_{link_type}")],
+        [InlineKeyboardButton(text="❌ ОТМЕНА", callback_data=f"cancel_link_edit_{link_type}")]
     ])
 
 
@@ -128,7 +158,6 @@ def get_afs_catalog_load_keyboard() -> InlineKeyboardMarkup:
 def get_district_keyboard() -> InlineKeyboardMarkup:
     """Клавиатура выбора района (с пагинацией)"""
     keyboard = []
-    # Показываем первые 18 районов, остальные через "Еще"
     for district in AVAILABLE_DISTRICTS[:18]:
         keyboard.append([InlineKeyboardButton(text=f"📍 {district}", callback_data=f"select_district_{district}")])
     
@@ -207,7 +236,6 @@ def photos_keyboard(photos: List[str]) -> InlineKeyboardMarkup:
     keyboard = []
     row = []
     for p in photos:
-        # Сокращаем длинные имена для кнопок
         display_name = p if len(p) <= 18 else p[:15] + "..."
         row.append(InlineKeyboardButton(text=display_name, callback_data=f"photo_{p}"))
         if len(row) == 3:
@@ -233,8 +261,9 @@ def locus_menu_keyboard() -> InlineKeyboardMarkup:
 
 def locus_instruction_keyboard() -> InlineKeyboardMarkup:
     """Клавиатура инструкции Locus Maps"""
+    from config import LOCUS_INSTRUCTION_URL
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📖 ПОЛНАЯ ИНСТРУКЦИЯ (PDF)", url="https://disk.yandex.ru/i/sE2Jy99in7MCxw")],
+        [InlineKeyboardButton(text="📖 ПОЛНАЯ ИНСТРУКЦИЯ (PDF)", url=LOCUS_INSTRUCTION_URL)],
         [InlineKeyboardButton(text="📥 СКАЧАТЬ LOCUS MAPS", callback_data="locus_download")],
         [InlineKeyboardButton(text="🔙 НАЗАД", callback_data="back_to_locus")],
         [InlineKeyboardButton(text="🏠 ГЛАВНОЕ МЕНЮ", callback_data="back_to_main")]
@@ -243,8 +272,9 @@ def locus_instruction_keyboard() -> InlineKeyboardMarkup:
 
 def locus_download_keyboard() -> InlineKeyboardMarkup:
     """Клавиатура скачивания Locus Maps"""
+    from config import LOCUS_DOWNLOAD_URL
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📥 LOCUS MAPS (ANDROID)", url="https://disk.yandex.ru/d/uUgVGkMoq3WITw")],
+        [InlineKeyboardButton(text="📥 LOCUS MAPS (ANDROID)", url=LOCUS_DOWNLOAD_URL)],
         [InlineKeyboardButton(text="📖 ИНСТРУКЦИЯ", callback_data="locus_instruction")],
         [InlineKeyboardButton(text="🔙 НАЗАД", callback_data="back_to_locus")],
         [InlineKeyboardButton(text="🏠 ГЛАВНОЕ МЕНЮ", callback_data="back_to_main")]
@@ -261,10 +291,12 @@ def back_to_locus_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
-def map_download_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура скачивания карты"""
+def map_download_keyboard(url: str = None) -> InlineKeyboardMarkup:
+    """Клавиатура скачивания карты с динамической ссылкой"""
+    from config import MAP_RZHEV_URL
+    actual_url = url if url else MAP_RZHEV_URL
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📥 СКАЧАТЬ КАРТУ", url="https://disk.yandex.ru/d/mrxZWJqLuAtnNA")],
+        [InlineKeyboardButton(text="📥 СКАЧАТЬ КАРТУ", url=actual_url)],
         [InlineKeyboardButton(text="🔙 НАЗАД", callback_data="back_to_locus")],
         [InlineKeyboardButton(text="🏠 ГЛАВНОЕ МЕНЮ", callback_data="back_to_main")]
     ])
