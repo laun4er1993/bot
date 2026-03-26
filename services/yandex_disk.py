@@ -93,14 +93,14 @@ class YandexDiskClient:
         return result
     
     def _format_date(self, date_str: str) -> str:
-        """Форматирует дату в читаемый вид"""
+        """Форматирует дату в читаемый вид: ДД.ММ.ГГГГ"""
         if not date_str:
             return ""
         try:
             dt = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
-            return dt.strftime("%d.%m.%Y %H:%M")
+            return dt.strftime("%d.%m.%Y")
         except:
-            return date_str[:16] if len(date_str) > 16 else date_str
+            return date_str[:10] if len(date_str) > 10 else date_str
     
     def _extract_versions(self, files: List[Dict], base_name: str, ext: str, folder: str) -> List[Dict]:
         versions = []
