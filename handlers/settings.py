@@ -982,3 +982,228 @@ def register_settings_handlers(dp, village_db, photos_db, afs_catalog):
             reply_markup=get_status_keyboard()
         )
         await safe_answer_callback(callback)
+        
+        
+            # ========== УПРАВЛЕНИЕ ССЫЛКАМИ ==========
+    
+    @dp.callback_query(lambda c: c.data == "links_settings_menu")
+    async def links_settings_menu(callback: types.CallbackQuery):
+        from keyboards.inline import get_links_settings_keyboard
+        await safe_edit_text(
+            callback.message,
+            "🔗 <b>Управление ссылками</b>\n\n"
+            "Здесь вы можете настроить ссылки, которые использует бот:\n\n"
+            "• <b>Locus Maps (скачивание)</b> — ссылка на скачивание приложения Locus Maps\n"
+            "• <b>Карта Ржева</b> — ссылка на скачивание карты Ржевского района\n"
+            "• <b>Инструкция Locus Maps (PDF)</b> — ссылка на PDF инструкцию\n\n"
+            "Выберите ссылку для редактирования:",
+            parse_mode="HTML",
+            reply_markup=get_links_settings_keyboard()
+        )
+        await safe_answer_callback(callback)
+    
+    @dp.callback_query(lambda c: c.data == "edit_link_locus_download")
+    async def edit_link_locus_download(callback: types.CallbackQuery):
+        from config import LOCUS_DOWNLOAD_URL
+        from keyboards.inline import get_link_edit_keyboard
+        await safe_edit_text(
+            callback.message,
+            f"🔗 <b>Редактирование ссылки: Locus Maps (скачивание)</b>\n\n"
+            f"📌 <b>Текущая ссылка:</b>\n"
+            f"<code>{LOCUS_DOWNLOAD_URL}</code>\n\n"
+            f"Выберите действие:",
+            parse_mode="HTML",
+            reply_markup=get_link_edit_keyboard("locus_download", LOCUS_DOWNLOAD_URL)
+        )
+        await safe_answer_callback(callback)
+    
+    @dp.callback_query(lambda c: c.data == "edit_link_map_rzhev")
+    async def edit_link_map_rzhev(callback: types.CallbackQuery):
+        from config import MAP_RZHEV_URL
+        from keyboards.inline import get_link_edit_keyboard
+        await safe_edit_text(
+            callback.message,
+            f"🔗 <b>Редактирование ссылки: Карта Ржева</b>\n\n"
+            f"📌 <b>Текущая ссылка:</b>\n"
+            f"<code>{MAP_RZHEV_URL}</code>\n\n"
+            f"Выберите действие:",
+            parse_mode="HTML",
+            reply_markup=get_link_edit_keyboard("map_rzhev", MAP_RZHEV_URL)
+        )
+        await safe_answer_callback(callback)
+    
+    @dp.callback_query(lambda c: c.data == "edit_link_locus_instruction")
+    async def edit_link_locus_instruction(callback: types.CallbackQuery):
+        from config import LOCUS_INSTRUCTION_URL
+        from keyboards.inline import get_link_edit_keyboard
+        await safe_edit_text(
+            callback.message,
+            f"🔗 <b>Редактирование ссылки: Инструкция Locus Maps (PDF)</b>\n\n"
+            f"📌 <b>Текущая ссылка:</b>\n"
+            f"<code>{LOCUS_INSTRUCTION_URL}</code>\n\n"
+            f"Выберите действие:",
+            parse_mode="HTML",
+            reply_markup=get_link_edit_keyboard("locus_instruction", LOCUS_INSTRUCTION_URL)
+        )
+        await safe_answer_callback(callback)
+    
+    @dp.callback_query(lambda c: c.data.startswith("show_current_link_"))
+    async def show_current_link(callback: types.CallbackQuery):
+        from config import LOCUS_DOWNLOAD_URL, MAP_RZHEV_URL, LOCUS_INSTRUCTION_URL
+        from keyboards.inline import get_link_edit_keyboard
+        
+        link_type = callback.data.replace("show_current_link_", "")
+        
+        if link_type == "locus_download":
+            current_url = LOCUS_DOWNLOAD_URL
+            title = "Locus Maps (скачивание)"
+        elif link_type == "map_rzhev":
+            current_url = MAP_RZHEV_URL
+            title = "Карта Ржева"
+        elif link_type == "locus_instruction":
+            current_url = LOCUS_INSTRUCTION_URL
+            title = "Инструкция Locus Maps (PDF)"
+        else:
+            await callback.answer("Неизвестный тип ссылки")
+            return
+        
+        await safe_edit_text(
+            callback.message,
+            f"🔗 <b>Текущая ссылка: {title}</b>\n\n"
+            f"<code>{current_url}</code>\n\n"
+            f"Выберите действие:",
+            parse_mode="HTML",
+            reply_markup=get_link_edit_keyboard(link_type, current_url)
+        )
+        await safe_answer_callback(callback)
+    
+    @dp.callback_query(lambda c: c.data.startswith("change_link_"))
+    async def change_link_start(callback: types.CallbackQuery, state: FSMContext):
+        from keyboards.inline import get_link_save_keyboard
+        
+        link_type = callback.data.replace("change_link_", "")
+        
+        await state.update_data(editing_link_type=link_type)
+        
+        await safe_edit_text(
+            callback.message,
+            f"✏️ <b>Изменение ссылки</b>\n\n"
+            f"Введите новую ссылку в формате:\n"
+            f"<code>https://...</code>\n\n"
+            f"Или отправьте текст для подтверждения:",
+            parse_mode="HTML",
+            reply_markup=get_link_save_keyboard(link_type)
+        )
+        await state.set_state(SearchStates.waiting_for_link_edit)
+        await safe_answer_callback(callback)
+    
+    @dp.callback_query(lambda c: c.data.startswith("save_link_"))
+    async def save_link_cancel(callback: types.CallbackQuery, state: FSMContext):
+        await state.clear()
+        await links_settings_menu(callback)
+        await safe_answer_callback(callback)
+    
+    @dp.callback_query(lambda c: c.data.startswith("cancel_link_edit_"))
+    async def cancel_link_edit(callback: types.CallbackQuery, state: FSMContext):
+        await state.clear()
+        await links_settings_menu(callback)
+        await safe_answer_callback(callback)
+    
+    @dp.callback_query(lambda c: c.data.startswith("reset_link_"))
+    async def reset_link(callback: types.CallbackQuery):
+        from config import LOCUS_DOWNLOAD_URL_DEFAULT, MAP_RZHEV_URL_DEFAULT, LOCUS_INSTRUCTION_URL_DEFAULT
+        from config import update_link, save_links_config
+        from keyboards.inline import get_link_edit_keyboard
+        
+        link_type = callback.data.replace("reset_link_", "")
+        
+        if link_type == "locus_download":
+            new_url = LOCUS_DOWNLOAD_URL_DEFAULT
+            title = "Locus Maps (скачивание)"
+        elif link_type == "map_rzhev":
+            new_url = MAP_RZHEV_URL_DEFAULT
+            title = "Карта Ржева"
+        elif link_type == "locus_instruction":
+            new_url = LOCUS_INSTRUCTION_URL_DEFAULT
+            title = "Инструкция Locus Maps (PDF)"
+        else:
+            await callback.answer("Неизвестный тип ссылки")
+            return
+        
+        update_link(link_type, new_url)
+        save_links_config()
+        
+        await safe_edit_text(
+            callback.message,
+            f"✅ <b>Ссылка сброшена к значению по умолчанию</b>\n\n"
+            f"🔗 <b>{title}</b>\n"
+            f"<code>{new_url}</code>\n\n"
+            f"Выберите действие:",
+            parse_mode="HTML",
+            reply_markup=get_link_edit_keyboard(link_type, new_url)
+        )
+        await safe_answer_callback(callback)
+    
+    @dp.callback_query(lambda c: c.data == "refresh_all_links")
+    async def refresh_all_links(callback: types.CallbackQuery):
+        from config import load_links_config, save_links_config
+        
+        load_links_config()
+        save_links_config()
+        
+        await safe_edit_text(
+            callback.message,
+            "✅ <b>Все ссылки обновлены!</b>\n\n"
+            "Ссылки перезагружены из файла конфигурации.\n"
+            "Теперь бот будет использовать обновленные ссылки.",
+            parse_mode="HTML",
+            reply_markup=get_links_settings_keyboard()
+        )
+        await safe_answer_callback(callback)
+    
+    @dp.message(SearchStates.waiting_for_link_edit)
+    async def process_link_edit(message: types.Message, state: FSMContext):
+        new_link = message.text.strip()
+        
+        if not new_link.startswith(('http://', 'https://')):
+            await message.answer(
+                "❌ <b>Неверный формат ссылки</b>\n\n"
+                "Ссылка должна начинаться с http:// или https://\n\n"
+                "Попробуйте снова или нажмите Отмена:",
+                parse_mode="HTML"
+            )
+            return
+        
+        data = await state.get_data()
+        link_type = data.get('editing_link_type')
+        
+        if not link_type:
+            await message.answer("❌ Ошибка: тип ссылки не определен")
+            await state.clear()
+            return
+        
+        from config import update_link, save_links_config
+        from keyboards.inline import get_link_edit_keyboard
+        
+        update_link(link_type, new_link)
+        save_links_config()
+        
+        if link_type == "locus_download":
+            title = "Locus Maps (скачивание)"
+        elif link_type == "map_rzhev":
+            title = "Карта Ржева"
+        elif link_type == "locus_instruction":
+            title = "Инструкция Locus Maps (PDF)"
+        else:
+            title = "Неизвестная ссылка"
+        
+        await message.answer(
+            f"✅ <b>Ссылка успешно обновлена!</b>\n\n"
+            f"🔗 <b>{title}</b>\n"
+            f"<code>{new_link}</code>\n\n"
+            f"Новая ссылка будет использоваться ботом.",
+            parse_mode="HTML",
+            reply_markup=get_link_edit_keyboard(link_type, new_link)
+        )
+        
+        await state.clear()
