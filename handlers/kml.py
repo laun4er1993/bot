@@ -16,7 +16,7 @@ from keyboards.inline import (
     get_kml_management_keyboard
 )
 from utils.helpers import safe_delete_message, safe_edit_text, safe_answer_callback
-from config import logger, KML_MARGIN_M, KML_USE_INTERSECTS
+from config import logger, KML_MARGIN_M, KML_USE_INTERSECTS, KML_DIR
 
 # Глобальная переменная для хранения последних результатов KML
 last_kml_results = None
