@@ -94,19 +94,18 @@ def register_callbacks(dp, village_db, db):
         )
         await safe_answer_callback(callback)
     
-    @dp.callback_query(lambda c: c.data == "map_rzhev")
-    async def map_rzhev_handler(callback: types.CallbackQuery):
-        from config import MAP_RZHEV_URL
-        from keyboards.inline import map_download_keyboard
-        await safe_edit_text(
-            callback.message,
-            "🗺️ <b>Карта Ржевского района для Locus Maps</b>\n\n"
-            f"Ссылка: <a href='{MAP_RZHEV_URL}'>Скачать карту</a>\n\n"
-            "Нажмите кнопку для скачивания:",
-            parse_mode="HTML",
-            reply_markup=map_download_keyboard(MAP_RZHEV_URL)
-        )
-        await safe_answer_callback(callback)
+@dp.callback_query(lambda c: c.data == "map_rzhev")
+async def map_rzhev_handler(callback: types.CallbackQuery):
+    from config import MAP_RZHEV_URL
+    await safe_edit_text(
+        callback.message,
+        "🗺️ <b>Карта Ржевского района для Locus Maps</b>\n\n"
+        f"Ссылка: <a href='{MAP_RZHEV_URL}'>Скачать карту</a>\n\n"
+        "Нажмите кнопку для скачивания:",
+        parse_mode="HTML",
+        reply_markup=map_download_keyboard(MAP_RZHEV_URL)
+    )
+    await safe_answer_callback(callback)
     
     @dp.callback_query(lambda c: c.data == "back_to_locus")
     async def back_to_locus(callback: types.CallbackQuery):
