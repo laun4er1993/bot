@@ -110,7 +110,13 @@ class PhotosDatabase:
         return f"<a href='{file_info['download_link']}'>📥 {label} {version} {size}{date_str}</a>"
     
     def get_photo_details(self, photo_num: str) -> Optional[str]:
-        """Возвращает описание снимка со ссылками и списком НП"""
+        """
+        Возвращает описание снимка со ссылками и списком НП.
+        Список НП выводится в сокращенном виде, полный список доступен по кнопке.
+        """
+        logger.info(f"📸 ЗАПРОШЕН СНИМОК: {photo_num}")
+        
+        # Получаем описание из каталога АФС
         details = self.afs_catalog.get_photo_details(photo_num)
         villages = self.afs_catalog.get_villages_for_frame(photo_num)
         
@@ -125,14 +131,22 @@ class PhotosDatabase:
             if len(parts) >= 3:
                 result_text += f"📍 Квадрат: {parts[0]}\n🖼️ Налет: {parts[1]}\n🎞️ Кадр: {parts[2]}\n\n"
         
-        # Список НП (в спойлере)
+        # Список НП (сокращенный, без тега details)
         if villages:
-            result_text += f"<details>\n<summary>📍 <b>Населенные пункты в кадре ({len(villages)})</b> (▼ нажмите для раскрытия)</summary>\n\n"
-            for i, v in enumerate(villages, 1):
+            result_text += f"📍 <b>Населенные пункты в кадре ({len(villages)}):</b>\n\n"
+            
+            # Показываем первые 5 деревень
+            for i, v in enumerate(villages[:5], 1):
                 result_text += f"{i}. {v}\n"
-            result_text += f"\n</details>\n\n"
+            
+            # Если деревень больше 5, добавляем примечание о кнопке
+            if len(villages) > 5:
+                result_text += f"\n<i>... и ещё {len(villages) - 5} населенных пунктов</i>\n"
+                result_text += f"🔽 <b>Нажмите кнопку ниже, чтобы увидеть полный список</b>\n"
         else:
-            result_text += f"📍 <b>Населенные пункты:</b> ℹ️ Нет данных\n\n"
+            result_text += f"📍 <b>Населенные пункты:</b> ℹ️ Нет данных\n"
+        
+        result_text += "\n"
         
         # Ссылки на файлы
         files = self.photo_files.get(photo_num)
@@ -148,6 +162,55 @@ class PhotosDatabase:
             result_text += "📥 <b>Скачать:</b>\n" + "\n".join(links)
         else:
             result_text += "❌ <b>Файлы не найдены</b>\n\n💡 Возможные причины:\n• Снимок не загружен на диск\n• Изменилась структура папок"
+        
+        return result_text
+    
+    def get_photo_details_with_full_villages(self, photo_num: str) -> Optional[str]:
+        """
+        Возвращает описание снимка с ПОЛНЫМ списком населенных пунктов.
+        Используется для кнопки "Показать все НП"
+        """
+        logger.info(f"📸 ЗАПРОШЕН ПОЛНЫЙ СПИСОК НП ДЛЯ СНИМКА: {photo_num}")
+        
+        # Получаем описание из каталога АФС
+        details = self.afs_catalog.get_photo_details(photo_num)
+        villages = self.afs_catalog.get_villages_for_frame(photo_num)
+        
+        # Заголовок
+        result_text = f"📸 <b>{photo_num}</b>\n\n"
+        
+        # Описание
+        if details and details != f"📸 Снимок {photo_num}":
+            result_text += f"{details}\n\n"
+        else:
+            parts = photo_num.split('-')
+            if len(parts) >= 3:
+                result_text += f"📍 Квадрат: {parts[0]}\n🖼️ Налет: {parts[1]}\n🎞️ Кадр: {parts[2]}\n\n"
+        
+        # ПОЛНЫЙ список НП
+        if villages:
+            result_text += f"📍 <b>Все населенные пункты в кадре ({len(villages)}):</b>\n\n"
+            for i, v in enumerate(villages, 1):
+                result_text += f"{i}. {v}\n"
+        else:
+            result_text += f"📍 <b>Населенные пункты:</b> ℹ️ Нет данных\n"
+        
+        result_text += "\n"
+        
+        # Ссылки на файлы
+        files = self.photo_files.get(photo_num)
+        if not files or (not files.get('mbtiles') and not files.get('kmz')):
+            files = self.find_files_for_photo(photo_num)
+        
+        links = []
+        for file_type, label in [('mbtiles', '🗺️ Locus Maps'), ('kmz', '🌍 Google Earth')]:
+            for v in files.get(file_type, []):
+                links.append(self._format_file_link(v, label))
+        
+        if links:
+            result_text += "📥 <b>Скачать:</b>\n" + "\n".join(links)
+        else:
+            result_text += "❌ <b>Файлы не найдены</b>"
         
         return result_text
     
