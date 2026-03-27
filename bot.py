@@ -1,4 +1,3 @@
-# bot.py
 import sys
 import asyncio
 from aiogram import Bot, Dispatcher
@@ -16,7 +15,8 @@ from handlers import (
     register_search_handlers,
     register_kml_handlers,
     register_settings_handlers,
-    register_callbacks
+    register_callbacks,
+    register_coord_calculator_handlers  # НОВЫЙ ИМПОРТ
 )
 
 
@@ -36,17 +36,18 @@ async def main():
     # Инициализация сервисов
     yd_client = YandexDiskClient(YANDEX_DISK_TOKEN)
     village_db = VillageDatabase()
-    afs_catalog = AFSCatalog()               # единый экземпляр
+    afs_catalog = AFSCatalog()
     kml_catalog = KMLCatalog()
     photos_db = PhotosDatabase(yd_client, village_db, afs_catalog)
     kml_processor = KMLProcessor(village_db, photos_db)
     
-    # Регистрация обработчиков с передачей afs_catalog
+    # Регистрация обработчиков
     register_start_handlers(dp)
     register_search_handlers(dp, photos_db, village_db)
     register_kml_handlers(dp, kml_processor, village_db, photos_db, afs_catalog)
     register_settings_handlers(dp, village_db, photos_db, afs_catalog)
     register_callbacks(dp, village_db, photos_db)
+    register_coord_calculator_handlers(dp)  # НОВАЯ РЕГИСТРАЦИЯ
     
     try:
         info = await bot.get_webhook_info()
