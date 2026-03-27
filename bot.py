@@ -1,3 +1,6 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 import sys
 import asyncio
 from aiogram import Bot, Dispatcher
@@ -16,7 +19,7 @@ from handlers import (
     register_kml_handlers,
     register_settings_handlers,
     register_callbacks,
-    register_coord_calculator_handlers  # НОВЫЙ ИМПОРТ
+    register_coord_calculator_handlers
 )
 
 
@@ -47,7 +50,7 @@ async def main():
     register_kml_handlers(dp, kml_processor, village_db, photos_db, afs_catalog)
     register_settings_handlers(dp, village_db, photos_db, afs_catalog)
     register_callbacks(dp, village_db, photos_db)
-    register_coord_calculator_handlers(dp)  # НОВАЯ РЕГИСТРАЦИЯ
+    register_coord_calculator_handlers(dp)
     
     try:
         info = await bot.get_webhook_info()
