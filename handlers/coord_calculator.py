@@ -1,3 +1,6 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 import os
 import re
 import math
@@ -21,8 +24,10 @@ from services.zone_params import (
 from utils.helpers import safe_edit_text, safe_answer_callback
 
 
+zone_collector = None
+
+
 async def get_zone_collector() -> ZoneParamsCollector:
-    """Возвращает глобальный экземпляр ZoneParamsCollector"""
     global zone_collector
     if zone_collector is None:
         zone_collector = ZoneParamsCollector()
@@ -30,10 +35,7 @@ async def get_zone_collector() -> ZoneParamsCollector:
 
 
 def parse_coord_input(text: str) -> Tuple[Optional[float], Optional[float], Optional[str], Optional[str]]:
-    """
-    Парсит ввод для калькулятора координат
-    Возвращает: (x, y, zone_number, sheet_name)
-    """
+    """Парсит ввод для калькулятора координат"""
     text = text.strip()
     original = text
     
@@ -122,7 +124,7 @@ def format_result(result: Dict) -> str:
     
     text += (
         f"📌 <b>Этап 3: Географические координаты (WGS-84)</b>\n"
-        f"• Десятичные градусы: <code>{result['latitude']:.6f}° N, {result['longitude']:.6f}° E</code>\n"
+        f"• Десятичные градусы: <code>{result['latitude']:.6f}° С.Ш., {result['longitude']:.6f}° В.Д.</code>\n"
         f"• Градусы/минуты/секунды: <code>{result['latitude_dms']}, {result['longitude_dms']}</code>\n\n"
         f"📍 <b>Местоположение:</b> {region_name}"
     )
@@ -178,9 +180,6 @@ async def coord_calc_help(callback: types.CallbackQuery):
         ])
     )
     await safe_answer_callback(callback)
-
-
-zone_collector = None
 
 
 def register_coord_calculator_handlers(dp):
