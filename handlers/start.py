@@ -21,6 +21,7 @@ async def cmd_start(message: types.Message):
 
 
 def register_start_handlers(dp):
+    """Регистрация всех обработчиков start.py"""
     
     @dp.message(Command("start"))
     async def start_handler(message: types.Message):
@@ -60,11 +61,11 @@ def register_start_handlers(dp):
         )
         await message.answer(instruction_text, parse_mode="HTML", reply_markup=back_keyboard())
     
-@dp.message(F.text == "🗺️ LOCUS MAPS")
-async def menu_locus(message: types.Message):
-    await message.answer(
-        "🗺️ <b>Locus Maps</b>\n\n"
-        "Выберите действие:",
-        parse_mode="HTML",
-        reply_markup=locus_menu_keyboard()
-    )
+    @dp.message(F.text == "🗺️ LOCUS MAPS")
+    async def menu_locus(message: types.Message):
+        await message.answer(
+            "🗺️ <b>Locus Maps</b>\n\n"
+            "Выберите действие:",
+            parse_mode="HTML",
+            reply_markup=locus_menu_keyboard()
+        )
