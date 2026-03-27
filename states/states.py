@@ -1,4 +1,3 @@
-# states/states.py
 from aiogram.fsm.state import State, StatesGroup
 
 class SearchStates(StatesGroup):
@@ -12,3 +11,4 @@ class SearchStates(StatesGroup):
     waiting_for_kml_upload = State()
     downloading_in_progress = State()
     waiting_for_link_edit = State()
+    waiting_for_coord_calc = State()  # НОВОЕ СОСТОЯНИЕ
