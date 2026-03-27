@@ -696,3 +696,20 @@ def register_callbacks(dp, village_db, db):
             )
         
         await safe_answer_callback(callback)
+    
+    @dp.callback_query(lambda c: c.data == "coord_calc_new")
+    async def coord_calc_new_handler(callback: types.CallbackQuery, state: FSMContext):
+        from handlers.coord_calculator import menu_coord_calculator
+        await menu_coord_calculator(callback.message, state)
+        await safe_answer_callback(callback)
+    
+    @dp.callback_query(lambda c: c.data == "coord_calc_help")
+    async def coord_calc_help_handler(callback: types.CallbackQuery):
+        from handlers.coord_calculator import coord_calc_help
+        await coord_calc_help(callback)
+    
+    @dp.callback_query(lambda c: c.data == "coord_calc_back")
+    async def coord_calc_back_handler(callback: types.CallbackQuery, state: FSMContext):
+        from handlers.coord_calculator import menu_coord_calculator
+        await menu_coord_calculator(callback.message, state)
+        await safe_answer_callback(callback)
