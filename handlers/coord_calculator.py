@@ -44,12 +44,15 @@ def parse_coord_input(text: str) -> Tuple[Optional[float], Optional[float], Opti
     zone_number = None
     sheet_name = None
     
+    logger.info(f"Парсинг ввода: '{text}'")
+    
     # Ищем номенклатурный лист
     sheet_pattern = r'([A-Z]-\d{2}-\d{3})'
     sheet_match = re.search(sheet_pattern, text, re.IGNORECASE)
     if sheet_match:
         sheet_name = sheet_match.group(1).upper()
         text = re.sub(sheet_pattern, '', text, flags=re.IGNORECASE)
+        logger.info(f"Найден лист: {sheet_name}")
     
     # Ищем зону
     zone_pattern = r'^(\d)\s+'
@@ -57,23 +60,27 @@ def parse_coord_input(text: str) -> Tuple[Optional[float], Optional[float], Opti
     if zone_match:
         zone_number = zone_match.group(1)
         text = re.sub(zone_pattern, '', text)
+        logger.info(f"Найдена зона: {zone_number}")
     
-    # Ищем числа
+    # Ищем числа - ПЕРВОЕ число = X (север), ВТОРОЕ число = Y (восток)
     numbers = re.findall(r'\d+\.?\d*', text)
     
     if len(numbers) >= 2:
         try:
             x = float(numbers[0])
             y = float(numbers[1])
-        except:
-            pass
+            logger.info(f"Распознаны координаты: X={x}, Y={y}")
+        except Exception as e:
+            logger.error(f"Ошибка парсинга чисел: {e}")
     
+    # Если не нашли, пробуем формат x=... y=...
     if x is None or y is None:
         x_match = re.search(r'x[=:]\s*(\d+\.?\d*)', original, re.IGNORECASE)
         y_match = re.search(r'y[=:]\s*(\d+\.?\d*)', original, re.IGNORECASE)
         if x_match and y_match:
             x = float(x_match.group(1))
             y = float(y_match.group(1))
+            logger.info(f"Распознаны координаты из формата x=y=: X={x}, Y={y}")
     
     return x, y, zone_number, sheet_name
 
@@ -141,10 +148,10 @@ async def menu_coord_calculator(message: types.Message, state: FSMContext):
         "📐 <b>Калькулятор координат Гаусса-Крюгера</b>\n\n"
         "Введите координаты в одном из форматов:\n\n"
         "📌 <b>Примеры:</b>\n"
+        "• <code>6148626 6451905</code> (зональные координаты СК-42)\n"
         "• <code>20530 90630</code> (локальные координаты, зона 6 по умолчанию)\n"
         "• <code>6 20530 90630</code> (локальные координаты с указанием зоны)\n"
-        "• <code>O-36-141 48626 51905</code> (короткие координаты с листом)\n"
-        "• <code>6148626 6451905</code> (зональные координаты СК-42)\n\n"
+        "• <code>O-36-141 48626 51905</code> (короткие координаты с листом)\n\n"
         "📌 <b>Доступные листы карты:</b>\n"
         f"<code>{sheets_preview}...</code>\n\n"
         "💡 <i>Для Смоленской области используйте листы: N-35-9, O-35-21 и др.</i>",
@@ -162,13 +169,13 @@ async def coord_calc_help(callback: types.CallbackQuery):
         "топографических карт в географические координаты\n"
         "(широта/долгота) для использования в GPS-навигаторах.\n\n"
         "📌 <b>Форматы ввода:</b>\n"
+        "• <code>6148626 6451905</code> — зональные координаты СК-42\n"
         "• <code>20530 90630</code> — локальные координаты (зона 6 по умолчанию)\n"
         "• <code>6 20530 90630</code> — локальные координаты с зоной\n"
-        "• <code>O-36-141 48626 51905</code> — короткие координаты с листом\n"
-        "• <code>6148626 6451905</code> — зональные координаты СК-42\n\n"
+        "• <code>O-36-141 48626 51905</code> — короткие координаты с листом\n\n"
         "🗺️ <b>Поддерживаемые зоны:</b> 4, 5, 6, 7, 8, 9\n"
         "🗺️ <b>Поддерживаемые регионы:</b> Тверская, Смоленская, Московская области\n\n"
-        "💡 <b>Совет:</b> Для коротких координат (последние 5 цифр) требуется указать лист карты."
+        "💡 <b>Совет:</b> Для зональных координат (6-7 цифр) зона определяется автоматически."
     )
     await safe_edit_text(
         callback.message,
@@ -196,28 +203,34 @@ def register_coord_calculator_handlers(dp):
         
         await state.clear()
         
-        logger.info(f"КАЛЬКУЛЯТОР: пользователь {message.from_user.id} ввел '{query}'")
+        logger.info(f"=== КАЛЬКУЛЯТОР ===")
+        logger.info(f"Пользователь {message.from_user.id} ввел: '{query}'")
         
         x, y, zone_number, sheet_name = parse_coord_input(query)
         
         if x is None or y is None:
+            logger.error(f"Не удалось распознать координаты: {query}")
             await message.answer(
                 "❌ <b>Не удалось распознать координаты</b>\n\n"
                 "Пожалуйста, используйте один из форматов:\n"
-                "• <code>20530 90630</code>\n"
-                "• <code>6 20530 90630</code>\n"
-                "• <code>O-36-141 48626 51905</code>\n"
-                "• <code>6148626 6451905</code>",
+                "• <code>6148626 6451905</code> (зональные координаты)\n"
+                "• <code>20530 90630</code> (локальные координаты)\n"
+                "• <code>6 20530 90630</code> (с указанием зоны)\n"
+                "• <code>O-36-141 48626 51905</code> (с листом карты)",
                 parse_mode="HTML",
                 reply_markup=back_keyboard()
             )
             return
+        
+        logger.info(f"Распознано: X={x}, Y={y}, зона={zone_number}, лист={sheet_name}")
         
         await message.answer("⏳ Выполняется расчет...")
         
         result = calculate_coordinates(x, y, zone_number, sheet_name)
         
         result_text = format_result(result)
+        
+        logger.info(f"Результат: {result.get('latitude', 0):.6f}, {result.get('longitude', 0):.6f}")
         
         await message.answer(
             result_text,
