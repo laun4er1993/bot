@@ -48,11 +48,9 @@ def get_link_save_keyboard(link_type: str) -> InlineKeyboardMarkup:
 def get_kml_management_keyboard() -> InlineKeyboardMarkup:
     """Меню управления KML"""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔄 ОБРАБОТАТЬ KML", callback_data="process_kml_menu")],
-        [InlineKeyboardButton(text="📤 ЗАГРУЗИТЬ KML", callback_data="load_kml_catalog")],
-        [InlineKeyboardButton(text="📥 СКАЧАТЬ KML TXT", callback_data="download_kml_catalog")],
+        [InlineKeyboardButton(text="🔄 СЛЕДУЮЩИЙ KML", callback_data="process_kml_menu")],
         [InlineKeyboardButton(text="🗑️ ОЧИСТИТЬ KML", callback_data="clear_kml_catalog")],
-        [InlineKeyboardButton(text="🔙 НАЗАД", callback_data="back_to_settings_main")]
+        [InlineKeyboardButton(text="✅ ГОТОВО", callback_data="back_to_settings_main")]
     ])
 
 
