@@ -16,7 +16,7 @@ from keyboards.inline import (
     get_kml_management_keyboard
 )
 from utils.helpers import safe_delete_message, safe_edit_text, safe_answer_callback
-from config import logger, KML_MARGIN_M, KML_USE_INTERSECTS, KML_DIR
+from config import logger, KML_MARGIN_M, KML_USE_INTERSECTS
 
 # Глобальная переменная для хранения последних результатов KML
 last_kml_results = None
@@ -83,7 +83,10 @@ def register_kml_handlers(dp, kml_processor, village_db, photos_db, afs_catalog)
             logger.info(f"📁 Начало обработки KML файла: {original_filename}")
             
             data = kml_processor.process_kml_file(tmp_path)
-            os.unlink(tmp_path)
+            
+            # Сохраняем путь к KML файлу и оригинальное имя в глобальной переменной
+            data['kml_file_path'] = tmp_path
+            data['original_filename'] = original_filename
             
             stats = data['stats']
             
@@ -175,6 +178,10 @@ def register_kml_handlers(dp, kml_processor, village_db, photos_db, afs_catalog)
                     reply_markup=get_kml_management_keyboard()
                 )
             
+            # Удаляем временный файл
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+            
         except Exception as e:
             logger.error(f"Ошибка: {e}")
             await message.answer(f"❌ Ошибка при обработке KML:\n{str(e)}")
@@ -215,10 +222,11 @@ def register_kml_handlers(dp, kml_processor, village_db, photos_db, afs_catalog)
             if result.get('villages'):
                 logger.info(f"      Деревни: {', '.join(result['villages'][:10])}")
         
+        # Создаем каталог АФС
         stats = afs_catalog.create_from_kml_results(enriched_results, frames_without_np)
         
         logger.info(f"📊 ПРОВЕРКА ПОСЛЕ СОЗДАНИЯ:")
-        logger.info(f"   Всего снимков: {len(afs_catalog.catalog)}")
+        logger.info(f"   Всего снимков в АФС: {len(afs_catalog.catalog)}")
         logger.info(f"   Снимков со связями: {len(afs_catalog.villages_by_frame)}")
         
         for i, (frame, villages) in enumerate(list(afs_catalog.villages_by_frame.items())[:5]):
@@ -241,7 +249,7 @@ def register_kml_handlers(dp, kml_processor, village_db, photos_db, afs_catalog)
         await safe_edit_text(
             callback.message,
             f"✅ <b>Каталог АФС создан!</b>\n\n"
-            f"📊 <b>Статистика каталога:</b>\n"
+            f"📊 <b>Статистика каталога АФС:</b>\n"
             f"• Добавлено новых снимков: {stats['added']}\n"
             f"  └─ с населенными пунктами: {stats['with_np']}\n"
             f"  └─ без населенных пунктов: {stats['without_np']}\n"
