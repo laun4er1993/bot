@@ -4,12 +4,13 @@ from api_sources.config import AVAILABLE_DISTRICTS
 
 
 def get_settings_main_keyboard() -> InlineKeyboardMarkup:
-    """Главное меню настроек - улучшенная структура"""
+    """Главное меню настроек - с защитой паролем"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🗺️ УПРАВЛЕНИЕ KML", callback_data="kml_management_menu")],
         [InlineKeyboardButton(text="🏘️ НАСЕЛЕННЫЕ ПУНКТЫ", callback_data="np_settings_menu")],
         [InlineKeyboardButton(text="📸 КАТАЛОГ АФС", callback_data="catalog_settings_menu")],
         [InlineKeyboardButton(text="🔗 УПРАВЛЕНИЕ ССЫЛКАМИ", callback_data="links_settings_menu")],
+        [InlineKeyboardButton(text="🔐 СМЕНИТЬ ПАРОЛЬ", callback_data="change_admin_password")],
         [InlineKeyboardButton(text="🔧 ПРОВЕРКА БОТА", callback_data="check_bot_status")],
         [InlineKeyboardButton(text="🔛 ВКЛ/ВЫКЛ БОТА", callback_data="enable_bot")],
         [InlineKeyboardButton(text="🏠 ГЛАВНОЕ МЕНЮ", callback_data="back_to_main")]
