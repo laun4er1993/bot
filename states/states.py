@@ -12,4 +12,5 @@ class SearchStates(StatesGroup):
     downloading_in_progress = State()
     waiting_for_link_edit = State()
     waiting_for_coord_calc = State()
-    waiting_for_admin_password = State()  # НОВОЕ СОСТОЯНИЕ
+    waiting_for_admin_password = State()
+    waiting_for_new_password = State()  # ДОБАВЛЕНО
