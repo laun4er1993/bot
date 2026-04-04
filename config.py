@@ -21,6 +21,7 @@ KML_CATALOG_FILE = os.path.join(DATA_DIR, "kml_catalog.txt")
 KML_DIR = os.path.join(DATA_DIR, "kml")
 LINKS_CONFIG_FILE = os.path.join(DATA_DIR, "links_config.txt")
 LOG_FILE = os.path.join(DATA_DIR, "bot.log")
+PASSWORD_FILE = os.path.join(DATA_DIR, "admin_password.txt")
 
 # Параметры
 MAX_RETRIES = 7
@@ -36,6 +37,17 @@ os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(EXPORT_DIR, exist_ok=True)
 os.makedirs(TEMP_DIR, exist_ok=True)
 os.makedirs(KML_DIR, exist_ok=True)
+
+# ========== ЗАГРУЗКА ПАРОЛЯ ИЗ ФАЙЛА ==========
+
+if os.path.exists(PASSWORD_FILE):
+    try:
+        with open(PASSWORD_FILE, 'r', encoding='utf-8') as f:
+            saved_password = f.read().strip()
+            if saved_password:
+                ADMIN_PASSWORD = saved_password
+    except Exception as e:
+        logging.error(f"Ошибка загрузки пароля: {e}")
 
 # ========== НАСТРОЙКИ ЛОГИРОВАНИЯ ==========
 
@@ -67,8 +79,6 @@ LOCUS_INSTRUCTION_URL_DEFAULT = "https://disk.yandex.ru/i/sE2Jy99in7MCxw"
 LOCUS_DOWNLOAD_URL = LOCUS_DOWNLOAD_URL_DEFAULT
 MAP_RZHEV_URL = MAP_RZHEV_URL_DEFAULT
 LOCUS_INSTRUCTION_URL = LOCUS_INSTRUCTION_URL_DEFAULT
-
-LINKS_CONFIG_FILE = os.path.join(DATA_DIR, "links_config.txt")
 
 
 def load_links_config():
