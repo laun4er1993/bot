@@ -713,3 +713,15 @@ def register_callbacks(dp, village_db, db):
         from handlers.coord_calculator import menu_coord_calculator
         await menu_coord_calculator(callback.message, state)
         await safe_answer_callback(callback)
+    
+    @dp.callback_query(lambda c: c.data == "cancel_password")
+    async def cancel_password_handler(callback: types.CallbackQuery, state: FSMContext):
+        """Обработчик отмены ввода пароля"""
+        await state.clear()
+        await safe_delete_message(callback.message)
+        await callback.message.answer(
+            "🔐 <b>Вход в настройки отменен</b>",
+            parse_mode="HTML",
+            reply_markup=back_keyboard()
+        )
+        await safe_answer_callback(callback)
