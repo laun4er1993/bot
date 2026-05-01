@@ -74,8 +74,8 @@ async def main():
     logger.info(f"   • Снимков в АФС: {len(afs_catalog.catalog)}")
     logger.info(f"   • Файлов KML: {len(kml_catalog.catalog)}")
 
+    # Режим webhook для Amvera
     if USE_WEBHOOK and WEBHOOK_URL:
-        # Режим webhook для Amvera
         logger.info(f"🔄 Запуск в режиме WEBHOOK на порту {PORT}")
 
         webhook_path = WEBHOOK_PATH
@@ -110,22 +110,18 @@ async def main():
         finally:
             await runner.cleanup()
             await on_shutdown(bot)
-else:
+
     # Режим polling (для локальной разработки)
-    logger.info("🔄 Запуск в режиме POLLING...")
-    
-    try:
-        # Удаляем старые webhook перед запуском polling
-        await bot.delete_webhook(drop_pending_updates=True)
-        logger.info("✅ Webhook удален")
-        
-        # Небольшая пауза перед запуском
-        await asyncio.sleep(1)
-        
-        # Запускаем polling
+    else:
+        logger.info("🔄 Запуск в режиме POLLING...")
+
+        try:
+            await bot.delete_webhook(drop_pending_updates=True)
+            logger.info("✅ Webhook удален")
+        except Exception as e:
+            logger.error(f"Ошибка удаления webhook: {e}")
+
         await dp.start_polling(bot, skip_updates=True)
-    except Exception as e:
-        logger.error(f"Ошибка при запуске polling: {e}")
 
 
 if __name__ == "__main__":
