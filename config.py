@@ -1,16 +1,25 @@
 import os
 import logging
 
-# ========== КОНФИГУРАЦИЯ ==========
+# ========== НАСТРОЙКИ ХОСТИНГА AMVERA ==========
+PORT = int(os.getenv("PORT", 8080))
+WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "/webhook")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")
+BASE_URL = os.getenv("BASE_URL", "")
 
+# Режим работы: на Amvera используем webhook
+USE_WEBHOOK = os.getenv("USE_WEBHOOK", "true").lower() == "true"
+
+# ========== ОСНОВНЫЕ НАСТРОЙКИ ==========
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 YANDEX_DISK_TOKEN = os.getenv("YANDEX_DISK_TOKEN")
-
-# Пароль для доступа к настройкам
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 
-# Пути к файлам
-DATA_DIR = "data"
+# ========== ПУТИ К ФАЙЛАМ ==========
+# На Amvera используем персистентную папку /data
+BASE_DATA_DIR = "/data" if os.path.exists("/data") else "data"
+
+DATA_DIR = BASE_DATA_DIR
 VILLAGES_FILE = os.path.join(DATA_DIR, "villages.txt")
 MULTI_KEYS_FILE = os.path.join(DATA_DIR, "multi_keys.txt")
 DETAILS_FILE = os.path.join(DATA_DIR, "details.txt")
@@ -23,7 +32,7 @@ LINKS_CONFIG_FILE = os.path.join(DATA_DIR, "links_config.txt")
 LOG_FILE = os.path.join(DATA_DIR, "bot.log")
 PASSWORD_FILE = os.path.join(DATA_DIR, "admin_password.txt")
 
-# Параметры
+# ========== ПАРАМЕТРЫ ==========
 MAX_RETRIES = 7
 MIN_REQUEST_INTERVAL = 3.0
 MAX_CONCURRENT_DIC = 2
@@ -32,14 +41,12 @@ KML_USE_INTERSECTS = True
 KML_CACHE_POLYGONS = True
 
 # ========== СОЗДАНИЕ ДИРЕКТОРИЙ ==========
-
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(EXPORT_DIR, exist_ok=True)
 os.makedirs(TEMP_DIR, exist_ok=True)
 os.makedirs(KML_DIR, exist_ok=True)
 
 # ========== ЗАГРУЗКА ПАРОЛЯ ИЗ ФАЙЛА ==========
-
 if os.path.exists(PASSWORD_FILE):
     try:
         with open(PASSWORD_FILE, 'r', encoding='utf-8') as f:
@@ -50,7 +57,6 @@ if os.path.exists(PASSWORD_FILE):
         logging.error(f"Ошибка загрузки пароля: {e}")
 
 # ========== НАСТРОЙКИ ЛОГИРОВАНИЯ ==========
-
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
@@ -71,7 +77,6 @@ except Exception as e:
 logger.info("🚀 Конфигурация бота загружена")
 
 # ========== ССЫЛКИ ==========
-
 LOCUS_DOWNLOAD_URL_DEFAULT = "https://disk.yandex.ru/d/uUgVGkMoq3WITw"
 MAP_RZHEV_URL_DEFAULT = "https://disk.yandex.ru/d/mrxZWJqLuAtnNA"
 LOCUS_INSTRUCTION_URL_DEFAULT = "https://disk.yandex.ru/i/sE2Jy99in7MCxw"
