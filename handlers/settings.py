@@ -26,7 +26,7 @@ from keyboards.inline import (
     get_afs_catalog_keyboard
 )
 from utils.helpers import safe_edit_text, safe_answer_callback, safe_delete_message
-from config import logger, TEMP_DIR, ADMIN_PASSWORD
+from config import logger, TEMP_DIR, ADMIN_PASSWORD, DATA_DIR
 from api_sources import APISourceManager, AVAILABLE_DISTRICTS
 from services.kml_catalog import KMLCatalog
 
@@ -155,13 +155,22 @@ def register_settings_handlers(dp, village_db, photos_db, afs_catalog):
         global ADMIN_PASSWORD
         ADMIN_PASSWORD = new_password
         
-        # Сохраняем в файл для постоянного хранения
+        # ✅ ИСПРАВЛЕНО: Сохраняем пароль в персистентное хранилище /data
+        password_file = os.path.join(DATA_DIR, "admin_password.txt")
+        
         try:
-            with open("data/admin_password.txt", "w", encoding='utf-8') as f:
+            with open(password_file, "w", encoding='utf-8') as f:
                 f.write(new_password)
-            logger.info("✅ Пароль сохранен в файл")
+            logger.info(f"✅ Пароль сохранен в {password_file}")
         except Exception as e:
             logger.error(f"Ошибка сохранения пароля: {e}")
+            await message.answer(
+                f"❌ <b>Ошибка сохранения пароля</b>\n\n{str(e)}",
+                parse_mode="HTML",
+                reply_markup=back_keyboard()
+            )
+            await state.clear()
+            return
         
         await message.answer(
             "✅ <b>ПАРОЛЬ УСПЕШНО ИЗМЕНЕН</b>\n\n"
